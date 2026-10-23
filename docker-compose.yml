@@ -1,0 +1,13 @@
+# Optional: only needed if you prefer MongoDB in Docker instead of a local install.
+services:
+  db:
+    image: mongo:7
+    container_name: careerpilot-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - careerpilot_mongo:/data/db
+
+volumes:
+  careerpilot_mongo:
