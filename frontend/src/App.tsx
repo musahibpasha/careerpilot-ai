@@ -6,6 +6,9 @@ import {
   CheckCircle2,
   CircleAlert,
   Gauge,
+  Kanban,
+  List,
+  Lock,
   Plus,
   Search,
   ShieldCheck,
@@ -33,12 +36,57 @@ const STATUS_LABELS: Record<string, string> = {
   withdrawn: "Withdrawn",
 };
 
+const KANBAN_STATUSES = Object.keys(STATUS_LABELS);
+
 function statusLabel(status: string | null): string {
   if (!status) return "Created";
   return (
     STATUS_LABELS[status] ??
     status.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase())
   );
+}
+
+// Statuses only the approval workflow may set. The server enforces this; the
+// board only shows them as locked.
+const LOCKED_STATUSES = ["approved", "submitted"];
+
+// "today", "1 day", "5 days"... since the application last changed status.
+function timeInStage(app: { status_history?: { at: string }[] }): string | null {
+  const history = app.status_history ?? [];
+  const last = history[history.length - 1];
+  if (!last) return null;
+  const days = Math.floor(
+    (Date.now() - new Date(last.at).getTime()) / (1000 * 60 * 60 * 24),
+  );
+  if (Number.isNaN(days)) return null;
+  if (days <= 0) return "today";
+  return days === 1 ? "1 day" : `${days} days`;
+}
+
+function readSetting<T extends string>(key: string, fallback: T, allowed: T[]): T {
+  try {
+    const value = window.localStorage.getItem(key) as T | null;
+    return value && allowed.includes(value) ? value : fallback;
+  } catch {
+    return fallback;
+  }
+}
+function saveSetting(key: string, value: string) {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // Storage can be blocked; the board still works without remembering.
+  }
+}
+
+type Page = "overview" | "applications";
+
+// Simple page switching with the URL hash, so refresh and the browser Back
+// button keep working without adding a router library.
+function pageFromHash(): Page {
+  return window.location.hash.startsWith("#/applications")
+    ? "applications"
+    : "overview";
 }
 
 type Job = {
@@ -444,6 +492,17 @@ function App() {
   const [minMatch, setMinMatch] = useState(0);
   const [sourceFilter, setSourceFilter] = useState("all");
   const [sortBy, setSortBy] = useState<"best" | "newest" | "company">("best");
+
+  // Application tracker: board (Kanban) or list, remembered between visits.
+  const [trackerView, setTrackerView] = useState<"board" | "list">(() =>
+    readSetting("cp-tracker-view", "board", ["board", "list"]),
+  );
+  const [hideEmpty, setHideEmpty] = useState<boolean>(
+    () => readSetting("cp-hide-empty", "no", ["yes", "no"]) === "yes",
+  );
+  const [page, setPage] = useState<Page>(pageFromHash);
+  const [draggedAppId, setDraggedAppId] = useState<string | null>(null);
+  const [dragOverStatus, setDragOverStatus] = useState<string | null>(null);
   const [showJobForm, setShowJobForm] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -549,8 +608,25 @@ function App() {
   }, []);
 
   useEffect(() => {
+    const onHashChange = () => setPage(pageFromHash());
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+
+  useEffect(() => {
     setFormError("");
   }, [showJobForm, showProfile, showPreferences]);
+
+  // job id -> job, so board cards can show match score, location and link
+  const jobsById = useMemo(
+    () => new Map(jobs.map((j) => [String(j.id), j])),
+    [jobs],
+  );
+
+  const draggedApplication = useMemo(
+    () => applications.find((a) => a.id === draggedAppId) ?? null,
+    [applications, draggedAppId],
+  );
 
   const sources = useMemo(
     () => Array.from(new Set(jobs.map((j) => j.source))).sort(),
@@ -1004,14 +1080,9 @@ function App() {
       const status = statusLabel(existingApplication.status);
 
       setNotice(
-        `${job.company} is already tracked with status "${status}". Check the Application tracker below.`,
+        `${job.company} is already tracked with status "${status}". Open Applications in the left menu to see it.`,
       );
 
-      // Bring the existing application tracker into view.
-      document.getElementById("applications")?.scrollIntoView({
-        behavior: "smooth",
-        block: "start",
-      });
 
       return;
     }
@@ -1035,13 +1106,10 @@ function App() {
         throw new Error(errorText(data, "Could not save application."));
       }
 
-      setNotice(`Tracking started for ${job.company}.`);
+      setNotice(
+        `Tracking started for ${job.company}. Open Applications in the left menu to see the board.`,
+      );
       await load();
-
-      document.getElementById("applications")?.scrollIntoView({
-        behavior: "smooth",
-        block: "start",
-      });
     } catch (e) {
       setNotice(e instanceof Error ? e.message : "Could not track job.");
     } finally {
@@ -1087,6 +1155,59 @@ function App() {
     await load();
   }
 
+  function chooseTrackerView(view: "board" | "list") {
+    setTrackerView(view);
+    saveSetting("cp-tracker-view", view);
+  }
+
+  function toggleHideEmpty(value: boolean) {
+    setHideEmpty(value);
+    saveSetting("cp-hide-empty", value ? "yes" : "no");
+  }
+
+  function handleCardDragStart(e: React.DragEvent<HTMLElement>, appId: string) {
+    e.dataTransfer.setData("text/plain", appId);
+    e.dataTransfer.effectAllowed = "move";
+    // Delay the state change so the browser can take its drag image first.
+    window.setTimeout(() => setDraggedAppId(appId), 0);
+  }
+
+  function handleCardDragEnd() {
+    setDraggedAppId(null);
+    setDragOverStatus(null);
+  }
+
+  function handleColumnDragOver(
+    e: React.DragEvent<HTMLElement>,
+    statusKey: string,
+  ) {
+    if (!draggedAppId) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    if (dragOverStatus !== statusKey) setDragOverStatus(statusKey);
+  }
+
+  async function handleColumnDrop(
+    e: React.DragEvent<HTMLElement>,
+    targetStatus: string,
+  ) {
+    e.preventDefault();
+    const appId = e.dataTransfer.getData("text/plain") || draggedAppId;
+    setDraggedAppId(null);
+    setDragOverStatus(null);
+
+    const app = applications.find((a) => a.id === appId);
+    if (!app || app.status === targetStatus) return;
+
+    await changeApplicationStatus(app, targetStatus);
+  }
+
+  function goTo(next: Page) {
+    window.location.hash = next === "applications" ? "#/applications" : "#/";
+    setPage(next);
+    window.scrollTo({ top: 0 });
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -1102,8 +1223,27 @@ function App() {
 
         <div className="workspace-label">WORKSPACE</div>
 
-        <a className="nav active">
+        <a
+          className={`nav ${page === "overview" ? "active" : ""}`}
+          href="#/"
+          onClick={(e) => {
+            e.preventDefault();
+            goTo("overview");
+          }}
+        >
           <Gauge size={18} /> Overview
+        </a>
+
+        <a
+          className={`nav ${page === "applications" ? "active" : ""}`}
+          href="#/applications"
+          onClick={(e) => {
+            e.preventDefault();
+            goTo("applications");
+          }}
+        >
+          <Kanban size={18} /> Applications
+          <span className="nav-count">{applications.length}</span>
         </a>
 
         <a className="nav" onClick={() => setShowProfile(true)}>
@@ -1112,11 +1252,6 @@ function App() {
 
         <a className="nav" onClick={() => setShowPreferences(true)}>
           <SlidersHorizontal size={18} /> Job preferences
-        </a>
-
-        <a className="nav" href="#applications">
-          <BriefcaseBusiness size={18} /> Applications
-          <span className="nav-count">{applications.length}</span>
         </a>
 
         <div className="sidebar-bottom">
@@ -1134,10 +1269,18 @@ function App() {
       <main className="main">
         <header className="topbar">
           <div>
-            <div className="eyebrow">YOUR CAREER, IN CONTROL</div>
-            <h1>Job hunt overview</h1>
+            <div className="eyebrow">
+              {page === "applications"
+                ? "YOUR PIPELINE"
+                : "YOUR CAREER, IN CONTROL"}
+            </div>
+            <h1>
+              {page === "applications" ? "Applications" : "Job hunt overview"}
+            </h1>
             <p>
-              Find the right opportunities. Spend less time on repetitive work.
+              {page === "applications"
+                ? "Drag a card to another column, or use its Move to menu."
+                : "Find the right opportunities. Spend less time on repetitive work."}
             </p>
           </div>
 
@@ -1164,6 +1307,8 @@ function App() {
           </div>
         )}
 
+        {page === "overview" ? (
+          <>
         <section className="hero">
           <div className="hero-copy">
             <div className="hero-tag">
@@ -1225,7 +1370,15 @@ function App() {
             <small>In your opportunity list</small>
           </div>
 
-          <div className="stat-card">
+          <div
+            className="stat-card clickable"
+            role="button"
+            tabIndex={0}
+            onClick={() => goTo("applications")}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") goTo("applications");
+            }}
+          >
             <div className="stat-top">
               <span>Applications tracked</span>
               <span className="stat-icon blue">
@@ -1429,21 +1582,275 @@ function App() {
           )}
         </section>
 
-        <section className="section-head application-heading" id="applications">
-          <div>
-            <h2>Application tracker</h2>
-            <p>Keep every opportunity moving forward.</p>
-          </div>
-        </section>
+          </>
+        ) : (
+          <>
+        {applications.length > 0 && (
+          <section className="kb-toolbar page-toolbar">
+            <span className="kb-summary">
+              {applications.length} tracked ·{" "}
+              {
+                applications.filter(
+                  (a) => !["rejected", "withdrawn"].includes(a.status),
+                ).length
+              }{" "}
+              in progress
+            </span>
 
-        <section className="application-list">
-          {applications.length === 0 ? (
-            <div className="simple-empty">
-              No applications tracked yet. Save a job from the opportunity feed
-              to begin.
+            {trackerView === "board" && (
+              <>
+                <label className="kb-check">
+                  <input
+                    type="checkbox"
+                    checked={hideEmpty}
+                    onChange={(e) => toggleHideEmpty(e.target.checked)}
+                  />
+                  Hide empty columns
+                </label>
+
+                <span className="kb-legend">
+                  <Lock size={12} /> Approved and Submitted unlock with the
+                  approval workflow
+                </span>
+              </>
+            )}
+
+            <div className="kb-view-toggle" role="group" aria-label="Tracker view">
+              <button
+                type="button"
+                className={trackerView === "board" ? "active" : ""}
+                aria-pressed={trackerView === "board"}
+                onClick={() => chooseTrackerView("board")}
+              >
+                <Kanban size={15} /> Board
+              </button>
+              <button
+                type="button"
+                className={trackerView === "list" ? "active" : ""}
+                aria-pressed={trackerView === "list"}
+                onClick={() => chooseTrackerView("list")}
+              >
+                <List size={15} /> List
+              </button>
             </div>
-          ) : (
-            applications.map((application) => {
+          </section>
+        )}
+
+        {applications.length === 0 ? (
+          <section className="empty-state">
+            <div className="empty-icon">
+              <Kanban size={25} />
+            </div>
+            <h3>No applications yet</h3>
+            <p>
+              Track a job from the opportunity feed and it will appear here as
+              a card you can move across the board.
+            </p>
+            <button className="primary-button" onClick={() => goTo("overview")}>
+              Go to the opportunity feed
+            </button>
+          </section>
+        ) : trackerView === "board" ? (
+          <section className="kanban-board full" aria-label="Application board">
+            {KANBAN_STATUSES.filter(
+              (statusKey) =>
+                !hideEmpty ||
+                draggedAppId !== null ||
+                applications.some((a) => a.status === statusKey),
+            ).map((statusKey) => {
+              const columnApps = applications.filter(
+                (a) => a.status === statusKey,
+              );
+              const isLocked = LOCKED_STATUSES.includes(statusKey);
+              const isCurrent = draggedApplication?.status === statusKey;
+              const isAllowedDrop =
+                draggedApplication != null &&
+                !isCurrent &&
+                (draggedApplication.allowed_next ?? []).includes(statusKey);
+              const isGatedDrop =
+                draggedApplication != null &&
+                !isCurrent &&
+                (draggedApplication.gated_next ?? []).includes(statusKey);
+              const isBlockedDrop =
+                draggedApplication != null &&
+                !isCurrent &&
+                !isAllowedDrop &&
+                !isGatedDrop;
+
+              const columnClass = [
+                "kanban-column",
+                isLocked ? "is-locked" : "",
+                isAllowedDrop ? "can-drop" : "",
+                isGatedDrop ? "gated-drop" : "",
+                isBlockedDrop ? "no-drop" : "",
+                dragOverStatus === statusKey && isAllowedDrop ? "drag-over" : "",
+              ]
+                .filter(Boolean)
+                .join(" ");
+
+              return (
+                <div
+                  key={statusKey}
+                  className={columnClass}
+                  data-status={statusKey}
+                  onDragOver={(e) => handleColumnDragOver(e, statusKey)}
+                  onDragLeave={() => {
+                    if (dragOverStatus === statusKey) setDragOverStatus(null);
+                  }}
+                  onDrop={(e) => void handleColumnDrop(e, statusKey)}
+                >
+                  <div className="kanban-column-head">
+                    <span className="kanban-dot" />
+                    <h3>{statusLabel(statusKey)}</h3>
+                    {isLocked && (
+                      <Lock
+                        size={12}
+                        className="kanban-lock"
+                        aria-label="Locked until the approval workflow is built"
+                      />
+                    )}
+                    <span className="kanban-count">{columnApps.length}</span>
+                  </div>
+
+                  <div className="kanban-column-body">
+                    {columnApps.length === 0 && (
+                      <div className="kanban-empty">
+                        {isAllowedDrop
+                          ? "Drop here"
+                          : isGatedDrop
+                            ? "Locked"
+                            : isLocked
+                              ? "Locked until approval workflow"
+                              : "Nothing here"}
+                      </div>
+                    )}
+
+                    {columnApps.map((application) => {
+                      const nextStatuses = application.allowed_next ?? [];
+                      const linkedJob = jobsById.get(String(application.job_id));
+                      const age = timeInStage(application);
+                      const historyCount = (application.status_history ?? [])
+                        .length;
+
+                      return (
+                        <article
+                          key={application.id}
+                          className={`kanban-card ${
+                            draggedAppId === application.id ? "is-dragging" : ""
+                          }`}
+                          draggable
+                          onDragStart={(e) =>
+                            handleCardDragStart(e, application.id)
+                          }
+                          onDragEnd={handleCardDragEnd}
+                        >
+                          <div className="kanban-card-top">
+                            <div className="kanban-card-title">
+                              <strong>{application.job_title}</strong>
+                              <span>
+                                {application.company}
+                                {linkedJob?.location
+                                  ? ` · ${linkedJob.location}`
+                                  : ""}
+                              </span>
+                            </div>
+
+                            {linkedJob && (
+                              <span
+                                className={`match ${
+                                  linkedJob.match_score >= 70
+                                    ? "high"
+                                    : linkedJob.match_score >= 40
+                                      ? "mid"
+                                      : "low"
+                                }`}
+                              >
+                                {Math.round(linkedJob.match_score)}%
+                              </span>
+                            )}
+                          </div>
+
+                          {(application.resume_label || age) && (
+                            <div className="kanban-meta">
+                              {application.resume_label && (
+                                <span title="Resume used">
+                                  {application.resume_label}
+                                </span>
+                              )}
+                              {age && <span>In stage: {age}</span>}
+                            </div>
+                          )}
+
+                          <div className="kanban-card-controls">
+                            <select
+                              value=""
+                              disabled={nextStatuses.length === 0}
+                              aria-label={`Move ${application.job_title} to another status`}
+                              onChange={(e) => {
+                                void changeApplicationStatus(
+                                  application,
+                                  e.target.value,
+                                );
+                              }}
+                            >
+                              <option value="">
+                                {nextStatuses.length
+                                  ? "Move to..."
+                                  : "Final status"}
+                              </option>
+                              {nextStatuses.map((status) => (
+                                <option key={status} value={status}>
+                                  {statusLabel(status)}
+                                </option>
+                              ))}
+                            </select>
+
+                            {linkedJob?.url && (
+                              <a
+                                href={linkedJob.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="icon-link small"
+                                aria-label="Open job posting"
+                                draggable={false}
+                              >
+                                <ArrowUpRight size={14} />
+                              </a>
+                            )}
+                          </div>
+
+                          <details className="status-history">
+                            <summary>History ({historyCount})</summary>
+                            <ol>
+                              {(application.status_history ?? []).map(
+                                (entry, i) => (
+                                  <li key={`${entry.at}-${i}`}>
+                                    <strong>
+                                      {entry.from_status
+                                        ? `${statusLabel(entry.from_status)} → ${statusLabel(entry.to_status)}`
+                                        : `Created as ${statusLabel(entry.to_status)}`}
+                                    </strong>
+                                    <span>
+                                      {new Date(entry.at).toLocaleString()} ·{" "}
+                                      {entry.actor}
+                                    </span>
+                                    {entry.note && <em>{entry.note}</em>}
+                                  </li>
+                                ),
+                              )}
+                            </ol>
+                          </details>
+                        </article>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </section>
+        ) : (
+          <section className="application-list">
+            {applications.map((application) => {
               const nextStatuses = application.allowed_next ?? [];
 
               return (
@@ -1514,9 +1921,12 @@ function App() {
                   </details>
                 </article>
               );
-            })
-          )}
-        </section>
+            })}
+          </section>
+        )}
+
+          </>
+        )}
 
         <footer>
           CAREERPILOT AI <span>·</span> Thoughtful automation, human decisions.
