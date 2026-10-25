@@ -1,4 +1,3 @@
-
 <div align="center">
 
 # 🚀 CareerPilot AI
@@ -45,17 +44,19 @@ The long-term goal is to support a human-approved workflow: find relevant opport
 - **Basic duplicate detection** — reject a job when its source ID or link already exists.
 - **Basic skill-overlap match score** — calculate an initial score based on normalized skill overlap.
 - **Job feed filtering and sorting** — filter by status, minimum match score, and source; sort by best match, newest, or company.
-- **Application-status tracking** — track saved, drafting, needs review, interview, rejected, offer, and withdrawn statuses.
+- **Application-status tracking with history** — statuses are Discovered, Saved, Under review, Ready for approval, Approved, Submitted, Interview, Offer, Rejected, and Withdrawn. Every change is recorded with a timestamp and shown in the tracker. Approved and Submitted are locked: the backend refuses them until the approval workflow is built. Applications saved under the older statuses are converted automatically on startup.
+- **Job preferences** — save preferred locations, experience level, work arrangement (remote, hybrid, on-site), and salary expectation (minimum, maximum, currency, per year or month). Everything is optional, and target roles stay in the profile. Preferences are saved only; they do not change match scores yet.
+- **Multiple resumes with an active resume** — in your profile, keep up to 5 PDF resumes (5 MB each), view them, rename them, delete them, and choose one as the active resume (shown with an "Active" badge). A new application records the resume that was active when it was created and shows it in the tracker. Choosing a resume as active (or uploading your first one) reads it with the same AI parser as auto-fill and fills your profile form from it. The reading is kept with the resume, so switching back is instant, and "Re-read" reads it again. Nothing is saved to your profile until you review the form and click Save profile; closing the window without saving undoes it. The "Upload resume (PDF) and auto-fill" button at the top of the profile saves the file under My resumes and fills the form from it (when you already have 5 saved resumes it only fills the form and keeps nothing); "Add a resume" saves the file and fills the form only if it becomes your active resume. Uploading never changes your saved profile by itself. Resume files are stored in your local MongoDB, which is fine on your own machine, but login and protected storage are needed before the app is ever put online.
 - **Safer loading behavior** — the job tracker can still load if the profile request fails.
-- **Automated tests** — 30 tests currently cover areas including matching, normalization, duplicates, profile validation, resume parsing, and the application-approval block.
+- **Automated tests** — cover areas including matching, normalization, duplicates, profile validation, resume parsing, status transitions, status history, the approval block, the status migration, job preferences, and resume files. Run `cd backend && python -m pytest -q`.
 
 ### 🚧 Planned
 
 Features below are planned, not yet implemented unless explicitly listed in the Built section.
 
-- Job-search preferences, including preferred roles, locations, work modes, and other filters.
-- Resume version management.
-- Detailed application status history, Kanban board, notes, and reminders.
+- Using job preferences in matching (planned with explainable matching in Stage 3).
+- Tailored resumes for each job, built only from your confirmed profile (planned for Stage 5), and using the active resume in job search and matching.
+- Kanban board, notes, and reminders.
 - Paste-a-job import.
 - Permitted job-source connectors, scheduled scans, and expired-listing checks.
 - Explainable matching with weighted factors such as skills, experience, location, seniority, and salary.
@@ -78,7 +79,7 @@ Work is being delivered incrementally so each stage can be tested before moving 
 | Stage | Focus | Current state |
 |---|---|---|
 | 1 | Stabilize the existing app, database, tests, and basic approval block | ✅ Built |
-| 2 | Profile and application tracking | 🟡 Basic version built; improvements remain |
+| 2 | Profile and application tracking | 🟡 Status history, job preferences, and multiple resumes built; Kanban board remains |
 | 3 | Smart, explainable job matching | 🔜 Planned |
 | 4 | Job discovery, import, and permitted source connectors | 🔜 Planned |
 | 5 | Application preparation and browser-assisted prefill | 🔜 Planned |
@@ -87,7 +88,7 @@ Work is being delivered incrementally so each stage can be tested before moving 
 
 ### Suggested implementation order
 
-1. Finish Stage 2: job preferences, status history, Kanban, and resume versions.
+1. Finish Stage 2: Kanban board (status history, job preferences, and multiple resumes are done).
 2. Build Stage 3: explainable matching and skill-gap insights.
 3. Build Stage 4: job import and permitted discovery sources.
 4. Build Stage 5: application document preparation and safe form prefill.
@@ -135,6 +136,8 @@ careerpilot-ai/
 │   │   ├── config.py
 │   │   ├── database.py
 │   │   ├── schemas.py
+│   │   ├── preferences.py
+│   │   ├── resumes.py
 │   │   ├── matching.py
 │   │   └── workflow.py
 │   ├── .env                 # Local secrets; do not commit
@@ -240,14 +243,15 @@ The current match score is a basic skill-overlap indicator, not a guarantee of j
 
 ## 🧪 Testing
 
-The current test suite contains 30 tests covering key areas such as:
+The test suite (run with `cd backend && python -m pytest -q`) covers key areas such as:
 
 - Skill normalization.
 - Basic matching.
 - Duplicate-job checks.
 - Profile required-field validation.
 - Resume parsing behavior.
-- The current application-approval block.
+- Application status transitions, timestamped status history, and the migration from the old statuses.
+- The application-approval block: `approved` and `submitted` are refused by the backend.
 
 As features are added, tests should be added for both successful and failure cases. The count may change as the project evolves.
 
@@ -263,7 +267,7 @@ If the image does not appear, check that the workflow ran successfully, that the
 
 ## 🛣️ Project Status
 
-CareerPilot AI is an active work in progress. The profile editor, PDF resume parsing and review, skill normalization, manual job entry, basic matching, filters/sorting, and core status tracking are implemented. Advanced matching, job discovery integrations, document generation, browser-assisted workflows, the complete approval gate, analytics, authentication, and production deployment remain on the roadmap.
+CareerPilot AI is an active work in progress. The profile editor, PDF resume parsing and review, skill normalization, manual job entry, basic matching, filters/sorting, and application status tracking with history, job preferences, and multiple resumes are implemented. Advanced matching, job discovery integrations, document generation, browser-assisted workflows, the complete approval gate, analytics, authentication, and production deployment remain on the roadmap.
 
 ## 🤝 Contributing
 

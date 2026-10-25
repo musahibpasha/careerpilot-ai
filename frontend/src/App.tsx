@@ -9,6 +9,7 @@ import {
   Plus,
   Search,
   ShieldCheck,
+  SlidersHorizontal,
   Sparkles,
   Target,
   Upload,
@@ -16,6 +17,29 @@ import {
 } from "lucide-react";
 
 const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+
+// Order and names shown to the user. The server is the source of truth for
+// which moves are allowed; this is only for display.
+const STATUS_LABELS: Record<string, string> = {
+  discovered: "Discovered",
+  saved: "Saved",
+  under_review: "Under review",
+  ready_for_approval: "Ready for approval",
+  approved: "Approved",
+  submitted: "Submitted",
+  interview: "Interview",
+  offer: "Offer",
+  rejected: "Rejected",
+  withdrawn: "Withdrawn",
+};
+
+function statusLabel(status: string | null): string {
+  if (!status) return "Created";
+  return (
+    STATUS_LABELS[status] ??
+    status.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase())
+  );
+}
 
 type Job = {
   id: string;
@@ -30,11 +54,23 @@ type Job = {
   match_reasons: string[];
 };
 
+type StatusHistoryEntry = {
+  from_status: string | null;
+  to_status: string;
+  at: string;
+  actor: string;
+  note: string;
+};
+
 type Application = {
   id: string;
   job_id: string;
   status: string;
   allowed_next: string[];
+  gated_next: string[];
+  status_history: StatusHistoryEntry[];
+  resume_id: string | null;
+  resume_label: string | null;
   job_title: string;
   company: string;
   notes: string;
@@ -234,6 +270,97 @@ function validateProfile(f: ProfileForm): Record<string, string> {
   return e;
 }
 
+type ResumeFile = {
+  id: string;
+  label: string;
+  filename: string;
+  size: number;
+  page_count: number;
+  is_active: boolean;
+  uploaded_at: string;
+  extracted_at: string | null;
+};
+
+const MAX_RESUMES = 5;
+
+function formatSize(bytes: number): string {
+  return bytes >= 1024 * 1024
+    ? `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+    : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+type PreferencesForm = {
+  locations: string;
+  experience_level: string;
+  work_arrangements: string[];
+  salary_min: string;
+  salary_max: string;
+  salary_currency: string;
+  salary_period: string;
+};
+
+const EXPERIENCE_LEVELS: Record<string, string> = {
+  "": "No preference",
+  intern: "Intern",
+  entry: "Entry level / fresher",
+  mid: "Mid level",
+  senior: "Senior",
+  lead: "Lead / principal",
+};
+
+const WORK_ARRANGEMENTS: Record<string, string> = {
+  remote: "Remote",
+  hybrid: "Hybrid",
+  onsite: "On-site",
+};
+
+function emptyPreferencesForm(): PreferencesForm {
+  return {
+    locations: "",
+    experience_level: "",
+    work_arrangements: [],
+    salary_min: "",
+    salary_max: "",
+    salary_currency: "",
+    salary_period: "year",
+  };
+}
+
+function preferencesToForm(data: any): PreferencesForm {
+  return {
+    locations: asList(data?.locations).join(", "),
+    experience_level: asText(data?.experience_level),
+    work_arrangements: asList(data?.work_arrangements),
+    salary_min: data?.salary_min == null ? "" : String(data.salary_min),
+    salary_max: data?.salary_max == null ? "" : String(data.salary_max),
+    salary_currency: asText(data?.salary_currency),
+    salary_period: asText(data?.salary_period) || "year",
+  };
+}
+
+function validatePreferences(f: PreferencesForm): Record<string, string> {
+  const errors: Record<string, string> = {};
+  const toNumber = (v: string) => (v.trim() === "" ? null : Number(v));
+  const low = toNumber(f.salary_min);
+  const high = toNumber(f.salary_max);
+
+  if (low !== null && (!Number.isInteger(low) || low < 0))
+    errors.salary_min = "Enter a whole number, 0 or more";
+  if (high !== null && (!Number.isInteger(high) || high < 0))
+    errors.salary_max = "Enter a whole number, 0 or more";
+
+  if (!errors.salary_min && !errors.salary_max) {
+    if (low !== null && high !== null && high < low)
+      errors.salary_max = "Maximum cannot be lower than minimum";
+    if (
+      (low !== null || high !== null) &&
+      !/^[A-Za-z]{3}$/.test(f.salary_currency.trim())
+    )
+      errors.salary_currency = "Use a 3-letter code, e.g. INR or USD";
+  }
+  return errors;
+}
+
 // A labelled input wrapper with a required star and inline error text.
 function Field({
   label,
@@ -313,6 +440,10 @@ function App() {
   const [applications, setApplications] = useState<Application[]>([]);
   const [profile, setProfile] = useState<Profile>(null);
   const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [minMatch, setMinMatch] = useState(0);
+  const [sourceFilter, setSourceFilter] = useState("all");
+  const [sortBy, setSortBy] = useState<"best" | "newest" | "company">("best");
   const [showJobForm, setShowJobForm] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -333,6 +464,22 @@ function App() {
   const [profileForm, setProfileForm] = useState<ProfileForm>(emptyProfileForm());
   const [profileErrors, setProfileErrors] = useState<Record<string, string>>({});
 
+  const [showPreferences, setShowPreferences] = useState(false);
+  const [preferencesForm, setPreferencesForm] = useState<PreferencesForm>(
+    emptyPreferencesForm(),
+  );
+  const [preferencesErrors, setPreferencesErrors] = useState<
+    Record<string, string>
+  >({});
+  const [preferencesError, setPreferencesError] = useState("");
+  const [preferencesBusy, setPreferencesBusy] = useState(false);
+
+  const [resumes, setResumes] = useState<ResumeFile[]>([]);
+  const [resumeBusy, setResumeBusy] = useState(false);
+  const [resumeMessage, setResumeMessage] = useState("");
+  const [resumeError, setResumeError] = useState("");
+  const [fillingId, setFillingId] = useState<string | null>(null);
+
   async function load() {
     // Load each part separately so one failing request (e.g. the profile)
     // can never hide the jobs and the application tracker.
@@ -342,12 +489,19 @@ function App() {
       return response.json();
     };
 
-    const [jobsResult, applicationsResult, profileResult] =
-      await Promise.allSettled([
-        get("/api/jobs"),
-        get("/api/applications"),
-        get("/api/profile"),
-      ]);
+    const [
+      jobsResult,
+      applicationsResult,
+      profileResult,
+      preferencesResult,
+      resumesResult,
+    ] = await Promise.allSettled([
+      get("/api/jobs"),
+      get("/api/applications"),
+      get("/api/profile"),
+      get("/api/preferences"),
+      get("/api/resumes"),
+    ]);
 
     const problems: string[] = [];
 
@@ -368,6 +522,20 @@ function App() {
       problems.push(String(profileResult.reason?.message ?? "profile failed"));
     }
 
+    if (preferencesResult.status === "fulfilled") {
+      setPreferencesForm(preferencesToForm(preferencesResult.value));
+    } else {
+      problems.push(
+        String(preferencesResult.reason?.message ?? "preferences failed"),
+      );
+    }
+
+    if (resumesResult.status === "fulfilled") {
+      setResumes(resumesResult.value);
+    } else {
+      problems.push(String(resumesResult.reason?.message ?? "resumes failed"));
+    }
+
     if (problems.length > 0) {
       setNotice(
         `Some data could not be loaded (${problems.join("; ")}). ` +
@@ -382,24 +550,48 @@ function App() {
 
   useEffect(() => {
     setFormError("");
-  }, [showJobForm, showProfile]);
+  }, [showJobForm, showProfile, showPreferences]);
 
-  const visibleJobs = useMemo(
-    () =>
-      jobs.filter((j) =>
-        `${j.title} ${j.company} ${j.location || ""}`
-          .toLowerCase()
-          .includes(query.toLowerCase()),
-      ),
-    [jobs, query],
+  const sources = useMemo(
+    () => Array.from(new Set(jobs.map((j) => j.source))).sort(),
+    [jobs],
   );
 
+  const visibleJobs = useMemo(() => {
+    // job id -> application status ("none" if the job is not tracked yet)
+    const statusByJob = new Map(
+      applications.map((a) => [String(a.job_id), a.status]),
+    );
+    const text = query.toLowerCase();
+
+    const list = jobs.filter((j) => {
+      const matchesText = `${j.title} ${j.company} ${j.location || ""}`
+        .toLowerCase()
+        .includes(text);
+      const status = statusByJob.get(j.id) ?? "none";
+      return (
+        matchesText &&
+        j.match_score >= minMatch &&
+        (sourceFilter === "all" || j.source === sourceFilter) &&
+        (statusFilter === "all" || status === statusFilter)
+      );
+    });
+
+    // `jobs` arrives newest-first from the API, so "newest" keeps that order.
+    if (sortBy === "best") {
+      list.sort((a, b) => b.match_score - a.match_score);
+    } else if (sortBy === "company") {
+      list.sort((a, b) => a.company.localeCompare(b.company));
+    }
+    return list;
+  }, [jobs, applications, query, statusFilter, minMatch, sourceFilter, sortBy]);
+
   const appliedCount = applications.filter((a) =>
-    ["applied", "interview", "offer", "rejected"].includes(a.status),
+    ["submitted", "interview", "offer", "rejected"].includes(a.status),
   ).length;
 
   const reviewCount = applications.filter(
-    (a) => a.status === "needs_review",
+    (a) => ["under_review", "ready_for_approval"].includes(a.status),
   ).length;
 
   async function addJob(e: React.FormEvent) {
@@ -579,6 +771,224 @@ function App() {
     }
   }
 
+  // Reloads only the resume list, so unsaved profile edits are not lost.
+  async function loadResumes() {
+    try {
+      const response = await fetch(`${API}/api/resumes`);
+      if (response.ok) setResumes(await response.json());
+    } catch {
+      // The next full reload will show a connection problem.
+    }
+  }
+
+  async function uploadResumeFile(file: File, fillForm = false) {
+    setResumeMessage("");
+    setResumeError("");
+    setResumeBusy(true);
+    try {
+      const body = new FormData();
+      body.append("file", file);
+
+      const response = await fetch(`${API}/api/resumes`, {
+        method: "POST",
+        body,
+      });
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        throw new Error(errorText(data, "Could not save this resume."));
+      }
+
+      setResumeMessage(`Saved "${data.label}".`);
+      await loadResumes();
+
+      // The active resume (the first one) fills the profile form. The top
+      // upload button asks for the form to be filled whatever happens.
+      if (data.is_active || fillForm) await fillProfileFromResume(data);
+    } catch (err) {
+      setResumeError(
+        err instanceof Error ? err.message : "Could not save this resume.",
+      );
+    } finally {
+      setResumeBusy(false);
+    }
+  }
+
+  async function changeResume(
+    resume: ResumeFile,
+    changes: { label?: string; is_active?: boolean },
+    success: string,
+  ): Promise<boolean> {
+    setResumeMessage("");
+    setResumeError("");
+    try {
+      const response = await fetch(`${API}/api/resumes/${resume.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(changes),
+      });
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        throw new Error(errorText(data, "Could not update this resume."));
+      }
+
+      setResumeMessage(success);
+      await loadResumes();
+      return true;
+    } catch (err) {
+      setResumeError(
+        err instanceof Error ? err.message : "Could not update this resume.",
+      );
+      return false;
+    }
+  }
+
+  // Fills the profile FORM from a stored resume. Nothing is saved until you
+  // review it and click Save profile (closing the window undoes it).
+  async function fillProfileFromResume(resume: ResumeFile, refresh = false) {
+    setResumeMessage("");
+    setResumeError("");
+    setFillingId(resume.id);
+    try {
+      const response = await fetch(
+        `${API}/api/resumes/${resume.id}/extract${refresh ? "?refresh=true" : ""}`,
+        { method: "POST" },
+      );
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        throw new Error(errorText(data, "Could not read this resume."));
+      }
+
+      const found = data?.extracted ?? {};
+      setProfileForm((prev) => profileToForm(found, prev));
+      setProfileErrors({});
+      setFormError("");
+
+      const count = (v: unknown) => (Array.isArray(v) ? v.length : 0);
+      setResumeMessage(
+        `Profile form filled from "${resume.label}"` +
+          (data?.cached ? " (saved reading)" : "") +
+          `: ${count(found.skills)} skills, ${count(found.work_experience)} jobs, ` +
+          `${count(found.projects)} projects, ${count(found.education)} education entries. ` +
+          "Review the sections below, then click Save profile. " +
+          "Close this window without saving to undo.",
+      );
+      await loadResumes();
+
+      setTimeout(
+        () =>
+          document
+            .getElementById("profile-career")
+            ?.scrollIntoView({ behavior: "smooth", block: "start" }),
+        0,
+      );
+    } catch (err) {
+      setResumeError(
+        `"${resume.label}" is your active resume, but its details could not be read: ` +
+          (err instanceof Error ? err.message : "unknown error") +
+          " Your profile form was not changed.",
+      );
+    } finally {
+      setFillingId(null);
+    }
+  }
+
+  async function activateResume(resume: ResumeFile) {
+    const ok = await changeResume(
+      resume,
+      { is_active: true },
+      `"${resume.label}" is now your active resume.`,
+    );
+    if (ok) await fillProfileFromResume(resume);
+  }
+
+  function renameResume(resume: ResumeFile) {
+    const label = window.prompt("New name for this resume:", resume.label);
+    if (label === null || label.trim() === resume.label) return;
+    changeResume(resume, { label }, "Resume renamed.");
+  }
+
+  async function deleteResume(resume: ResumeFile) {
+    if (!window.confirm(`Delete the resume "${resume.label}"?`)) return;
+    setResumeMessage("");
+    setResumeError("");
+    try {
+      const response = await fetch(`${API}/api/resumes/${resume.id}`, {
+        method: "DELETE",
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        throw new Error(errorText(data, "Could not delete this resume."));
+      }
+      setResumeMessage("Resume deleted.");
+      await loadResumes();
+    } catch (err) {
+      setResumeError(
+        err instanceof Error ? err.message : "Could not delete this resume.",
+      );
+    }
+  }
+
+  function toggleArrangement(value: string) {
+    setPreferencesForm((prev) => ({
+      ...prev,
+      work_arrangements: prev.work_arrangements.includes(value)
+        ? prev.work_arrangements.filter((v) => v !== value)
+        : [...prev.work_arrangements, value],
+    }));
+  }
+
+  async function savePreferences(e: React.FormEvent) {
+    e.preventDefault();
+    setNotice("");
+
+    const errors = validatePreferences(preferencesForm);
+    setPreferencesErrors(errors);
+    if (Object.keys(errors).length > 0) {
+      setPreferencesError("Please fix the items marked in red.");
+      return;
+    }
+    setPreferencesError("");
+    setPreferencesBusy(true);
+
+    try {
+      const toNumber = (v: string) => (v.trim() === "" ? null : Number(v));
+
+      const response = await fetch(`${API}/api/preferences`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          locations: splitCommas(preferencesForm.locations),
+          experience_level: preferencesForm.experience_level,
+          work_arrangements: preferencesForm.work_arrangements,
+          salary_min: toNumber(preferencesForm.salary_min),
+          salary_max: toNumber(preferencesForm.salary_max),
+          salary_currency: preferencesForm.salary_currency.trim().toUpperCase(),
+          salary_period: preferencesForm.salary_period,
+        }),
+      });
+
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        throw new Error(errorText(data, "Could not save job preferences."));
+      }
+
+      setShowPreferences(false);
+      setNotice("Job preferences saved. They do not change match scores yet.");
+    } catch (e) {
+      setPreferencesError(
+        e instanceof Error
+          ? e.message
+          : "Could not save job preferences. Check that the API is running.",
+      );
+    } finally {
+      setPreferencesBusy(false);
+    }
+  }
+
   async function trackJob(job: Job) {
     // Prevent creating a duplicate application for the same job.
     const existingApplication = applications.find(
@@ -591,9 +1001,7 @@ function App() {
     );
 
     if (existingApplication) {
-      const status = existingApplication.status
-        .replace("_", " ")
-        .replace(/\b\w/g, (letter) => letter.toUpperCase());
+      const status = statusLabel(existingApplication.status);
 
       setNotice(
         `${job.company} is already tracked with status "${status}". Check the Application tracker below.`,
@@ -657,8 +1065,12 @@ function App() {
 
     try {
       const response = await fetch(
-        `${API}/api/applications/${application.id}/status?status=${encodeURIComponent(nextStatus)}`,
-        { method: "PATCH" },
+        `${API}/api/applications/${application.id}/status`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: nextStatus }),
+        },
       );
 
       const data = await response.json().catch(() => null);
@@ -696,6 +1108,10 @@ function App() {
 
         <a className="nav" onClick={() => setShowProfile(true)}>
           <Target size={18} /> My profile
+        </a>
+
+        <a className="nav" onClick={() => setShowPreferences(true)}>
+          <SlidersHorizontal size={18} /> Job preferences
         </a>
 
         <a className="nav" href="#applications">
@@ -872,6 +1288,66 @@ function App() {
           </div>
         </section>
 
+        <section className="filter-bar">
+          <label>
+            Status
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+            >
+              <option value="all">All</option>
+              <option value="none">Not tracked</option>
+              {Object.entries(STATUS_LABELS).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label>
+            Min match
+            <select
+              value={minMatch}
+              onChange={(e) => setMinMatch(Number(e.target.value))}
+            >
+              <option value={0}>Any</option>
+              <option value={25}>25%+</option>
+              <option value={50}>50%+</option>
+              <option value={75}>75%+</option>
+            </select>
+          </label>
+
+          <label>
+            Source
+            <select
+              value={sourceFilter}
+              onChange={(e) => setSourceFilter(e.target.value)}
+            >
+              <option value="all">All</option>
+              {sources.map((src) => (
+                <option key={src} value={src}>
+                  {src}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label>
+            Sort by
+            <select
+              value={sortBy}
+              onChange={(e) =>
+                setSortBy(e.target.value as "best" | "newest" | "company")
+              }
+            >
+              <option value="best">Best match</option>
+              <option value="newest">Newest</option>
+              <option value="company">Company</option>
+            </select>
+          </label>
+        </section>
+
         <section className="jobs-list">
           {visibleJobs.length === 0 ? (
             <div className="empty-state">
@@ -979,10 +1455,15 @@ function App() {
                   <div className="application-name">
                     <strong>{application.job_title}</strong>
                     <span>{application.company}</span>
+                    {application.resume_label && (
+                      <small className="muted-note">
+                        Resume: {application.resume_label}
+                      </small>
+                    )}
                   </div>
 
                   <span className={`status status-${application.status}`}>
-                    {application.status.replace("_", " ")}
+                    {statusLabel(application.status)}
                   </span>
 
                   <select
@@ -999,16 +1480,38 @@ function App() {
 
                     {nextStatuses.map((status) => (
                       <option key={status} value={status}>
-                        {status
-                          .split("_")
-                          .map(
-                            (word) =>
-                              word.charAt(0).toUpperCase() + word.slice(1),
-                          )
-                          .join(" ")}
+                        {statusLabel(status)}
                       </option>
                     ))}
                   </select>
+
+                  {(application.gated_next ?? []).length > 0 && (
+                    <p className="locked-note">
+                      Approval and submission are locked until the approval
+                      workflow is built.
+                    </p>
+                  )}
+
+                  <details className="status-history">
+                    <summary>
+                      History ({(application.status_history ?? []).length})
+                    </summary>
+                    <ol>
+                      {(application.status_history ?? []).map((entry, i) => (
+                        <li key={`${entry.at}-${i}`}>
+                          <strong>
+                            {entry.from_status
+                              ? `${statusLabel(entry.from_status)} → ${statusLabel(entry.to_status)}`
+                              : `Created as ${statusLabel(entry.to_status)}`}
+                          </strong>
+                          <span>
+                            {new Date(entry.at).toLocaleString()} · {entry.actor}
+                          </span>
+                          {entry.note && <em>{entry.note}</em>}
+                        </li>
+                      ))}
+                    </ol>
+                  </details>
                 </article>
               );
             })
@@ -1149,14 +1652,21 @@ function App() {
             <div className="resume-upload">
               <label className="upload-button">
                 <Upload size={15} />
-                {parsing ? "Reading resume..." : "Upload resume (PDF) to auto-fill"}
+                {parsing || resumeBusy || fillingId !== null
+                  ? "Reading resume..."
+                  : "Upload resume (PDF) and auto-fill"}
                 <input
                   type="file"
                   accept="application/pdf"
-                  disabled={parsing}
+                  disabled={parsing || resumeBusy || fillingId !== null}
                   onChange={(e) => {
                     const file = e.target.files?.[0];
-                    if (file) parseResume(file);
+                    if (file) {
+                      // Saved resumes are kept under "My resumes". With the
+                      // limit reached it can only fill the form.
+                      if (resumes.length >= MAX_RESUMES) parseResume(file);
+                      else uploadResumeFile(file, true);
+                    }
                     e.target.value = "";
                   }}
                 />
@@ -1166,6 +1676,123 @@ function App() {
                 Fields marked <span className="req">*</span> are required.
               </small>
             </div>
+
+            <h3 className="section-title">My resumes</h3>
+            <small className="muted-note">
+              Keep up to {MAX_RESUMES} PDF resumes and choose which one is
+              active. New applications use the active resume. The upload
+              button at the top saves the file here and fills the form from
+              it. With {MAX_RESUMES} resumes saved, it only fills the form and
+              does not keep the file.
+            </small>
+
+            {resumes.length === 0 && (
+              <p className="muted-note">No resumes saved yet.</p>
+            )}
+
+            {resumes.map((resume) => (
+              <div className="resume-card" key={resume.id}>
+                <div className="resume-head">
+                  <strong>{resume.label}</strong>
+                  {resume.is_active && (
+                    <span className="badge-active">Active</span>
+                  )}
+                </div>
+                {fillingId === resume.id && (
+                  <small className="reason ok">
+                    Reading this resume with AI. The first time can take a few
+                    seconds; after that it is instant.
+                  </small>
+                )}
+                <small className="muted-note">
+                  {resume.filename} · {resume.page_count} page
+                  {resume.page_count === 1 ? "" : "s"} ·{" "}
+                  {formatSize(resume.size)}
+                </small>
+                <div className="resume-actions">
+                  <a
+                    className="secondary-button"
+                    href={`${API}/api/resumes/${resume.id}/file`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    View
+                  </a>
+                  {!resume.is_active && (
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      disabled={fillingId !== null}
+                      onClick={() => activateResume(resume)}
+                    >
+                      Make active
+                    </button>
+                  )}
+                  {resume.is_active && (
+                    <>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        disabled={fillingId !== null}
+                        onClick={() => fillProfileFromResume(resume)}
+                      >
+                        Fill profile from this resume
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        disabled={fillingId !== null}
+                        onClick={() => fillProfileFromResume(resume, true)}
+                      >
+                        Re-read
+                      </button>
+                    </>
+                  )}
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => renameResume(resume)}
+                  >
+                    Rename
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => deleteResume(resume)}
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            ))}
+
+            <div className="resume-upload">
+              <label className="upload-button">
+                <Upload size={15} />
+                {resumeBusy ? "Saving resume..." : "Add a resume (PDF)"}
+                <input
+                  type="file"
+                  accept="application/pdf"
+                  disabled={resumeBusy || resumes.length >= MAX_RESUMES}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) uploadResumeFile(file);
+                    e.target.value = "";
+                  }}
+                />
+              </label>
+              {resumes.length >= MAX_RESUMES && (
+                <small className="muted-note">
+                  You have reached the limit. Delete one to add another.
+                </small>
+              )}
+              {resumeMessage && <small className="reason ok">{resumeMessage}</small>}
+            </div>
+            {resumeError && (
+              <div className="form-error" role="alert">
+                {resumeError}
+              </div>
+            )}
 
             <h3 className="section-title">Contact</h3>
             <div className="grid-2">
@@ -1221,7 +1848,9 @@ function App() {
               />
             </Field>
 
-            <h3 className="section-title">Career summary</h3>
+            <h3 className="section-title" id="profile-career">
+              Career summary
+            </h3>
             <Field
               label="Target roles"
               required
@@ -1435,6 +2064,161 @@ function App() {
               </button>
               <button className="primary-button" disabled={busy || parsing}>
                 {busy ? "Saving..." : "Save profile"}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {showPreferences && (
+        <div
+          className="modal-backdrop"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setShowPreferences(false);
+          }}
+        >
+          <form className="modal" onSubmit={savePreferences} noValidate>
+            <div className="modal-head">
+              <div>
+                <div className="eyebrow">WHAT YOU ARE LOOKING FOR</div>
+                <h2>Job preferences</h2>
+              </div>
+              <button
+                type="button"
+                className="close-button"
+                onClick={() => setShowPreferences(false)}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <small className="muted-note">
+              Everything here is optional. Your target roles are kept in your
+              profile. Preferences are saved only for now and do not change
+              match scores yet.
+            </small>
+
+            <Field label="Preferred locations" hint="separate with commas">
+              <input
+                value={preferencesForm.locations}
+                placeholder="e.g. Bengaluru, Pune, Remote"
+                onChange={(e) =>
+                  setPreferencesForm({
+                    ...preferencesForm,
+                    locations: e.target.value,
+                  })
+                }
+              />
+            </Field>
+
+            <Field label="Experience level">
+              <select
+                value={preferencesForm.experience_level}
+                onChange={(e) =>
+                  setPreferencesForm({
+                    ...preferencesForm,
+                    experience_level: e.target.value,
+                  })
+                }
+              >
+                {Object.entries(EXPERIENCE_LEVELS).map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+
+            <div className="check-group-label">Work arrangement</div>
+            <div className="check-group">
+              {Object.entries(WORK_ARRANGEMENTS).map(([value, label]) => (
+                <label key={value} className="check-item">
+                  <input
+                    type="checkbox"
+                    checked={preferencesForm.work_arrangements.includes(value)}
+                    onChange={() => toggleArrangement(value)}
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
+
+            <h3 className="section-title">Salary expectation</h3>
+            <div className="grid-2">
+              <Field label="Minimum" error={preferencesErrors.salary_min}>
+                <input
+                  type="number"
+                  min={0}
+                  value={preferencesForm.salary_min}
+                  onChange={(e) =>
+                    setPreferencesForm({
+                      ...preferencesForm,
+                      salary_min: e.target.value,
+                    })
+                  }
+                />
+              </Field>
+              <Field label="Maximum" error={preferencesErrors.salary_max}>
+                <input
+                  type="number"
+                  min={0}
+                  value={preferencesForm.salary_max}
+                  onChange={(e) =>
+                    setPreferencesForm({
+                      ...preferencesForm,
+                      salary_max: e.target.value,
+                    })
+                  }
+                />
+              </Field>
+              <Field
+                label="Currency"
+                hint="e.g. INR"
+                error={preferencesErrors.salary_currency}
+              >
+                <input
+                  maxLength={3}
+                  value={preferencesForm.salary_currency}
+                  onChange={(e) =>
+                    setPreferencesForm({
+                      ...preferencesForm,
+                      salary_currency: e.target.value.toUpperCase(),
+                    })
+                  }
+                />
+              </Field>
+              <Field label="Per">
+                <select
+                  value={preferencesForm.salary_period}
+                  onChange={(e) =>
+                    setPreferencesForm({
+                      ...preferencesForm,
+                      salary_period: e.target.value,
+                    })
+                  }
+                >
+                  <option value="year">Year</option>
+                  <option value="month">Month</option>
+                </select>
+              </Field>
+            </div>
+
+            {preferencesError && (
+              <div className="form-error" role="alert">
+                {preferencesError}
+              </div>
+            )}
+
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => setShowPreferences(false)}
+              >
+                Cancel
+              </button>
+              <button className="primary-button" disabled={preferencesBusy}>
+                {preferencesBusy ? "Saving..." : "Save preferences"}
               </button>
             </div>
           </form>

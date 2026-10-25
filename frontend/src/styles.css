@@ -599,6 +599,7 @@ button:disabled {
 }
 .application-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
   padding: 13px 15px;
@@ -639,15 +640,45 @@ button:disabled {
   background: #252b3d;
   color: #bbc3d9;
 }
-.status-applied,
+.status-submitted,
+.status-approved,
 .status-offer,
 .status-interview {
   background: #51d8a918;
   color: #76e5bd;
 }
-.status-needs_review {
+.status-under_review,
+.status-ready_for_approval {
   background: #f0be6e18;
   color: #f2c77f;
+}
+.locked-note {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 12px;
+  color: #8f98ad;
+}
+.status-history {
+  flex-basis: 100%;
+  font-size: 13px;
+  color: #aab2c5;
+}
+.status-history summary {
+  cursor: pointer;
+}
+.status-history ol {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+.status-history li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 6px;
+}
+.status-history li span {
+  font-size: 12px;
+  color: #8f98ad;
 }
 .application-row select {
   background: #161c2d;
@@ -1010,4 +1041,79 @@ footer span {
 .muted-note {
   color: #8d96b0;
   font-size: 11px;
+}
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.filter-bar label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  color: #858da8;
+}
+.filter-bar select {
+  background: #121728;
+  border: 1px solid #292f43;
+  border-radius: 9px;
+  color: #e8eafa;
+  padding: 8px 10px;
+  font-size: 11px;
+}
+
+.check-group-label {
+  margin: 12px 0 6px;
+  font-size: 13px;
+  color: #aab2c5;
+}
+.check-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+}
+.check-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  cursor: pointer;
+}
+.check-item input {
+  width: auto;
+  margin: 0;
+}
+
+.resume-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0;
+  padding: 14px;
+  border: 1px solid #2d3449;
+  border-radius: 12px;
+}
+.resume-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.badge-active {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #51d8a918;
+  color: #76e5bd;
+  font-size: 11px;
+}
+.resume-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.resume-actions a.secondary-button {
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
 }

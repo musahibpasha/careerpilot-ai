@@ -1,5 +1,6 @@
 import re
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
@@ -38,11 +39,32 @@ class ApplicationCreate(BaseModel):
     notes: str = ""
 
 
+class StatusHistoryEntry(BaseModel):
+    from_status: str | None = None
+    to_status: str
+    at: datetime
+    actor: str = "user"
+    note: str = ""
+
+
+class StatusChange(BaseModel):
+    """Request body for PATCH /api/applications/{id}/status."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    status: str = Field(min_length=1, max_length=50)
+    note: str = Field(default="", max_length=500)
+
+
 class ApplicationRead(BaseModel):
     id: str
     job_id: str
     status: str
     allowed_next: list[str] = Field(default_factory=list)
+    gated_next: list[str] = Field(default_factory=list)
+    status_history: list[StatusHistoryEntry] = Field(default_factory=list)
+    resume_id: str | None = None
+    resume_label: str | None = None
     notes: str
     created_at: datetime
     updated_at: datetime
@@ -162,3 +184,55 @@ def profile_problems(profile: ProfileUpdate) -> list[str]:
             problems.append(f"Certification #{i}: name is required")
 
     return problems
+
+
+class PreferencesUpdate(BaseModel):
+    """Job preferences. Every field is optional. Target roles live in the
+    profile (target_roles), so they are not repeated here."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    locations: list[str] = Field(default_factory=list, max_length=20)
+    experience_level: Literal["", "intern", "entry", "mid", "senior", "lead"] = ""
+    work_arrangements: list[Literal["remote", "hybrid", "onsite"]] = Field(
+        default_factory=list, max_length=3
+    )
+    salary_min: int | None = Field(default=None, ge=0, le=1_000_000_000)
+    salary_max: int | None = Field(default=None, ge=0, le=1_000_000_000)
+    salary_currency: str = Field(default="", max_length=10)
+    salary_period: Literal["year", "month"] = "year"
+
+
+class PreferencesRead(PreferencesUpdate):
+    updated_at: datetime | None = None
+
+
+class ResumeRead(BaseModel):
+    """Details of a stored resume file. The file itself is downloaded separately."""
+
+    id: str
+    label: str
+    filename: str
+    size: int
+    page_count: int
+    is_active: bool
+    uploaded_at: datetime
+    extracted_at: datetime | None = None
+
+
+class ResumeUpdate(BaseModel):
+    """Rename a resume and/or make it the active one."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    label: str | None = Field(default=None, max_length=200)
+    is_active: bool | None = None
+
+
+class ResumeExtractRead(BaseModel):
+    """Details the AI read from a stored resume. They are NOT confirmed: they
+    only fill the profile form, and nothing is saved until you click Save."""
+
+    extracted: dict
+    cached: bool
+    extracted_at: datetime

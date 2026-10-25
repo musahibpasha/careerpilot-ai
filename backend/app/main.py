@@ -8,14 +8,16 @@ from datetime import datetime, timezone
 from io import BytesIO
 
 import httpx
-from bson import ObjectId
+from bson import Binary, ObjectId
 from bson.errors import InvalidId
 from fastapi import (
     Depends,
     FastAPI,
     File,
+    Form,
     HTTPException,
     Query,
+    Response,
     UploadFile,
 )
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,11 +25,31 @@ from pydantic import ValidationError
 from pymongo.database import Database
 from pymongo.errors import DuplicateKeyError
 from pypdf import PdfReader
+from starlette.datastructures import Headers
 
 from app import schemas
 from app.config import settings
 from app.database import ensure_indexes, get_db
 from app.matching import calculate_match
+from app.preferences import clean_preferences, preferences_problems
+from app.resumes import (
+    MAX_RESUME_BYTES,
+    MAX_RESUMES,
+    check_pdf,
+    clean_label,
+    label_problems,
+    safe_filename,
+)
+from app.workflow import (
+    CREATABLE,
+    GATED,
+    GATED_BLOCKED,
+    STATUSES,
+    allowed_next,
+    gated_next,
+    history_entry,
+    migrate_statuses,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -70,46 +92,17 @@ def _sanitize_openrouter_diagnostic(value, resume_text, redact_resume=False):
 # Application statuses and workflow
 # ---------------------------------------------------------
 
-ALLOWED_STATUSES = {
-    "saved",
-    "drafting",
-    "needs_review",
-    "applied",
-    "interview",
-    "rejected",
-    "offer",
-    "withdrawn",
-}
-
-APPLIED_BLOCKED = (
-    "Submission requires the explicit approval workflow "
-    "(not yet built). Status 'applied' cannot be set directly."
-)
-
-TRANSITIONS = {
-    "saved": ["drafting", "applied", "withdrawn"],
-    "drafting": ["needs_review", "saved", "withdrawn"],
-    "needs_review": ["drafting", "applied", "withdrawn"],
-    "applied": ["interview", "rejected", "withdrawn"],
-    "interview": ["offer", "rejected", "withdrawn"],
-    "offer": ["withdrawn"],
-    "rejected": [],
-    "withdrawn": [],
-}
-
-
-def allowed_next(status: str) -> list[str]:
-    """Return valid next statuses for an application."""
-    return TRANSITIONS.get(status, [])
-
-
 # ---------------------------------------------------------
 # FastAPI application setup
 # ---------------------------------------------------------
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    ensure_indexes(get_db())
+    db = get_db()
+    ensure_indexes(db)
+    result = migrate_statuses(db, now())
+    if result["migrated"] or result["history_started"] or result["unknown"]:
+        logger.info("Application status migration: %s", result)
     yield
 
 
@@ -169,6 +162,10 @@ def app_out(d: dict, job: dict | None) -> dict:
         "job_id": str(d["job_id"]),
         "status": d["status"],
         "allowed_next": allowed_next(d["status"]),
+        "gated_next": gated_next(d["status"]),
+        "status_history": d.get("status_history", []),
+        "resume_id": str(d["resume_id"]) if d.get("resume_id") else None,
+        "resume_label": d.get("resume_label"),
         "notes": d.get("notes", ""),
         "created_at": d["created_at"],
         "updated_at": d["updated_at"],
@@ -887,26 +884,20 @@ def create_application(
     payload: schemas.ApplicationCreate,
     db: Database = Depends(get_db),
 ):
-    if payload.status not in ALLOWED_STATUSES:
+    if payload.status not in STATUSES:
         raise HTTPException(
             status_code=422,
-            detail=(
-                "status must be one of: "
-                f"{', '.join(sorted(ALLOWED_STATUSES))}"
-            ),
+            detail=f"status must be one of: {', '.join(STATUSES)}",
         )
 
-    if payload.status == "applied":
-        raise HTTPException(
-            status_code=403,
-            detail=APPLIED_BLOCKED,
-        )
+    if payload.status in GATED:
+        raise HTTPException(status_code=403, detail=GATED_BLOCKED)
 
-    # Every new application must start at Saved.
-    if payload.status != "saved":
+    # New applications may only start at Discovered or Saved.
+    if payload.status not in CREATABLE:
         raise HTTPException(
             status_code=409,
-            detail="New applications must start at 'saved'.",
+            detail="New applications must start at 'discovered' or 'saved'.",
         )
 
     job = db.jobs.find_one({
@@ -921,9 +912,17 @@ def create_application(
 
     timestamp = now()
 
+    # Record which resume was active when this application was created.
+    active_resume = db.resumes.find_one({"is_active": True}, {"data": 0})
+
     doc = {
         "job_id": job["_id"],
-        "status": "saved",
+        "resume_id": active_resume["_id"] if active_resume else None,
+        "resume_label": active_resume["label"] if active_resume else None,
+        "status": payload.status,
+        "status_history": [
+            history_entry(None, payload.status, timestamp)
+        ],
         "notes": payload.notes,
         "created_at": timestamp,
         "updated_at": timestamp,
@@ -940,25 +939,21 @@ def create_application(
 )
 def update_application_status(
     application_id: str,
-    status: str,
+    payload: schemas.StatusChange,
     db: Database = Depends(get_db),
 ):
-    if status not in ALLOWED_STATUSES:
+    status = payload.status
+
+    if status not in STATUSES:
         raise HTTPException(
             status_code=422,
-            detail=(
-                "status must be one of: "
-                f"{', '.join(sorted(ALLOWED_STATUSES))}"
-            ),
+            detail=f"status must be one of: {', '.join(STATUSES)}",
         )
 
-    # Applying remains blocked until the explicit approval
-    # workflow has been implemented.
-    if status == "applied":
-        raise HTTPException(
-            status_code=403,
-            detail=APPLIED_BLOCKED,
-        )
+    # 'approved' and 'submitted' are refused here for every application,
+    # until the explicit approval workflow exists.
+    if status in GATED:
+        raise HTTPException(status_code=403, detail=GATED_BLOCKED)
 
     oid = to_oid(application_id, "Application")
     current = db.applications.find_one({"_id": oid})
@@ -970,9 +965,8 @@ def update_application_status(
         )
 
     current_status = current["status"]
-    valid_next = allowed_next(current_status)
 
-    if status not in valid_next:
+    if status not in allowed_next(current_status):
         raise HTTPException(
             status_code=409,
             detail=(
@@ -981,15 +975,27 @@ def update_application_status(
             ),
         )
 
-    db.applications.update_one(
-        {"_id": oid},
+    timestamp = now()
+
+    # One save changes the status and adds the history line together.
+    # Matching on the current status stops a stale click from applying.
+    result = db.applications.update_one(
+        {"_id": oid, "status": current_status},
         {
-            "$set": {
-                "status": status,
-                "updated_at": now(),
-            }
+            "$set": {"status": status, "updated_at": timestamp},
+            "$push": {
+                "status_history": history_entry(
+                    current_status, status, timestamp, note=payload.note
+                )
+            },
         },
     )
+
+    if result.matched_count == 0:
+        raise HTTPException(
+            status_code=409,
+            detail="This application changed in the meantime. Reload and try again.",
+        )
 
     updated = db.applications.find_one({"_id": oid})
     job = db.jobs.find_one({"_id": updated["job_id"]})
@@ -1071,3 +1077,274 @@ def update_profile(
     })
 
     return profile_out(updated_profile)
+
+
+# ---------------------------------------------------------
+# Job preferences API
+# ---------------------------------------------------------
+# Saved only. Not used in match scores until Stage 3 (explainable matching).
+
+def preferences_out(doc: dict | None) -> dict:
+    defaults = schemas.PreferencesUpdate().model_dump()
+    source = doc or {}
+    out = {key: source.get(key, default) for key, default in defaults.items()}
+    out["updated_at"] = source.get("updated_at")
+    return out
+
+
+@app.get(
+    "/api/preferences",
+    response_model=schemas.PreferencesRead,
+)
+def read_preferences(
+    db: Database = Depends(get_db),
+):
+    return preferences_out(db.preferences.find_one({}))
+
+
+@app.put(
+    "/api/preferences",
+    response_model=schemas.PreferencesRead,
+)
+def update_preferences(
+    payload: schemas.PreferencesUpdate,
+    db: Database = Depends(get_db),
+):
+    fields = clean_preferences(payload.model_dump())
+
+    problems = preferences_problems(fields)
+    if problems:
+        raise HTTPException(
+            status_code=422,
+            detail="Please fix your job preferences: " + "; ".join(problems) + ".",
+        )
+
+    fields["updated_at"] = now()
+
+    existing = db.preferences.find_one({})
+    if existing:
+        db.preferences.update_one({"_id": existing["_id"]}, {"$set": fields})
+        doc_id = existing["_id"]
+    else:
+        doc_id = db.preferences.insert_one(dict(fields)).inserted_id
+
+    # Deliberately no job re-scoring here: preferences do not affect scores yet.
+    return preferences_out(db.preferences.find_one({"_id": doc_id}))
+
+
+# ---------------------------------------------------------
+# Resume files API
+# ---------------------------------------------------------
+# You can keep several PDF resumes and choose one as the active resume.
+# A new application records the resume that was active when it was created.
+
+def resume_out(doc: dict) -> dict:
+    return {
+        "id": str(doc["_id"]),
+        "label": doc["label"],
+        "filename": doc["filename"],
+        "size": doc["size"],
+        "page_count": doc.get("page_count", 0),
+        "is_active": bool(doc.get("is_active")),
+        "uploaded_at": doc["uploaded_at"],
+        "extracted_at": doc.get("extracted_at"),
+    }
+
+
+def make_only_active(db: Database, keep_id) -> None:
+    db.resumes.update_many({"_id": {"$ne": keep_id}}, {"$set": {"is_active": False}})
+
+
+@app.get(
+    "/api/resumes",
+    response_model=list[schemas.ResumeRead],
+)
+def list_resumes(
+    db: Database = Depends(get_db),
+):
+    docs = sorted(
+        db.resumes.find({}, {"data": 0}),
+        key=lambda d: (not d.get("is_active"), d["label"].casefold()),
+    )
+    return [resume_out(d) for d in docs]
+
+
+@app.post(
+    "/api/resumes",
+    response_model=schemas.ResumeRead,
+    status_code=201,
+)
+async def upload_resume(
+    file: UploadFile = File(...),
+    label: str = Form(""),
+    db: Database = Depends(get_db),
+):
+    data = await file.read(MAX_RESUME_BYTES + 1)
+
+    existing = list(db.resumes.find({}, {"data": 0}))
+    if len(existing) >= MAX_RESUMES:
+        raise HTTPException(
+            status_code=409,
+            detail=f"You can keep at most {MAX_RESUMES} resumes. Delete one first.",
+        )
+
+    filename = file.filename or ""
+    page_count, problems = check_pdf(filename, data)
+    final_label = clean_label(label, filename)
+    problems += label_problems(final_label, [d["label"] for d in existing])
+    if problems:
+        raise HTTPException(
+            status_code=422,
+            detail="Could not save this resume: " + "; ".join(problems) + ".",
+        )
+
+    doc = {
+        "label": final_label,
+        "filename": safe_filename(filename),
+        "size": len(data),
+        "page_count": page_count,
+        "data": Binary(data),
+        # The first resume you upload is the active one.
+        "is_active": not existing,
+        "uploaded_at": now(),
+    }
+    doc["_id"] = db.resumes.insert_one(doc).inserted_id
+
+    return resume_out(doc)
+
+
+@app.patch(
+    "/api/resumes/{resume_id}",
+    response_model=schemas.ResumeRead,
+)
+def update_resume(
+    resume_id: str,
+    payload: schemas.ResumeUpdate,
+    db: Database = Depends(get_db),
+):
+    oid = to_oid(resume_id, "Resume")
+    current = db.resumes.find_one({"_id": oid}, {"data": 0})
+    if not current:
+        raise HTTPException(status_code=404, detail="Resume not found.")
+
+    if payload.is_active is False:
+        raise HTTPException(
+            status_code=422,
+            detail="A resume stops being active when you make another one active.",
+        )
+
+    changes: dict = {}
+
+    if payload.label is not None:
+        label = " ".join(payload.label.split())
+        others = [
+            d["label"]
+            for d in db.resumes.find({"_id": {"$ne": oid}}, {"data": 0})
+        ]
+        problems = label_problems(label, others)
+        if problems:
+            raise HTTPException(
+                status_code=422,
+                detail="Could not rename this resume: " + "; ".join(problems) + ".",
+            )
+        changes["label"] = label
+
+    if payload.is_active:
+        changes["is_active"] = True
+
+    if changes:
+        db.resumes.update_one({"_id": oid}, {"$set": changes})
+        if changes.get("is_active"):
+            make_only_active(db, oid)
+
+    return resume_out(db.resumes.find_one({"_id": oid}, {"data": 0}))
+
+
+@app.post(
+    "/api/resumes/{resume_id}/extract",
+    response_model=schemas.ResumeExtractRead,
+)
+async def extract_resume(
+    resume_id: str,
+    refresh: bool = Query(False),
+    db: Database = Depends(get_db),
+):
+    """Read the profile details out of a stored resume, to fill the profile form.
+
+    The first call reads the PDF with the same AI parser as the auto-fill upload
+    and keeps the result with the resume, so later calls are instant. Pass
+    refresh=true to read it again. The result is unconfirmed and is never saved
+    to the profile here: the user reviews it and clicks Save profile."""
+    oid = to_oid(resume_id, "Resume")
+    doc = db.resumes.find_one({"_id": oid})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Resume not found.")
+
+    if doc.get("extracted") and not refresh:
+        return {
+            "extracted": doc["extracted"],
+            "cached": True,
+            "extracted_at": doc["extracted_at"],
+        }
+
+    upload = UploadFile(
+        file=BytesIO(bytes(doc["data"])),
+        filename=doc["filename"],
+        headers=Headers({"content-type": "application/pdf"}),
+    )
+    # Raises an HTTP error (nothing is kept) if the AI could not read it.
+    result = await parse_resume(upload)
+
+    stamp = now()
+    db.resumes.update_one(
+        {"_id": oid},
+        {"$set": {"extracted": result["extracted"], "extracted_at": stamp}},
+    )
+    return {"extracted": result["extracted"], "cached": False, "extracted_at": stamp}
+
+
+@app.get("/api/resumes/{resume_id}/file")
+def download_resume(
+    resume_id: str,
+    db: Database = Depends(get_db),
+):
+    doc = db.resumes.find_one({"_id": to_oid(resume_id, "Resume")})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Resume not found.")
+
+    return Response(
+        content=bytes(doc["data"]),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{doc["filename"]}"'},
+    )
+
+
+@app.delete(
+    "/api/resumes/{resume_id}",
+    status_code=204,
+)
+def delete_resume(
+    resume_id: str,
+    db: Database = Depends(get_db),
+):
+    oid = to_oid(resume_id, "Resume")
+    current = db.resumes.find_one({"_id": oid}, {"data": 0})
+    if not current:
+        raise HTTPException(status_code=404, detail="Resume not found.")
+
+    if db.applications.count_documents({"resume_id": oid}) > 0:
+        raise HTTPException(
+            status_code=409,
+            detail="An application uses this resume, so it cannot be deleted.",
+        )
+
+    db.resumes.delete_one({"_id": oid})
+
+    # Keep exactly one active resume: promote the oldest remaining one.
+    if current.get("is_active"):
+        remaining = list(db.resumes.find({}, {"data": 0}))
+        if remaining:
+            oldest = min(remaining, key=lambda d: d["uploaded_at"])
+            db.resumes.update_one({"_id": oldest["_id"]}, {"$set": {"is_active": True}})
+
+    return Response(status_code=204)
