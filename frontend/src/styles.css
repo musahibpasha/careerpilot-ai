@@ -1491,3 +1491,262 @@ footer span {
 .kanban-board.full .kanban-column-body {
   flex: 1;
 }
+
+/* ---------------------------------------------------------
+   Stage 3: explainable match breakdown
+   --------------------------------------------------------- */
+.why-score {
+  margin-top: 10px;
+  border-top: 1px solid #262d42;
+  padding-top: 8px;
+}
+.why-score summary {
+  cursor: pointer;
+  font-size: 10px;
+  color: #8f9bff;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  list-style: none;
+}
+.why-score summary::-webkit-details-marker {
+  display: none;
+}
+.confidence {
+  font-size: 9px;
+  padding: 2px 6px;
+  border-radius: 20px;
+  text-transform: capitalize;
+  color: #a6aec6;
+  background: #a6aec614;
+}
+.confidence.high {
+  color: #71e0ba;
+  background: #5bd8ae14;
+}
+.confidence.medium {
+  color: #f4c57a;
+  background: #f4c57a14;
+}
+.why-help {
+  font-size: 10px;
+  color: #8992ab;
+  margin: 8px 0 4px;
+}
+.factor {
+  margin-top: 10px;
+}
+.factor-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: #d5d9ea;
+}
+.factor-score small {
+  color: #7d86a1;
+  font-size: 9px;
+}
+.factor-bar {
+  height: 5px;
+  border-radius: 5px;
+  background: #20263a;
+  margin: 5px 0 4px;
+  overflow: hidden;
+}
+.factor-fill {
+  height: 100%;
+  border-radius: 5px;
+  background: #a6aec6;
+}
+.factor-fill.good {
+  background: #34d399;
+}
+.factor-fill.partial {
+  background: #fbbf24;
+}
+.factor-fill.poor {
+  background: #f87171;
+}
+.factor-reason {
+  display: block;
+  font-size: 10px;
+  color: #8992ab;
+}
+.why-skills,
+.why-unknown {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed #262d42;
+}
+.why-unknown strong {
+  font-size: 10px;
+  color: #a6aec6;
+  font-weight: 600;
+}
+.rescore-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  font-size: 11px;
+  color: #b0b7cf;
+  background: #151a2c;
+  border: 1px solid #2d3449;
+  border-radius: 12px;
+}
+.form-more {
+  margin: 14px 0 4px;
+  padding: 10px 14px 4px;
+  border: 1px solid #2d3449;
+  border-radius: 12px;
+}
+.form-more summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: #b0b7cf;
+  margin-bottom: 8px;
+}
+
+.modal label select {
+  display: block;
+  width: 100%;
+  margin-top: 7px;
+  padding: 11px 12px;
+  background: #0c1120;
+  border: 1px solid #2d3449;
+  border-radius: 9px;
+  color: #edf0ff;
+  font: inherit;
+}
+.modal label select:focus {
+  border-color: #8d7bff;
+  outline: none;
+}
+
+/* Stage 3: "not interested" with a reason */
+.ghost-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 11px;
+  color: #8992ab;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  cursor: pointer;
+}
+.ghost-button:hover {
+  color: #edf0ff;
+  border-color: #2e354a;
+}
+.dismiss-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed #262d42;
+  font-size: 11px;
+  color: #8992ab;
+}
+.dismiss-panel button {
+  font: inherit;
+  font-size: 10.5px;
+  padding: 5px 10px;
+  color: #d5d9ea;
+  background: #181e31;
+  border: 1px solid #2e354a;
+  border-radius: 20px;
+  cursor: pointer;
+}
+.dismiss-panel button:hover {
+  border-color: #8d7bff;
+  color: #fff;
+}
+.dismiss-panel .link-button {
+  background: none;
+  border: none;
+  color: #8992ab;
+  text-decoration: underline;
+}
+.dismissed {
+  margin-top: 16px;
+  border: 1px solid #252b3d;
+  border-radius: 14px;
+  background: #0f1422;
+  padding: 12px 16px;
+}
+.dismissed summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: #a6aec6;
+}
+.dismissed-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0 2px;
+  font-size: 12px;
+  color: #d5d9ea;
+}
+.dismissed-row small {
+  display: block;
+  color: #7d86a1;
+  margin-top: 2px;
+}
+.dismissed-row .secondary-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+
+/* Stage 4: paste-a-job import */
+.paste-import {
+  margin: 4px 0 14px;
+  padding: 12px 14px;
+  border: 1px dashed #4a4290;
+  border-radius: 12px;
+  background: #14172b;
+}
+.paste-import summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: #aeb4ff;
+}
+.paste-import textarea {
+  display: block;
+  width: 100%;
+  margin-top: 10px;
+  padding: 11px 12px;
+  background: #0c1120;
+  border: 1px solid #2d3449;
+  border-radius: 9px;
+  color: #edf0ff;
+  font: inherit;
+  font-size: 12px;
+  resize: vertical;
+}
+.paste-import-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+.paste-import-row small {
+  color: #7d86a1;
+}
+.import-message {
+  margin: 10px 0 0;
+  font-size: 11px;
+  color: #a8e6cf;
+  line-height: 1.5;
+}

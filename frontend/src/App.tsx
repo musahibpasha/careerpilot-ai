@@ -3,6 +3,8 @@ import {
   Activity,
   ArrowUpRight,
   BriefcaseBusiness,
+  EyeOff,
+  RotateCcw,
   CheckCircle2,
   CircleAlert,
   Gauge,
@@ -98,9 +100,138 @@ type Job = {
   url: string | null;
   description: string;
   skills: string[];
+  nice_to_have_skills?: string[];
+  work_arrangement?: string;
+  experience_level?: string;
   match_score: number;
   match_reasons: string[];
+  match_confidence?: "" | "low" | "medium" | "high";
+  match_breakdown?: MatchFactor[];
+  feedback?: "" | "not_interested";
+  feedback_reason?: string;
 };
+
+// Why you passed on a job. "page" is where the matching setting lives.
+const DISMISS_REASONS: { key: string; label: string; page?: "profile" | "preferences" }[] = [
+  { key: "role", label: "Wrong kind of role", page: "profile" },
+  { key: "skills", label: "Skills don't fit", page: "profile" },
+  { key: "location", label: "Wrong location", page: "preferences" },
+  { key: "salary", label: "Pay too low", page: "preferences" },
+  { key: "experience", label: "Wrong level", page: "preferences" },
+  { key: "company", label: "Don't like the company" },
+  { key: "other", label: "Other" },
+];
+const IMPORT_LABELS: Record<string, string> = {
+  title: "title",
+  company: "company",
+  location: "location",
+  skills: "required skills",
+  nice_to_have_skills: "nice-to-have skills",
+  work_arrangement: "work style",
+  experience_level: "level",
+  salary: "salary",
+};
+
+const reasonLabel = (key?: string) =>
+  DISMISS_REASONS.find((r) => r.key === key)?.label ?? "No reason given";
+
+// One line of the score explanation. score is null when the factor could not
+// be judged (the job or your preferences do not say enough).
+type MatchFactor = {
+  key: string;
+  label: string;
+  weight: number;
+  score: number | null;
+  status: "good" | "partial" | "poor" | "unknown";
+  reason: string;
+  details?: {
+    matched?: string[];
+    missing_must_have?: string[];
+    missing_nice_to_have?: string[];
+  };
+};
+
+const CONFIDENCE_HELP: Record<string, string> = {
+  high: "Most factors could be judged.",
+  medium: "Some factors could not be judged.",
+  low: "Few factors could be judged. Add job details or fill in your preferences.",
+};
+
+// "Why this score?" panel: one bar per factor, with the reason in plain words.
+function MatchBreakdown({ job }: { job: Job }) {
+  const factors = job.match_breakdown ?? [];
+  const judged = factors.filter((f) => f.status !== "unknown");
+  const unknown = factors.filter((f) => f.status === "unknown");
+  const skills = factors.find((f) => f.key === "skills");
+  const matched = skills?.details?.matched ?? [];
+  const missingMust = skills?.details?.missing_must_have ?? [];
+  const missingNice = skills?.details?.missing_nice_to_have ?? [];
+
+  return (
+    <details className="why-score">
+      <summary>
+        Why this score?
+        {job.match_confidence && (
+          <span className={`confidence ${job.match_confidence}`}>
+            {job.match_confidence} confidence
+          </span>
+        )}
+      </summary>
+
+      {job.match_confidence && (
+        <p className="why-help">{CONFIDENCE_HELP[job.match_confidence]}</p>
+      )}
+
+      {judged.map((f) => (
+        <div className="factor" key={f.key}>
+          <div className="factor-head">
+            <span>{f.label}</span>
+            <span className="factor-score">
+              {Math.round(f.score ?? 0)}%
+              <small> · weight {Math.round(f.weight)}</small>
+            </span>
+          </div>
+          <div className="factor-bar" aria-hidden="true">
+            <div
+              className={`factor-fill ${f.status}`}
+              style={{ width: `${Math.max(2, f.score ?? 0)}%` }}
+            />
+          </div>
+          <small className="factor-reason">{f.reason}</small>
+        </div>
+      ))}
+
+      {(matched.length > 0 || missingMust.length > 0 || missingNice.length > 0) && (
+        <div className="why-skills">
+          {matched.length > 0 && (
+            <small className="reason ok">You have: {matched.join(", ")}</small>
+          )}
+          {missingMust.length > 0 && (
+            <small className="reason gap">
+              Missing must-have: {missingMust.join(", ")}
+            </small>
+          )}
+          {missingNice.length > 0 && (
+            <small className="reason">
+              Missing nice-to-have: {missingNice.join(", ")}
+            </small>
+          )}
+        </div>
+      )}
+
+      {unknown.length > 0 && (
+        <div className="why-unknown">
+          <strong>Not counted</strong>
+          {unknown.map((f) => (
+            <small className="reason" key={f.key}>
+              {f.label}: {f.reason}
+            </small>
+          ))}
+        </div>
+      )}
+    </details>
+  );
+}
 
 type StatusHistoryEntry = {
   from_status: string | null;
@@ -451,6 +582,28 @@ function errorText(data: any, fallback: string): string {
   return fallback;
 }
 
+function numberOrNull(v: string): number | null {
+  return v.trim() === "" ? null : Number(v);
+}
+
+function emptyJobForm() {
+  return {
+    title: "",
+    company: "",
+    location: "",
+    url: "",
+    description: "",
+    skills: "",
+    nice_to_have_skills: "",
+    work_arrangement: "",
+    experience_level: "",
+    salary_min: "",
+    salary_max: "",
+    salary_currency: "",
+    salary_period: "year",
+  };
+}
+
 function MatchReasons({ reasons }: { reasons: string[] }) {
   const matched = reasons
     .filter((r) => r.startsWith("Matched skill: "))
@@ -501,9 +654,14 @@ function App() {
     () => readSetting("cp-hide-empty", "no", ["yes", "no"]) === "yes",
   );
   const [page, setPage] = useState<Page>(pageFromHash);
+  const [dismissingId, setDismissingId] = useState<string | null>(null);
   const [draggedAppId, setDraggedAppId] = useState<string | null>(null);
   const [dragOverStatus, setDragOverStatus] = useState<string | null>(null);
   const [showJobForm, setShowJobForm] = useState(false);
+  const [pasteText, setPasteText] = useState("");
+  const [pasteOpen, setPasteOpen] = useState(true);
+  const [importing, setImporting] = useState(false);
+  const [importMessage, setImportMessage] = useState("");
   const [showProfile, setShowProfile] = useState(false);
   const [busy, setBusy] = useState(false);
   const [parsing, setParsing] = useState(false);
@@ -511,14 +669,7 @@ function App() {
   const [notice, setNotice] = useState("");
   const [formError, setFormError] = useState("");
 
-  const [form, setForm] = useState({
-    title: "",
-    company: "",
-    location: "",
-    url: "",
-    description: "",
-    skills: "",
-  });
+  const [form, setForm] = useState(emptyJobForm());
 
   const [profileForm, setProfileForm] = useState<ProfileForm>(emptyProfileForm());
   const [profileErrors, setProfileErrors] = useState<Record<string, string>>({});
@@ -633,6 +784,23 @@ function App() {
     [jobs],
   );
 
+  const dismissedJobs = useMemo(
+    () => jobs.filter((j) => j.feedback === "not_interested"),
+    [jobs],
+  );
+
+  // If you keep passing on jobs for the same fixable reason, say where to fix it.
+  const dismissTip = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const j of dismissedJobs) {
+      const reason = j.feedback_reason ?? "";
+      counts.set(reason, (counts.get(reason) ?? 0) + 1);
+    }
+    return DISMISS_REASONS.filter((r) => r.page && (counts.get(r.key) ?? 0) >= 2)
+      .map((r) => ({ ...r, count: counts.get(r.key) ?? 0 }))
+      .sort((a, b) => b.count - a.count)[0];
+  }, [dismissedJobs]);
+
   const visibleJobs = useMemo(() => {
     // job id -> application status ("none" if the job is not tracked yet)
     const statusByJob = new Map(
@@ -646,6 +814,7 @@ function App() {
         .includes(text);
       const status = statusByJob.get(j.id) ?? "none";
       return (
+        j.feedback !== "not_interested" &&
         matchesText &&
         j.match_score >= minMatch &&
         (sourceFilter === "all" || j.source === sourceFilter) &&
@@ -670,6 +839,96 @@ function App() {
     (a) => ["under_review", "ready_for_approval"].includes(a.status),
   ).length;
 
+  // "Not interested" (with a reason), or restore the job (value "").
+  async function saveFeedback(
+    job: Job,
+    value: "" | "not_interested",
+    reason = "",
+  ) {
+    try {
+      const response = await fetch(`${API}/api/jobs/${job.id}/feedback`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ value, reason }),
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(errorText(data, "Could not save your choice."));
+      }
+      setJobs((list) => list.map((j) => (j.id === job.id ? data : j)));
+      setDismissingId(null);
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message : "Could not save your choice.");
+    }
+  }
+
+  // Read pasted posting text and fill the form. Nothing is saved until you press Save.
+  async function importFromText() {
+    setImporting(true);
+    setImportMessage("");
+    try {
+      const response = await fetch(`${API}/api/jobs/import-preview`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: pasteText, url: form.url.trim() }),
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(errorText(data, "Could not read that posting."));
+      }
+      const d = data.draft;
+      // Only overwrite fields the importer actually found.
+      setForm((f) => ({
+        ...f,
+        title: d.title || f.title,
+        company: d.company || f.company,
+        location: d.location || f.location,
+        url: d.url || f.url,
+        description: d.description || f.description,
+        skills: d.skills.length ? d.skills.join(", ") : f.skills,
+        nice_to_have_skills: d.nice_to_have_skills.length
+          ? d.nice_to_have_skills.join(", ")
+          : f.nice_to_have_skills,
+        work_arrangement: d.work_arrangement || f.work_arrangement,
+        experience_level: d.experience_level || f.experience_level,
+        salary_min: d.salary_min != null ? String(d.salary_min) : f.salary_min,
+        salary_max: d.salary_max != null ? String(d.salary_max) : f.salary_max,
+        salary_currency: d.salary_currency || f.salary_currency,
+        salary_period: d.salary_currency ? d.salary_period : f.salary_period,
+      }));
+      const found = (data.found as string[]).map((k) => IMPORT_LABELS[k] ?? k);
+      const missing = (data.missing as string[]).map((k) => IMPORT_LABELS[k] ?? k);
+      setImportMessage(
+        found.length
+          ? `Filled in: ${found.join(", ")}.` +
+              (missing.length ? ` Not found: ${missing.join(", ")}.` : "") +
+              " Please check the details below before saving."
+          : "I could not recognise any details. Add them by hand below.",
+      );
+    } catch (e) {
+      setImportMessage(e instanceof Error ? e.message : "Could not read that posting.");
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  // Jobs saved before explainable matching have no breakdown yet.
+  async function rescoreJobs() {
+    setBusy(true);
+    try {
+      const response = await fetch(`${API}/api/jobs/rescore`, { method: "POST" });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      setNotice("Scores updated.");
+      await load();
+    } catch (e) {
+      setNotice(
+        `Could not re-score jobs (${e instanceof Error ? e.message : "error"}).`,
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function addJob(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
@@ -683,10 +942,11 @@ function App() {
           ...form,
           location: form.location || null,
           url: form.url || null,
-          skills: form.skills
-            .split(",")
-            .map((s) => s.trim())
-            .filter(Boolean),
+          skills: splitCommas(form.skills),
+          nice_to_have_skills: splitCommas(form.nice_to_have_skills),
+          salary_min: numberOrNull(form.salary_min),
+          salary_max: numberOrNull(form.salary_max),
+          salary_currency: form.salary_currency.trim().toUpperCase(),
           source: "manual",
         }),
       });
@@ -700,14 +960,10 @@ function App() {
       }
 
       setShowJobForm(false);
-      setForm({
-        title: "",
-        company: "",
-        location: "",
-        url: "",
-        description: "",
-        skills: "",
-      });
+      setForm(emptyJobForm());
+      setPasteText("");
+      setImportMessage("");
+      setPasteOpen(true);
 
       setNotice("Job added successfully.");
       await load();
@@ -1053,7 +1309,7 @@ function App() {
       }
 
       setShowPreferences(false);
-      setNotice("Job preferences saved. They do not change match scores yet.");
+      setNotice("Job preferences saved.");
     } catch (e) {
       setPreferencesError(
         e instanceof Error
@@ -1501,6 +1757,19 @@ function App() {
           </label>
         </section>
 
+        {jobs.some((j) => !j.match_breakdown?.length) && (
+          <div className="rescore-banner">
+            <span>Some jobs were scored before score explanations existed.</span>
+            <button
+              className="secondary-button"
+              onClick={() => void rescoreJobs()}
+              disabled={busy}
+            >
+              Re-score all jobs
+            </button>
+          </div>
+        )}
+
         <section className="jobs-list">
           {visibleJobs.length === 0 ? (
             <div className="empty-state">
@@ -1553,10 +1822,46 @@ function App() {
                     ))}
                   </div>
 
-                  <MatchReasons reasons={job.match_reasons} />
+                  {job.match_breakdown?.length ? (
+                    <MatchBreakdown job={job} />
+                  ) : (
+                    <MatchReasons reasons={job.match_reasons} />
+                  )}
+
+                  {dismissingId === job.id && (
+                    <div className="dismiss-panel" role="group" aria-label="Why not interested?">
+                      <span>Why not?</span>
+                      {DISMISS_REASONS.map((r) => (
+                        <button
+                          type="button"
+                          key={r.key}
+                          onClick={() => void saveFeedback(job, "not_interested", r.key)}
+                        >
+                          {r.label}
+                        </button>
+                      ))}
+                      <button
+                        type="button"
+                        className="link-button"
+                        onClick={() => setDismissingId(null)}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 <div className="job-actions">
+                  <button
+                    type="button"
+                    className="ghost-button"
+                    aria-expanded={dismissingId === job.id}
+                    onClick={() =>
+                      setDismissingId(dismissingId === job.id ? null : job.id)
+                    }
+                  >
+                    <EyeOff size={14} /> Not interested
+                  </button>
                   {job.url && (
                     <a
                       href={job.url}
@@ -1581,6 +1886,50 @@ function App() {
             ))
           )}
         </section>
+
+        {dismissTip && (
+          <div className="rescore-banner">
+            <span>
+              You passed on {dismissTip.count} jobs because of “
+              {dismissTip.label.toLowerCase()}”. Your{" "}
+              {dismissTip.page === "profile" ? "profile" : "job preferences"} may
+              need a tweak so these score lower.
+            </span>
+            <button
+              className="secondary-button"
+              onClick={() =>
+                dismissTip.page === "profile"
+                  ? setShowProfile(true)
+                  : setShowPreferences(true)
+              }
+            >
+              Open {dismissTip.page === "profile" ? "my profile" : "job preferences"}
+            </button>
+          </div>
+        )}
+
+        {dismissedJobs.length > 0 && (
+          <details className="dismissed">
+            <summary>Not interested ({dismissedJobs.length})</summary>
+            {dismissedJobs.map((job) => (
+              <div className="dismissed-row" key={job.id}>
+                <div>
+                  <strong>{job.title}</strong>
+                  <small>
+                    {job.company} · {reasonLabel(job.feedback_reason)}
+                  </small>
+                </div>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => void saveFeedback(job, "")}
+                >
+                  <RotateCcw size={13} /> Restore
+                </button>
+              </div>
+            ))}
+          </details>
+        )}
 
           </>
         ) : (
@@ -1955,6 +2304,32 @@ function App() {
               </button>
             </div>
 
+            <details
+              className="paste-import"
+              open={pasteOpen}
+              onToggle={(e) => setPasteOpen(e.currentTarget.open)}
+            >
+              <summary>Paste a job posting to fill this form</summary>
+              <textarea
+                rows={5}
+                value={pasteText}
+                onChange={(e) => setPasteText(e.target.value)}
+                placeholder="Paste the whole job posting here: title, company, location, requirements, salary..."
+              />
+              <div className="paste-import-row">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={importing || pasteText.trim().length < 20}
+                  onClick={() => void importFromText()}
+                >
+                  {importing ? "Reading..." : "Fill the form"}
+                </button>
+                <small>Nothing is saved until you press Save opportunity.</small>
+              </div>
+              {importMessage && <p className="import-message">{importMessage}</p>}
+            </details>
+
             <label>
               Job title
               <input
@@ -2002,6 +2377,102 @@ function App() {
                 placeholder="Python, AI, FastAPI"
               />
             </label>
+
+            <details className="form-more">
+              <summary>More details (optional, improves the match score)</summary>
+
+              <label>
+                Nice-to-have skills <small>(comma-separated)</small>
+                <input
+                  value={form.nice_to_have_skills}
+                  onChange={(e) =>
+                    setForm({ ...form, nice_to_have_skills: e.target.value })
+                  }
+                  placeholder="Docker, Jest"
+                />
+              </label>
+
+              <div className="grid-2">
+                <label>
+                  Work style
+                  <select
+                    value={form.work_arrangement}
+                    onChange={(e) =>
+                      setForm({ ...form, work_arrangement: e.target.value })
+                    }
+                  >
+                    <option value="">Not stated</option>
+                    <option value="remote">Remote</option>
+                    <option value="hybrid">Hybrid</option>
+                    <option value="onsite">On-site</option>
+                  </select>
+                </label>
+
+                <label>
+                  Experience level
+                  <select
+                    value={form.experience_level}
+                    onChange={(e) =>
+                      setForm({ ...form, experience_level: e.target.value })
+                    }
+                  >
+                    <option value="">Not stated</option>
+                    <option value="intern">Intern</option>
+                    <option value="entry">Entry level</option>
+                    <option value="mid">Mid level</option>
+                    <option value="senior">Senior</option>
+                    <option value="lead">Lead</option>
+                  </select>
+                </label>
+              </div>
+
+              <div className="grid-2">
+                <label>
+                  Salary from
+                  <input
+                    type="number"
+                    min={0}
+                    value={form.salary_min}
+                    onChange={(e) =>
+                      setForm({ ...form, salary_min: e.target.value })
+                    }
+                  />
+                </label>
+                <label>
+                  Salary up to
+                  <input
+                    type="number"
+                    min={0}
+                    value={form.salary_max}
+                    onChange={(e) =>
+                      setForm({ ...form, salary_max: e.target.value })
+                    }
+                  />
+                </label>
+                <label>
+                  Currency <small>(INR, USD...)</small>
+                  <input
+                    maxLength={3}
+                    value={form.salary_currency}
+                    onChange={(e) =>
+                      setForm({ ...form, salary_currency: e.target.value })
+                    }
+                  />
+                </label>
+                <label>
+                  Per
+                  <select
+                    value={form.salary_period}
+                    onChange={(e) =>
+                      setForm({ ...form, salary_period: e.target.value })
+                    }
+                  >
+                    <option value="year">Year</option>
+                    <option value="month">Month</option>
+                  </select>
+                </label>
+              </div>
+            </details>
 
             <label>
               Description

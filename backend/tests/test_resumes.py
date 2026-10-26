@@ -71,15 +71,23 @@ def test_check_pdf_accepts_a_real_pdf():
     assert check_pdf("cv.pdf", make_pdf(2)) == (2, [])
 
 
+# Every case has a short id on purpose. Without one, pytest builds the test name from
+# the file bytes, and the 5 MB case makes a name too long for Windows to handle.
 @pytest.mark.parametrize(
     "filename, data, expected",
     [
-        ("cv.docx", make_pdf(), "Only PDF files are supported"),
-        ("cv.pdf", b"", "The file is empty"),
-        ("cv.pdf", b"just text", "This does not look like a real PDF file"),
-        ("cv.pdf", b"%PDF-garbage", "This PDF could not be read. Try exporting it again"),
-        ("cv.pdf", make_pdf(password="secret"), "Password-protected PDFs are not supported"),
-        ("cv.pdf", b"%PDF-" + b"0" * (MAX_RESUME_BYTES + 1), "The file is larger than 5 MB"),
+        pytest.param("cv.docx", make_pdf(), "Only PDF files are supported", id="not-a-pdf-extension"),
+        pytest.param("cv.pdf", b"", "The file is empty", id="empty-file"),
+        pytest.param("cv.pdf", b"just text", "This does not look like a real PDF file", id="plain-text"),
+        pytest.param(
+            "cv.pdf", b"%PDF-garbage", "This PDF could not be read. Try exporting it again", id="corrupt-pdf"
+        ),
+        pytest.param(
+            "cv.pdf", make_pdf(password="secret"), "Password-protected PDFs are not supported", id="password-protected"
+        ),
+        pytest.param(
+            "cv.pdf", b"%PDF-" + b"0" * (MAX_RESUME_BYTES + 1), "The file is larger than 5 MB", id="over-5mb"
+        ),
     ],
 )
 def test_check_pdf_rejects_bad_files(filename, data, expected):

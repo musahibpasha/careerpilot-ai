@@ -2,7 +2,7 @@ import re
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
 
 
 class JobCreate(BaseModel):
@@ -13,7 +13,37 @@ class JobCreate(BaseModel):
     source_job_id: str | None = None
     url: HttpUrl | None = None
     description: str = ""
-    skills: list[str] = []
+    skills: list[str] = []  # must-have skills
+    # Optional details that let matching judge more than skills.
+    nice_to_have_skills: list[str] = Field(default_factory=list, max_length=50)
+    work_arrangement: Literal["", "remote", "hybrid", "onsite"] = ""
+    experience_level: Literal["", "intern", "entry", "mid", "senior", "lead"] = ""
+    salary_min: int | None = Field(default=None, ge=0, le=1_000_000_000)
+    salary_max: int | None = Field(default=None, ge=0, le=1_000_000_000)
+    salary_currency: str = Field(default="", max_length=10)
+    salary_period: Literal["year", "month"] = "year"
+
+    @model_validator(mode="after")
+    def _check_salary(self):
+        self.salary_currency = self.salary_currency.strip().upper()
+        low, high = self.salary_min, self.salary_max
+        if low is not None and high is not None and high < low:
+            raise ValueError("Maximum salary cannot be lower than minimum salary")
+        if (low is not None or high is not None) and not re.fullmatch(r"[A-Z]{3}", self.salary_currency):
+            raise ValueError("A 3-letter currency code (for example INR or USD) is required when a salary is given")
+        return self
+
+
+class MatchFactor(BaseModel):
+    """One line of the score explanation. score is None when the factor could not be judged."""
+
+    key: str
+    label: str
+    weight: float
+    score: float | None = None
+    status: Literal["good", "partial", "poor", "unknown"]
+    reason: str
+    details: dict = Field(default_factory=dict)
 
 
 class JobRead(BaseModel):
@@ -26,11 +56,67 @@ class JobRead(BaseModel):
     url: str | None
     description: str
     skills: list[str]
+    nice_to_have_skills: list[str] = Field(default_factory=list)
+    work_arrangement: str = ""
+    experience_level: str = ""
+    salary_min: int | None = None
+    salary_max: int | None = None
+    salary_currency: str = ""
+    salary_period: str = "year"
     match_score: float
     match_reasons: list[str]
+    match_confidence: str = ""  # "", "low", "medium" or "high" ("" = not scored with Stage 3 yet)
+    match_breakdown: list[MatchFactor] = Field(default_factory=list)
+    feedback: str = ""  # "" or "not_interested"
+    feedback_reason: str = ""
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+FeedbackReason = Literal["", "role", "skills", "location", "salary", "experience", "company", "other"]
+
+
+class JobFeedback(BaseModel):
+    """Mark a job as "not interested", with an optional reason. An empty value restores it."""
+
+    value: Literal["", "not_interested"]
+    reason: FeedbackReason = ""
+
+    @model_validator(mode="after")
+    def _reason_needs_dismissal(self):
+        if self.value == "" and self.reason:
+            raise ValueError("A reason can only be given when marking a job as not interested")
+        return self
+
+
+class JobImportRequest(BaseModel):
+    """Pasted job-posting text. Nothing is saved; the result only fills in the form."""
+
+    text: str = Field(min_length=20, max_length=20_000)
+    url: str = Field(default="", max_length=2000)
+
+
+class JobImportDraft(BaseModel):
+    title: str = ""
+    company: str = ""
+    location: str = ""
+    url: str = ""
+    description: str = ""
+    skills: list[str] = Field(default_factory=list)
+    nice_to_have_skills: list[str] = Field(default_factory=list)
+    work_arrangement: str = ""
+    experience_level: str = ""
+    salary_min: int | None = None
+    salary_max: int | None = None
+    salary_currency: str = ""
+    salary_period: str = "year"
+
+
+class JobImportPreview(BaseModel):
+    draft: JobImportDraft
+    found: list[str]  # which details were recognised
+    missing: list[str]  # which details were not, so the screen can say so
 
 
 class ApplicationCreate(BaseModel):

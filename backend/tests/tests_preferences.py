@@ -145,26 +145,28 @@ def test_preferences_can_be_saved_without_a_profile(db):
     assert db.profiles.count_documents({}) == 0
 
 
-def test_preferences_do_not_change_match_scores_or_the_profile(db):
+def test_preferences_change_match_scores_but_not_the_profile(db):
     assert client.put("/api/profile", json=valid_profile()).status_code == 200
     job = client.post(
         "/api/jobs",
-        json={"title": "Dev", "company": "Acme", "skills": ["React", "Go"]},
+        json={
+            "title": "Front-End Developer",
+            "company": "Acme",
+            "skills": ["React"],
+            "location": "Pune",
+            "work_arrangement": "onsite",
+        },
     ).json()
+    assert job["match_score"] == 100.0  # no preferences yet, so only skills and role are judged
     profile_before = db.profiles.find_one({})
 
     response = client.put(
         "/api/preferences",
-        json={
-            "locations": ["Pune"],
-            "experience_level": "senior",
-            "work_arrangements": ["onsite"],
-        },
+        json={"locations": ["Mumbai"], "work_arrangements": ["remote"]},
     )
 
     assert response.status_code == 200
-    jobs = client.get("/api/jobs").json()
-    after = next(j for j in jobs if j["id"] == job["id"])
-    assert after["match_score"] == job["match_score"]
-    assert after["match_reasons"] == job["match_reasons"]
-    assert db.profiles.find_one({}) == profile_before
+    after = next(j for j in client.get("/api/jobs").json() if j["id"] == job["id"])
+    assert after["match_score"] < job["match_score"]
+    assert any("Location" in r for r in after["match_reasons"])
+    assert db.profiles.find_one({}) == profile_beforeb

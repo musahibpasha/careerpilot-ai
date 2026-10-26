@@ -30,7 +30,8 @@ from starlette.datastructures import Headers
 from app import schemas
 from app.config import settings
 from app.database import ensure_indexes, get_db
-from app.matching import calculate_match
+from app.job_import import extract_job
+from app.matching import score_job
 from app.preferences import clean_preferences, preferences_problems
 from app.resumes import (
     MAX_RESUME_BYTES,
@@ -150,8 +151,20 @@ def job_out(d: dict) -> dict:
         "url": d.get("url"),
         "description": d.get("description", ""),
         "skills": d.get("skills", []),
+        "nice_to_have_skills": d.get("nice_to_have_skills", []),
+        "work_arrangement": d.get("work_arrangement", ""),
+        "experience_level": d.get("experience_level", ""),
+        "salary_min": d.get("salary_min"),
+        "salary_max": d.get("salary_max"),
+        "salary_currency": d.get("salary_currency", ""),
+        "salary_period": d.get("salary_period", "year"),
         "match_score": d.get("match_score", 0),
         "match_reasons": d.get("match_reasons", []),
+        "match_confidence": d.get("match_confidence", ""),
+        "match_breakdown": d.get("match_breakdown", []),
+        # Older builds saved "relevant" / "not_relevant"; treat the second as dismissed.
+        "feedback": "not_interested" if d.get("feedback") in ("not_interested", "not_relevant") else "",
+        "feedback_reason": d.get("feedback_reason", ""),
         "created_at": d["created_at"],
     }
 
@@ -174,9 +187,27 @@ def app_out(d: dict, job: dict | None) -> dict:
     }
 
 
-def profile_skills(db: Database) -> list[str]:
-    profile = db.profiles.find_one({})
-    return profile.get("skills", []) if profile else []
+def score_fields(job: dict, profile: dict | None, prefs: dict | None) -> dict:
+    """The stored match fields for one job (score, reasons, confidence, breakdown)."""
+    result = score_job(job, profile, prefs)
+    return {
+        "match_score": result["score"],
+        "match_reasons": result["reasons"],
+        "match_confidence": result["confidence"],
+        "match_breakdown": result["breakdown"],
+        "match_scored_at": now(),
+    }
+
+
+def rescore_all_jobs(db: Database, profile: dict | None = None, prefs: dict | None = None) -> int:
+    """Re-score every saved job. Called when the profile or preferences change."""
+    profile = profile if profile is not None else db.profiles.find_one({})
+    prefs = prefs if prefs is not None else db.preferences.find_one({})
+    count = 0
+    for job in db.jobs.find({}):
+        db.jobs.update_one({"_id": job["_id"]}, {"$set": score_fields(job, profile, prefs)})
+        count += 1
+    return count
 
 
 # ---------------------------------------------------------
@@ -780,6 +811,41 @@ def list_jobs(
     ]
 
 
+@app.post("/api/jobs/import-preview", response_model=schemas.JobImportPreview)
+def import_job_preview(payload: schemas.JobImportRequest):
+    """Read pasted job text and return a draft. Saves nothing; you review and save from the form."""
+    if not payload.text.strip() or len(payload.text.strip()) < 20:
+        raise HTTPException(status_code=422, detail="Paste the full job posting text.")
+    return extract_job(payload.text, payload.url.strip())
+
+
+@app.post("/api/jobs/rescore")
+def rescore_jobs(db: Database = Depends(get_db)):
+    """Re-score every job now. Useful for jobs saved before explainable matching existed."""
+    return {"rescored": rescore_all_jobs(db)}
+
+
+@app.put("/api/jobs/{job_id}/feedback", response_model=schemas.JobRead)
+def set_job_feedback(
+    job_id: str, payload: schemas.JobFeedback, db: Database = Depends(get_db)
+):
+    """Dismiss a job ("not interested", with a reason) or restore it. Does not change scores."""
+    oid = to_oid(job_id, "Job")
+    if payload.value:
+        update = {
+            "$set": {
+                "feedback": payload.value,
+                "feedback_reason": payload.reason,
+                "feedback_at": now(),
+            }
+        }
+    else:
+        update = {"$unset": {"feedback": "", "feedback_reason": "", "feedback_at": ""}}
+    if db.jobs.update_one({"_id": oid}, update).matched_count == 0:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    return job_out(db.jobs.find_one({"_id": oid}))
+
+
 @app.post(
     "/api/jobs",
     response_model=schemas.JobRead,
@@ -812,12 +878,6 @@ def create_job(
         if skill.strip()
     ]
 
-    score, reasons = calculate_match(
-        profile_skills(db),
-        skills,
-        payload.description,
-    )
-
     doc = {
         "title": payload.title.strip(),
         "company": payload.company.strip(),
@@ -827,10 +887,16 @@ def create_job(
         "url": url,
         "description": payload.description,
         "skills": skills,
-        "match_score": score,
-        "match_reasons": reasons,
+        "nice_to_have_skills": [x.strip() for x in payload.nice_to_have_skills if x.strip()],
+        "work_arrangement": payload.work_arrangement,
+        "experience_level": payload.experience_level,
+        "salary_min": payload.salary_min,
+        "salary_max": payload.salary_max,
+        "salary_currency": payload.salary_currency,
+        "salary_period": payload.salary_period,
         "created_at": now(),
     }
+    doc.update(score_fields(doc, db.profiles.find_one({}), db.preferences.find_one({})))
 
     try:
         doc["_id"] = db.jobs.insert_one(doc).inserted_id
@@ -1054,23 +1120,8 @@ def update_profile(
             dict(fields)
         ).inserted_id
 
-    # Re-score existing jobs when the profile changes.
-    for job in db.jobs.find({}):
-        score, reasons = calculate_match(
-            payload.skills,
-            job.get("skills", []),
-            job.get("description", ""),
-        )
-
-        db.jobs.update_one(
-            {"_id": job["_id"]},
-            {
-                "$set": {
-                    "match_score": score,
-                    "match_reasons": reasons,
-                }
-            },
-        )
+    # Skills and target roles feed the match score, so re-score every job.
+    rescore_all_jobs(db)
 
     updated_profile = db.profiles.find_one({
         "_id": profile_id
@@ -1082,7 +1133,7 @@ def update_profile(
 # ---------------------------------------------------------
 # Job preferences API
 # ---------------------------------------------------------
-# Saved only. Not used in match scores until Stage 3 (explainable matching).
+# Preferences feed the match score (location, work style, level, salary), so saving re-scores jobs.
 
 def preferences_out(doc: dict | None) -> dict:
     defaults = schemas.PreferencesUpdate().model_dump()
@@ -1128,8 +1179,9 @@ def update_preferences(
     else:
         doc_id = db.preferences.insert_one(dict(fields)).inserted_id
 
-    # Deliberately no job re-scoring here: preferences do not affect scores yet.
-    return preferences_out(db.preferences.find_one({"_id": doc_id}))
+    saved = db.preferences.find_one({"_id": doc_id})
+    rescore_all_jobs(db, prefs=saved)
+    return preferences_out(saved)
 
 
 # ---------------------------------------------------------

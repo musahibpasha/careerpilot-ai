@@ -45,8 +45,11 @@ The long-term goal is to support a human-approved workflow: find relevant opport
 - **Basic skill-overlap match score** — calculate an initial score based on normalized skill overlap.
 - **Job feed filtering and sorting** — filter by status, minimum match score, and source; sort by best match, newest, or company.
 - **Application-status tracking with history** — statuses are Discovered, Saved, Under review, Ready for approval, Approved, Submitted, Interview, Offer, Rejected, and Withdrawn. Every change is recorded with a timestamp and shown in the tracker. Approved and Submitted are locked: the backend refuses them until the approval workflow is built. Applications saved under the older statuses are converted automatically on startup.
-- **Job preferences** — save preferred locations, experience level, work arrangement (remote, hybrid, on-site), and salary expectation (minimum, maximum, currency, per year or month). Everything is optional, and target roles stay in the profile. Preferences are saved only; they do not change match scores yet.
+- **Job preferences** — save preferred locations, experience level, work arrangement (remote, hybrid, on-site), and salary expectation (minimum, maximum, currency, per year or month). Everything is optional, and target roles stay in the profile. Preferences feed the match score (see Explainable matching).
 - **Multiple resumes with an active resume** — in your profile, keep up to 5 PDF resumes (5 MB each), view them, rename them, delete them, and choose one as the active resume (shown with an "Active" badge). A new application records the resume that was active when it was created and shows it in the tracker. Choosing a resume as active (or uploading your first one) reads it with the same AI parser as auto-fill and fills your profile form from it. The reading is kept with the resume, so switching back is instant, and "Re-read" reads it again. Nothing is saved to your profile until you review the form and click Save profile; closing the window without saving undoes it. The "Upload resume (PDF) and auto-fill" button at the top of the profile saves the file under My resumes and fills the form from it (when you already have 5 saved resumes it only fills the form and keeps nothing); "Add a resume" saves the file and fills the form only if it becomes your active resume. Uploading never changes your saved profile by itself. Resume files are stored in your local MongoDB, which is fine on your own machine, but login and protected storage are needed before the app is ever put online.
+- **Explainable matching** — each job is scored 0-100 from weighted factors: skills (50, must-have vs nice-to-have), role fit against your target roles (15), location and work style (15), experience level (10) and salary (10). Every factor shows a plain-English reason, missing skills are listed, and a factor that cannot be judged (the job or your preferences do not say enough) is left out instead of counted as a miss. A low/medium/high confidence label shows how much of the picture was judged. Scores update when you save your profile or preferences, or call `POST /api/jobs/rescore`. Salary is only compared when both sides use the same currency. Each job card has a "Why this score?" panel with a bar per factor, the confidence label, missing skills, and the factors that were not counted; the add-job form has an optional "More details" section (nice-to-have skills, work style, level, salary).
+- **Not interested, with a reason** — dismiss a job from its card and say why (role, skills, location, pay, level, company, other). Dismissed jobs move to a collapsible list with a Restore button, and after two dismissals for the same reason the app points you to the profile or preference setting that controls it. This is only recorded for now; it does not change scores.
+- **Paste-a-job import** — in Add job, paste a whole posting and press Fill the form. Rules (not AI) read the title, company, location, work style, level, salary (LPA, lakh, $ ranges, monthly or yearly) and known skills, splitting must-have from nice-to-have. You review the filled form and save; nothing is saved automatically, and details it cannot find are listed so you can add them.
 - **Safer loading behavior** — the job tracker can still load if the profile request fails.
 - **Automated tests** — cover areas including matching, normalization, duplicates, profile validation, resume parsing, status transitions, status history, the approval block, the status migration, job preferences, and resume files. Run `cd backend && python -m pytest -q`.
 
@@ -54,13 +57,9 @@ The long-term goal is to support a human-approved workflow: find relevant opport
 
 Features below are planned, not yet implemented unless explicitly listed in the Built section.
 
-- Using job preferences in matching (planned with explainable matching in Stage 3).
 - Tailored resumes for each job, built only from your confirmed profile (planned for Stage 5), and using the active resume in job search and matching.
 - Kanban board, notes, and reminders.
-- Paste-a-job import.
 - Permitted job-source connectors, scheduled scans, and expired-listing checks.
-- Explainable matching with weighted factors such as skills, experience, location, seniority, and salary.
-- Separate must-have and nice-to-have requirements, missing-skill explanations, and match-confidence indicators.
 - Relevant/not-relevant feedback to improve the usefulness of recommendations.
 - Skill-gap reports.
 - Tailored resume drafts, cover letters, application-answer drafts, document checklists, and ATS keyword checks.
@@ -80,16 +79,16 @@ Work is being delivered incrementally so each stage can be tested before moving 
 |---|---|---|
 | 1 | Stabilize the existing app, database, tests, and basic approval block | ✅ Built |
 | 2 | Profile and application tracking | 🟡 Status history, job preferences, and multiple resumes built; Kanban board remains |
-| 3 | Smart, explainable job matching | 🔜 Planned |
-| 4 | Job discovery, import, and permitted source connectors | 🔜 Planned |
+| 3 | Smart, explainable job matching | ✅ Complete |
+| 4 | Job discovery, import, and permitted source connectors | 🟡 Paste-a-job import done; discovery sources and link fetching remain |
 | 5 | Application preparation and browser-assisted prefill | 🔜 Planned |
 | 6 | Explicit approval workflow and server-side safeguards | 🔜 Planned |
 | 7 | Analytics, alerts, interview preparation, authentication, security, and deployment | 🔜 Planned |
 
 ### Suggested implementation order
 
-1. Finish Stage 2: Kanban board (status history, job preferences, and multiple resumes are done).
-2. Build Stage 3: explainable matching and skill-gap insights.
+1. ~~Stage 2: Kanban board, status history, job preferences, multiple resumes.~~ Done.
+2. ~~Stage 3: explainable matching and skill-gap insights.~~ Done.
 3. Build Stage 4: job import and permitted discovery sources.
 4. Build Stage 5: application document preparation and safe form prefill.
 5. Build Stage 6: a complete approval flow enforced by the backend.

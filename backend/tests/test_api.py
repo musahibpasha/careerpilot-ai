@@ -205,7 +205,7 @@ def test_profile_rescoring_and_bad_ids():
     job_response = client.post(
         "/api/jobs",
         json={
-            "title": "R",
+            "title": "Front-End Developer",
             "company": "Z",
             "skills": ["python"],
         },
