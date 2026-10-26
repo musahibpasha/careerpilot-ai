@@ -1,23 +1,31 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   ArrowUpRight,
+  Bot,
   BriefcaseBusiness,
-  EyeOff,
-  RotateCcw,
   CheckCircle2,
+  Circle,
   CircleAlert,
-  Gauge,
+  EyeOff,
+  FileText,
   Kanban,
+  LayoutDashboard,
+  Lightbulb,
   List,
   Lock,
+  MapPin,
+  Menu,
   Plus,
+  RotateCcw,
   Search,
+  Send,
+  Settings,
   ShieldCheck,
-  SlidersHorizontal,
   Sparkles,
   Target,
   Upload,
+  User,
   X,
 } from "lucide-react";
 
@@ -81,15 +89,35 @@ function saveSetting(key: string, value: string) {
   }
 }
 
-type Page = "overview" | "applications";
+type Page = "dashboard" | "jobs" | "applications" | "copilot";
+
+const PAGE_HASH: Record<Page, string> = {
+  dashboard: "#/",
+  jobs: "#/jobs",
+  applications: "#/applications",
+  copilot: "#/copilot",
+};
 
 // Simple page switching with the URL hash, so refresh and the browser Back
 // button keep working without adding a router library.
 function pageFromHash(): Page {
-  return window.location.hash.startsWith("#/applications")
-    ? "applications"
-    : "overview";
+  const h = window.location.hash;
+  if (h.startsWith("#/jobs")) return "jobs";
+  if (h.startsWith("#/applications")) return "applications";
+  if (h.startsWith("#/copilot")) return "copilot";
+  return "dashboard";
 }
+
+// One message in the Career Copilot thread. "derived" marks answers computed
+// from the app's own data (no AI model involved).
+type ChatMessage = {
+  id: number;
+  role: "user" | "assistant";
+  text: string;
+  lines?: string[];
+  derived?: boolean;
+  cta?: { label: string; run: () => void };
+};
 
 type Job = {
   id: string;
@@ -157,8 +185,28 @@ const CONFIDENCE_HELP: Record<string, string> = {
   low: "Few factors could be judged. Add job details or fill in your preferences.",
 };
 
-// "Why this score?" panel: one bar per factor, with the reason in plain words.
-function MatchBreakdown({ job }: { job: Job }) {
+// "Match analysis" dialog: the score breakdown for one job. Everything shown
+// comes from the job's saved match_breakdown; suggestions are derived from the
+// gaps in that breakdown and are not AI generated.
+function MatchAnalysis({
+  job,
+  busy,
+  onClose,
+  onTrack,
+}: {
+  job: Job;
+  busy: boolean;
+  onClose: () => void;
+  onTrack: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   const factors = job.match_breakdown ?? [];
   const judged = factors.filter((f) => f.status !== "unknown");
   const unknown = factors.filter((f) => f.status === "unknown");
@@ -167,69 +215,165 @@ function MatchBreakdown({ job }: { job: Job }) {
   const missingMust = skills?.details?.missing_must_have ?? [];
   const missingNice = skills?.details?.missing_nice_to_have ?? [];
 
+  const score = Math.round(job.match_score);
+  const cls = score >= 70 ? "high" : score >= 40 ? "mid" : "low";
+  const verdict = score >= 70 ? "Strong fit" : score >= 40 ? "Partial fit" : "Weak fit";
+
+  const suggestions: { title: string; text: string }[] = [
+    ...missingMust.slice(0, 2).map((s) => ({
+      title: `Close the ${s} gap`,
+      text: `If you have experience with ${s}, add it to your profile so it counts. If not, a small project or course would show it.`,
+    })),
+    ...missingNice.slice(0, 1).map((s) => ({
+      title: `Nice to have: ${s}`,
+      text: `Not required, but adding ${s} would strengthen this match.`,
+    })),
+    ...factors
+      .filter((f) => f.key !== "skills" && (f.status === "poor" || f.status === "partial"))
+      .slice(0, 2)
+      .map((f) => ({ title: f.label, text: f.reason })),
+  ].slice(0, 4);
+
   return (
-    <details className="why-score">
-      <summary>
-        Why this score?
-        {job.match_confidence && (
-          <span className={`confidence ${job.match_confidence}`}>
-            {job.match_confidence} confidence
-          </span>
+    <div
+      className="drawer-backdrop"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="analysis" role="dialog" aria-modal="true" aria-label={`Match analysis for ${job.title}`}>
+        <div className="analysis-top">
+          <div className="company-logo">{job.company.slice(0, 1).toUpperCase()}</div>
+          <div>
+            <h2>{job.title}</h2>
+            <p>
+              {job.company}
+              {job.location ? ` · ${job.location}` : ""}
+            </p>
+          </div>
+          <button type="button" className="close-button" onClick={onClose} aria-label="Close">
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="analysis-summary">
+          <div
+            className={`ring lg ${cls}`}
+            style={{ "--p": score } as React.CSSProperties}
+            role="img"
+            aria-label={`${score}% match`}
+          >
+            <span>{score}%</span>
+          </div>
+          <div>
+            <strong>{verdict}</strong>
+            <p>
+              Calculated from your profile and preferences.
+              {job.match_confidence ? ` ${CONFIDENCE_HELP[job.match_confidence]}` : ""}
+            </p>
+            {job.match_confidence && (
+              <span className={`confidence ${job.match_confidence}`} style={{ marginTop: 8, display: "inline-block" }}>
+                {job.match_confidence} confidence
+              </span>
+            )}
+          </div>
+        </div>
+
+        {judged.length > 0 ? (
+          <>
+            <h3>Why it matches</h3>
+            {judged.map((f) => (
+              <div className="factor" key={f.key}>
+                <div className="factor-head">
+                  <span>{f.label}</span>
+                  <span className="factor-score">
+                    {Math.round(f.score ?? 0)}%<small> · weight {Math.round(f.weight)}</small>
+                  </span>
+                </div>
+                <div className="factor-bar" aria-hidden="true">
+                  <div
+                    className={`factor-fill ${f.status}`}
+                    style={{ width: `${Math.max(2, f.score ?? 0)}%` }}
+                  />
+                </div>
+                <small className="factor-reason">{f.reason}</small>
+              </div>
+            ))}
+          </>
+        ) : (
+          <>
+            <h3>Why it matches</h3>
+            <MatchReasons reasons={job.match_reasons} />
+            <p className="analysis-note">
+              This job was scored before score explanations existed. Use Re-score all jobs on Find
+              jobs to see the full breakdown.
+            </p>
+          </>
         )}
-      </summary>
 
-      {job.match_confidence && (
-        <p className="why-help">{CONFIDENCE_HELP[job.match_confidence]}</p>
-      )}
+        {(matched.length > 0 || missingMust.length > 0 || missingNice.length > 0) && (
+          <>
+            <h3>Skills</h3>
+            <div className="skill-list">
+              {matched.map((s) => (
+                <span key={`m-${s}`} className="matched">
+                  {s}
+                </span>
+              ))}
+              {missingMust.map((s) => (
+                <span key={`x-${s}`} className="missing">
+                  Missing: {s}
+                </span>
+              ))}
+              {missingNice.map((s) => (
+                <span key={`n-${s}`}>Nice to have: {s}</span>
+              ))}
+            </div>
+          </>
+        )}
 
-      {judged.map((f) => (
-        <div className="factor" key={f.key}>
-          <div className="factor-head">
-            <span>{f.label}</span>
-            <span className="factor-score">
-              {Math.round(f.score ?? 0)}%
-              <small> · weight {Math.round(f.weight)}</small>
-            </span>
-          </div>
-          <div className="factor-bar" aria-hidden="true">
-            <div
-              className={`factor-fill ${f.status}`}
-              style={{ width: `${Math.max(2, f.score ?? 0)}%` }}
-            />
-          </div>
-          <small className="factor-reason">{f.reason}</small>
-        </div>
-      ))}
+        {suggestions.length > 0 && (
+          <>
+            <h3>
+              Suggested improvements{" "}
+              <span className="tag-derived">
+                <CheckCircle2 size={12} /> Derived from this score
+              </span>
+            </h3>
+            <div className="suggest-grid">
+              {suggestions.map((s) => (
+                <div className="suggest-card" key={s.title}>
+                  <strong>
+                    <Lightbulb size={15} /> {s.title}
+                  </strong>
+                  <p>{s.text}</p>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
 
-      {(matched.length > 0 || missingMust.length > 0 || missingNice.length > 0) && (
-        <div className="why-skills">
-          {matched.length > 0 && (
-            <small className="reason ok">You have: {matched.join(", ")}</small>
+        {unknown.length > 0 && (
+          <p className="analysis-note">
+            Not counted: {unknown.map((f) => f.label).join(", ")} (not enough information to judge).
+          </p>
+        )}
+
+        <div className="analysis-actions">
+          <button className="primary-button" onClick={onTrack} disabled={busy}>
+            Track job
+          </button>
+          {job.url && (
+            <a className="secondary-button" href={job.url} target="_blank" rel="noreferrer">
+              Open posting <ArrowUpRight size={14} />
+            </a>
           )}
-          {missingMust.length > 0 && (
-            <small className="reason gap">
-              Missing must-have: {missingMust.join(", ")}
-            </small>
-          )}
-          {missingNice.length > 0 && (
-            <small className="reason">
-              Missing nice-to-have: {missingNice.join(", ")}
-            </small>
-          )}
         </div>
-      )}
-
-      {unknown.length > 0 && (
-        <div className="why-unknown">
-          <strong>Not counted</strong>
-          {unknown.map((f) => (
-            <small className="reason" key={f.key}>
-              {f.label}: {f.reason}
-            </small>
-          ))}
-        </div>
-      )}
-    </details>
+        <p className="analysis-note">
+          Tracking a job does not apply to it. Submitting needs your explicit approval.
+        </p>
+      </div>
+    </div>
   );
 }
 
@@ -250,6 +394,7 @@ type Application = {
   status_history: StatusHistoryEntry[];
   resume_id: string | null;
   resume_label: string | null;
+  updated_at: string;
   job_title: string;
   company: string;
   notes: string;
@@ -640,6 +785,10 @@ function App() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [applications, setApplications] = useState<Application[]>([]);
   const [profile, setProfile] = useState<Profile>(null);
+  const [dashboardLoadState, setDashboardLoadState] = useState<
+    "loading" | "ready" | "error"
+  >("loading");
+  const [dashboardLoadError, setDashboardLoadError] = useState("");
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [minMatch, setMinMatch] = useState(0);
@@ -664,6 +813,15 @@ function App() {
   const [importMessage, setImportMessage] = useState("");
   const [showProfile, setShowProfile] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [matchingAction, setMatchingAction] = useState<
+    "job" | "profile" | "preferences" | "rescore" | null
+  >(null);
+  const [updatingApplicationIds, setUpdatingApplicationIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [transitioningApplicationId, setTransitioningApplicationId] = useState<
+    string | null
+  >(null);
   const [parsing, setParsing] = useState(false);
   const [parseMessage, setParseMessage] = useState("");
   const [notice, setNotice] = useState("");
@@ -690,7 +848,49 @@ function App() {
   const [resumeError, setResumeError] = useState("");
   const [fillingId, setFillingId] = useState<string | null>(null);
 
-  async function load() {
+  const [analysisJob, setAnalysisJob] = useState<Job | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [chat, setChat] = useState<ChatMessage[]>([
+    {
+      id: 0,
+      role: "assistant",
+      text: "Hi! I can summarise your matches, skill gaps and approval queue from the data in this app. Pick a quick action below.",
+    },
+  ]);
+  const threadRef = useRef<HTMLDivElement>(null);
+  const previousPageRef = useRef(page);
+
+  useEffect(() => {
+    if (previousPageRef.current === page) return;
+    previousPageRef.current = page;
+    window.requestAnimationFrame(() => {
+      document.querySelector<HTMLElement>(".main h1")?.focus({ preventScroll: true });
+    });
+  }, [page]);
+
+  useEffect(() => {
+    if (!sidebarOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSidebarOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [sidebarOpen]);
+
+  useEffect(() => {
+    threadRef.current?.scrollTo({
+      top: threadRef.current.scrollHeight,
+      behavior: "smooth",
+    });
+  }, [chat.length]);
+
+  async function load(showDashboardLoading = false) {
+    if (showDashboardLoading) {
+      setDashboardLoadState("loading");
+      setDashboardLoadError("");
+      setNotice("");
+    }
+
     // Load each part separately so one failing request (e.g. the profile)
     // can never hide the jobs and the application tracker.
     const get = async (path: string) => {
@@ -747,15 +947,29 @@ function App() {
     }
 
     if (problems.length > 0) {
-      setNotice(
-        `Some data could not be loaded (${problems.join("; ")}). ` +
-          "Check that MongoDB and the FastAPI backend are running (see README).",
-      );
+      const coreDashboardUnavailable =
+        jobsResult.status === "rejected" ||
+        applicationsResult.status === "rejected";
+      if (showDashboardLoading && coreDashboardUnavailable) {
+        setDashboardLoadError(
+          `Some dashboard information could not be loaded (${problems.join("; ")}). ` +
+            "Check that FastAPI and MongoDB are running, then try again.",
+        );
+        setDashboardLoadState("error");
+      } else {
+        if (showDashboardLoading) setDashboardLoadState("ready");
+        setNotice(
+          `Some data could not be loaded (${problems.join("; ")}). ` +
+            "Check that MongoDB and the FastAPI backend are running (see README).",
+        );
+      }
+    } else if (showDashboardLoading) {
+      setDashboardLoadState("ready");
     }
   }
 
   useEffect(() => {
-    void load();
+    void load(true);
   }, []);
 
   useEffect(() => {
@@ -913,18 +1127,28 @@ function App() {
   }
 
   // Jobs saved before explainable matching have no breakdown yet.
-  async function rescoreJobs() {
+  async function rescoreJobs(): Promise<boolean> {
     setBusy(true);
+    setMatchingAction("rescore");
     try {
       const response = await fetch(`${API}/api/jobs/rescore`, { method: "POST" });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      setNotice("Scores updated.");
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(errorText(data, `HTTP ${response.status}`));
+      }
+      if (typeof data?.rescored !== "number") {
+        throw new Error("The API returned an invalid re-score result.");
+      }
+      setNotice(`Match scores updated for ${data.rescored} job${data.rescored === 1 ? "" : "s"}.`);
       await load();
+      return true;
     } catch (e) {
       setNotice(
         `Could not re-score jobs (${e instanceof Error ? e.message : "error"}).`,
       );
+      return false;
     } finally {
+      setMatchingAction(null);
       setBusy(false);
     }
   }
@@ -932,6 +1156,7 @@ function App() {
   async function addJob(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
+    setMatchingAction("job");
     setNotice("");
 
     try {
@@ -965,13 +1190,18 @@ function App() {
       setImportMessage("");
       setPasteOpen(true);
 
-      setNotice("Job added successfully.");
+      const matchScore =
+        typeof data?.match_score === "number"
+          ? ` Match score: ${Math.round(data.match_score)}%.`
+          : "";
+      setNotice(`Job added and scored.${matchScore}`);
       await load();
     } catch (e) {
       const message = e instanceof Error ? e.message : "Something went wrong.";
       setNotice(message);
       setFormError(message);
     } finally {
+      setMatchingAction(null);
       setBusy(false);
     }
   }
@@ -1058,6 +1288,7 @@ function App() {
     }
     setFormError("");
     setBusy(true);
+    setMatchingAction("profile");
 
     try {
       const keep = <T extends Record<string, string>>(items: T[]) =>
@@ -1099,6 +1330,7 @@ function App() {
       setNotice(message);
       setFormError(message);
     } finally {
+      setMatchingAction(null);
       setBusy(false);
     }
   }
@@ -1284,6 +1516,7 @@ function App() {
     }
     setPreferencesError("");
     setPreferencesBusy(true);
+    setMatchingAction("preferences");
 
     try {
       const toNumber = (v: string) => (v.trim() === "" ? null : Number(v));
@@ -1317,6 +1550,7 @@ function App() {
           : "Could not save job preferences. Check that the API is running.",
       );
     } finally {
+      setMatchingAction(null);
       setPreferencesBusy(false);
     }
   }
@@ -1379,12 +1613,15 @@ function App() {
   ) {
     if (!nextStatus) return;
 
+    if (updatingApplicationIds.has(application.id)) return;
+
     // Do not submit a status that is not allowed by the API response.
     if (!application.allowed_next?.includes(nextStatus)) {
       setNotice("That status transition is not allowed.");
       return;
     }
 
+    setUpdatingApplicationIds((current) => new Set(current).add(application.id));
     setNotice("");
 
     try {
@@ -1400,15 +1637,30 @@ function App() {
       const data = await response.json().catch(() => null);
 
       if (!response.ok) {
-        setNotice(errorText(data, "Could not update application status."));
-      } else {
-        setNotice("Application status updated.");
+        const message = errorText(data, "Could not update application status.");
+        await load();
+        setNotice(message);
+        return;
       }
-    } catch {
-      setNotice("Could not reach the API.");
-    }
 
-    await load();
+      setNotice("Application status updated.");
+      setTransitioningApplicationId(application.id);
+      await load();
+      window.setTimeout(() => {
+        setTransitioningApplicationId((current) =>
+          current === application.id ? null : current,
+        );
+      }, 850);
+    } catch {
+      await load();
+      setNotice("Could not reach the API.");
+    } finally {
+      setUpdatingApplicationIds((current) => {
+        const next = new Set(current);
+        next.delete(application.id);
+        return next;
+      });
+    }
   }
 
   function chooseTrackerView(view: "board" | "list") {
@@ -1459,63 +1711,415 @@ function App() {
   }
 
   function goTo(next: Page) {
-    window.location.hash = next === "applications" ? "#/applications" : "#/";
+    window.location.hash = PAGE_HASH[next];
     setPage(next);
-    window.scrollTo({ top: 0 });
+    setSidebarOpen(false);
+    window.scrollTo({
+      top: 0,
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+        ? "auto"
+        : "smooth",
+    });
   }
+
+  const firstName = profile?.full_name?.trim().split(/\s+/)[0] ?? "";
+
+  const pageTitle: Record<Page, { eyebrow: string; title: string; sub: string }> = {
+    dashboard: {
+      eyebrow: "DASHBOARD",
+      title: firstName ? `Welcome back, ${firstName}` : "Welcome back",
+      sub:
+        jobs.length === 0
+          ? "Add your first job to start scoring opportunities."
+          : `${jobs.length} job${jobs.length === 1 ? "" : "s"} saved · ${reviewCount} awaiting your review`,
+    },
+    jobs: {
+      eyebrow: "FIND JOBS",
+      title: "Find jobs",
+      sub: "Search your saved jobs and rank them against your profile.",
+    },
+    applications: {
+      eyebrow: "YOUR PIPELINE",
+      title: "Applications",
+      sub: "Drag a card to another column, or use its Move to menu.",
+    },
+    copilot: {
+      eyebrow: "AI COPILOT",
+      title: "Career Copilot",
+      sub: "Quick answers about your matches, gaps and approvals.",
+    },
+  };
+
+  function openProfile(section?: string) {
+    setSidebarOpen(false);
+    setShowProfile(true);
+    if (section) {
+      window.setTimeout(
+        () =>
+          document
+            .getElementById(section)
+            ?.scrollIntoView({ behavior: "smooth", block: "start" }),
+        60,
+      );
+    }
+  }
+
+  function openPreferences() {
+    setSidebarOpen(false);
+    setShowPreferences(true);
+  }
+
+  const scoreClass = (score: number) =>
+    score >= 70 ? "high" : score >= 40 ? "mid" : "low";
+
+  // ---- Career Copilot: quick answers built from the data already in the app.
+  // No AI model is called here; every answer is computed from saved jobs,
+  // applications, profile and resumes, and labelled as such.
+  function say(message: Omit<ChatMessage, "id">) {
+    setChat((prev) => [...prev, { ...message, id: prev.length + 1 }]);
+  }
+
+  function runQuickAction(key: string) {
+    const activeJobs = jobs.filter((j) => j.feedback !== "not_interested");
+
+    if (key === "top") {
+      say({ role: "user", text: "Show my best matches" });
+      const top = [...activeJobs]
+        .sort((a, b) => b.match_score - a.match_score)
+        .slice(0, 3);
+      say({
+        role: "assistant",
+        text: top.length
+          ? "These saved jobs currently score highest against your profile:"
+          : "You have no saved jobs yet. Add one and I can score it against your profile.",
+        lines: top.map(
+          (j) => `${j.title} at ${j.company} — ${Math.round(j.match_score)}% match`,
+        ),
+        derived: true,
+        cta: top.length
+          ? { label: "Open Find jobs", run: () => goTo("jobs") }
+          : { label: "Add a job", run: () => setShowJobForm(true) },
+      });
+    } else if (key === "gaps") {
+      say({ role: "user", text: "What skills am I missing?" });
+      const counts = new Map<string, number>();
+      for (const j of activeJobs) {
+        const skills = j.match_breakdown?.find((f) => f.key === "skills");
+        for (const s of skills?.details?.missing_must_have ?? []) {
+          counts.set(s, (counts.get(s) ?? 0) + 1);
+        }
+      }
+      const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+      say({
+        role: "assistant",
+        text: top.length
+          ? "These must-have skills are missing most often across your saved jobs:"
+          : jobs.length === 0
+            ? "Add a few jobs first, then I can look for patterns."
+            : "No missing must-have skills were found. If scores look out of date, re-score your jobs.",
+        lines: top.map(
+          ([skill, n]) => `${skill} — missing in ${n} job${n === 1 ? "" : "s"}`,
+        ),
+        derived: true,
+      });
+    } else if (key === "approval") {
+      say({ role: "user", text: "What needs my approval?" });
+      const waiting = applications.filter((a) =>
+        ["under_review", "ready_for_approval"].includes(a.status),
+      );
+      say({
+        role: "assistant",
+        text: waiting.length
+          ? "These applications are waiting for your review. Nothing is submitted on your behalf; Approved and Submitted stay locked until the approval workflow is built."
+          : "Nothing is waiting for review. Applications are never submitted without your approval.",
+        lines: waiting.map(
+          (a) => `${a.job_title} at ${a.company} — ${statusLabel(a.status)}`,
+        ),
+        derived: true,
+        cta: { label: "Open Applications", run: () => goTo("applications") },
+      });
+    } else if (key === "profile") {
+      say({ role: "user", text: "How complete is my profile?" });
+      const todo: string[] = [];
+      if (!profile?.skills?.length) todo.push("Add your skills so matching has something to compare");
+      if (!profile?.target_roles?.length) todo.push("Add target roles to improve role-fit scoring");
+      if (!resumes.some((r) => r.is_active)) todo.push("Upload a resume and mark one as active");
+      say({
+        role: "assistant",
+        text: todo.length
+          ? "A few things would make your scores more reliable:"
+          : "Your profile has skills, target roles and an active resume. Keep your job preferences up to date for the best scores.",
+        lines: todo,
+        derived: true,
+        cta: { label: "Open profile", run: () => openProfile() },
+      });
+    } else if (key === "rescore") {
+      say({ role: "user", text: "Re-score my jobs" });
+      void rescoreJobs().then((completed) =>
+        say({
+          role: "assistant",
+          text: completed
+            ? "Scores were recalculated from your current profile and preferences."
+            : "I could not confirm that the scores were recalculated. Check the notice above and try again.",
+          derived: true,
+        }),
+      );
+    } else if (key === "add") {
+      say({ role: "user", text: "Add a job from a posting" });
+      say({
+        role: "assistant",
+        text: "Paste the posting into Add job and I will fill the form for you to review. Nothing is saved until you confirm.",
+        cta: { label: "Add a job", run: () => setShowJobForm(true) },
+      });
+    }
+  }
+
+  // One job card, used by Find jobs (full) and the dashboard (compact).
+  function renderJobCard(job: Job, compact = false) {
+    const score = Math.round(job.match_score);
+    const cls = scoreClass(job.match_score);
+    const skillsFactor = job.match_breakdown?.find((f) => f.key === "skills");
+    const missing = skillsFactor?.details?.missing_must_have ?? [];
+
+    const ring = (
+      <div
+        className={`ring ${cls}`}
+        style={{ "--p": score } as React.CSSProperties}
+        role="img"
+        aria-label={`${score}% match`}
+      >
+        <span>{score}%</span>
+      </div>
+    );
+
+    if (compact) {
+      return (
+        <article className="job-card compact-job" key={job.id}>
+          <div className="company-logo">{job.company.slice(0, 1).toUpperCase()}</div>
+          <div className="job-info">
+            <div className="job-title-row">
+              <h3>{job.title}</h3>
+            </div>
+            <p>
+              {job.company}
+              {job.location ? ` · ${job.location}` : ""}
+            </p>
+            {missing.length > 0 && (
+              <small className="reason gap">Missing: {missing.slice(0, 3).join(", ")}</small>
+            )}
+          </div>
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={() => setAnalysisJob(job)}
+            aria-label={`Match analysis for ${job.title}`}
+            style={{ padding: 0, borderRadius: "50%" }}
+          >
+            {ring}
+          </button>
+        </article>
+      );
+    }
+
+    return (
+      <article className="job-card" key={job.id}>
+        <div className="company-logo">{job.company.slice(0, 1).toUpperCase()}</div>
+
+        <div className="job-info">
+          <div className="job-title-row">
+            <h3>{job.title}</h3>
+          </div>
+
+          <p>{job.company}</p>
+
+          <div className="job-meta">
+            {job.location && (
+              <span>
+                <MapPin size={13} /> {job.location}
+              </span>
+            )}
+            {job.work_arrangement && <span>{job.work_arrangement}</span>}
+            {job.experience_level && <span>{job.experience_level}</span>}
+            <span>Source: {job.source}</span>
+          </div>
+
+          <div className="skill-list">
+            {job.skills.slice(0, 6).map((skill) => (
+              <span key={skill} className={missing.includes(skill) ? "missing" : ""}>
+                {skill}
+              </span>
+            ))}
+          </div>
+
+          {!job.match_breakdown?.length && <MatchReasons reasons={job.match_reasons} />}
+
+          {dismissingId === job.id && (
+            <div className="dismiss-panel" role="group" aria-label="Why not interested?">
+              <span>Why not?</span>
+              {DISMISS_REASONS.map((r) => (
+                <button
+                  type="button"
+                  key={r.key}
+                  onClick={() => void saveFeedback(job, "not_interested", r.key)}
+                >
+                  {r.label}
+                </button>
+              ))}
+              <button
+                type="button"
+                className="link-button"
+                onClick={() => setDismissingId(null)}
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+        </div>
+
+        <div className="job-actions">
+          <div className="job-score">{ring}</div>
+          <button
+            type="button"
+            className="secondary-button analyze-button"
+            onClick={() => setAnalysisJob(job)}
+          >
+            <Sparkles size={14} /> Match analysis
+          </button>
+          <button
+            className="primary-button"
+            onClick={() => void trackJob(job)}
+            disabled={busy}
+          >
+            Track job
+          </button>
+          <div className="row">
+            <button
+              type="button"
+              className="ghost-button"
+              aria-expanded={dismissingId === job.id}
+              onClick={() => setDismissingId(dismissingId === job.id ? null : job.id)}
+            >
+              <EyeOff size={14} /> Not interested
+            </button>
+            {job.url && (
+              <a
+                href={job.url}
+                target="_blank"
+                rel="noreferrer"
+                className="icon-link"
+                aria-label="Open job posting"
+              >
+                <ArrowUpRight size={17} />
+              </a>
+            )}
+          </div>
+        </div>
+      </article>
+    );
+  }
+
+  const pipelineCounts = KANBAN_STATUSES.map(
+    (s) => [s, applications.filter((a) => a.status === s).length] as const,
+  ).filter(([, n]) => n > 0);
+
+  const recentApplications = [...applications]
+    .sort((a, b) => {
+      const timestamp = (application: Application) => {
+        const value = Date.parse(application.updated_at);
+        return Number.isFinite(value) ? value : 0;
+      };
+      return timestamp(b) - timestamp(a);
+    })
+    .slice(0, 4);
+
+  const recommended = [...jobs]
+    .filter((j) => j.feedback !== "not_interested")
+    .sort((a, b) => b.match_score - a.match_score)
+    .slice(0, 3);
+
+  const setup = [
+    { label: "Add skills to your profile", done: !!profile?.skills?.length },
+    { label: "Upload a resume and set one active", done: resumes.some((r) => r.is_active) },
+    { label: "Save at least one job", done: jobs.length > 0 },
+    { label: "Track an application", done: applications.length > 0 },
+  ];
+
+  const navItems: {
+    key: string;
+    label: string;
+    icon: React.ReactNode;
+    page?: Page;
+    onClick?: () => void;
+    count?: number;
+  }[] = [
+    { key: "dashboard", label: "Dashboard", icon: <LayoutDashboard size={18} />, page: "dashboard" },
+    { key: "jobs", label: "Find Jobs", icon: <Search size={18} />, page: "jobs" },
+    { key: "resume", label: "Resume", icon: <FileText size={18} />, onClick: () => openProfile("my-resumes") },
+    { key: "applications", label: "Applications", icon: <Kanban size={18} />, page: "applications", count: applications.length },
+    { key: "copilot", label: "AI Copilot", icon: <Bot size={18} />, page: "copilot" },
+    { key: "profile", label: "Profile", icon: <User size={18} />, onClick: () => openProfile() },
+    { key: "settings", label: "Settings", icon: <Settings size={18} />, onClick: openPreferences },
+  ];
+
+  const t = pageTitle[page];
 
   return (
     <div className="app-shell">
-      <aside className="sidebar">
+      {sidebarOpen && (
+        <button
+          type="button"
+          className="scrim"
+          aria-label="Close navigation menu"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
+      <aside
+        className={`sidebar ${sidebarOpen ? "open" : ""}`}
+        aria-label="Main navigation"
+      >
         <div className="brand">
           <div className="brand-mark">
             <Sparkles size={20} />
           </div>
           <div>
             <strong>CareerPilot</strong>
-            <span>AI JOB COPILOT</span>
+            <span>AI job-search copilot</span>
           </div>
         </div>
 
-        <div className="workspace-label">WORKSPACE</div>
+        <div className="workspace-label">Workspace</div>
 
-        <a
-          className={`nav ${page === "overview" ? "active" : ""}`}
-          href="#/"
-          onClick={(e) => {
-            e.preventDefault();
-            goTo("overview");
-          }}
-        >
-          <Gauge size={18} /> Overview
-        </a>
-
-        <a
-          className={`nav ${page === "applications" ? "active" : ""}`}
-          href="#/applications"
-          onClick={(e) => {
-            e.preventDefault();
-            goTo("applications");
-          }}
-        >
-          <Kanban size={18} /> Applications
-          <span className="nav-count">{applications.length}</span>
-        </a>
-
-        <a className="nav" onClick={() => setShowProfile(true)}>
-          <Target size={18} /> My profile
-        </a>
-
-        <a className="nav" onClick={() => setShowPreferences(true)}>
-          <SlidersHorizontal size={18} /> Job preferences
-        </a>
+        <nav id="main-navigation">
+          {navItems.map((item) =>
+            item.page ? (
+              <a
+                key={item.key}
+                className={`nav ${page === item.page ? "active" : ""}`}
+                href={PAGE_HASH[item.page]}
+                aria-current={page === item.page ? "page" : undefined}
+                onClick={(e) => {
+                  e.preventDefault();
+                  goTo(item.page as Page);
+                }}
+              >
+                {item.icon} {item.label}
+                {item.count !== undefined && <span className="nav-count">{item.count}</span>}
+              </a>
+            ) : (
+              <button key={item.key} type="button" className="nav" onClick={item.onClick}>
+                {item.icon} {item.label}
+              </button>
+            ),
+          )}
+        </nav>
 
         <div className="sidebar-bottom">
           <div className="secure-icon">
             <ShieldCheck size={18} />
           </div>
-          <strong>Human-first automation</strong>
-          <p>AI prepares. You approve. You stay in control.</p>
+          <strong>You approve every application</strong>
+          <p>AI prepares. You decide. Nothing is submitted without your approval.</p>
           <span className="status-pill">
             <i /> Approval gate enabled
           </span>
@@ -1524,33 +2128,37 @@ function App() {
 
       <main className="main">
         <header className="topbar">
-          <div>
-            <div className="eyebrow">
-              {page === "applications"
-                ? "YOUR PIPELINE"
-                : "YOUR CAREER, IN CONTROL"}
+          <div className="topbar-lead">
+            <button
+              type="button"
+              className="mobile-nav-toggle"
+              onClick={() => setSidebarOpen(true)}
+              aria-expanded={sidebarOpen}
+              aria-controls="main-navigation"
+              aria-label="Open menu"
+            >
+              <Menu size={20} />
+            </button>
+            <div>
+              <div className="eyebrow">{t.eyebrow}</div>
+              <h1 tabIndex={-1}>{t.title}</h1>
+              <p>{t.sub}</p>
             </div>
-            <h1>
-              {page === "applications" ? "Applications" : "Job hunt overview"}
-            </h1>
-            <p>
-              {page === "applications"
-                ? "Drag a card to another column, or use its Move to menu."
-                : "Find the right opportunities. Spend less time on repetitive work."}
-            </p>
           </div>
 
-          <button
-            className="profile-button"
-            onClick={() => setShowProfile(true)}
-          >
-            <span className="avatar">
-              {profile?.full_name
-                ? profile.full_name.slice(0, 1).toUpperCase()
-                : "Y"}
-            </span>
-            <span>{profile?.full_name || "Your profile"}</span>
-          </button>
+          <div className="topbar-right">
+            {(page === "dashboard" || page === "jobs") && (
+              <button className="primary-button" onClick={() => setShowJobForm(true)}>
+                <Plus size={16} /> Add job
+              </button>
+            )}
+            <button className="profile-button" onClick={() => openProfile()}>
+              <span className="avatar">
+                {profile?.full_name ? profile.full_name.slice(0, 1).toUpperCase() : "Y"}
+              </span>
+              <span>{profile?.full_name || "Your profile"}</span>
+            </button>
+          </div>
         </header>
 
         {notice && (
@@ -1563,377 +2171,613 @@ function App() {
           </div>
         )}
 
-        {page === "overview" ? (
-          <>
-        <section className="hero">
-          <div className="hero-copy">
-            <div className="hero-tag">
-              <Sparkles size={14} /> YOUR AI CAREER COPILOT
-            </div>
-            <h2>
-              Make your next move
-              <br />
-              <em>your best move.</em>
-            </h2>
-            <p>
-              One focused workspace for job discovery, experience-based
-              matching, and application tracking.
-            </p>
-            <button
-              className="primary-button"
-              onClick={() => setShowJobForm(true)}
-            >
-              <Plus size={17} /> Add a job <ArrowUpRight size={16} />
-            </button>
-          </div>
-
-          <div className="hero-art">
-            <div className="orbit orbit-one" />
-            <div className="orbit orbit-two" />
-            <div className="core">
-              <Sparkles size={34} />
-            </div>
-            <div className="float-card card-match">
-              <Target size={17} />
-              <div>
-                <strong>Match engine</strong>
-                <small>Skills-aware scoring</small>
-              </div>
-              <b>AI</b>
-            </div>
-            <div className="float-card card-safe">
-              <ShieldCheck size={18} />
-              <div>
-                <strong>You stay in control</strong>
-                <small>Approval before submit</small>
-              </div>
-              <CheckCircle2 size={18} />
-            </div>
-            <div className="mini-dot dot-a" />
-            <div className="mini-dot dot-b" />
-          </div>
-        </section>
-
-        <section className="stats-grid">
-          <div className="stat-card">
-            <div className="stat-top">
-              <span>Jobs discovered</span>
-              <span className="stat-icon purple">
-                <BriefcaseBusiness size={18} />
-              </span>
-            </div>
-            <strong>{jobs.length}</strong>
-            <small>In your opportunity list</small>
-          </div>
-
-          <div
-            className="stat-card clickable"
-            role="button"
-            tabIndex={0}
-            onClick={() => goTo("applications")}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") goTo("applications");
-            }}
-          >
-            <div className="stat-top">
-              <span>Applications tracked</span>
-              <span className="stat-icon blue">
-                <Activity size={18} />
-              </span>
-            </div>
-            <strong>{applications.length}</strong>
-            <small>{appliedCount} submitted or progressed</small>
-          </div>
-
-          <div className="stat-card">
-            <div className="stat-top">
-              <span>Awaiting review</span>
-              <span className="stat-icon amber">
-                <ShieldCheck size={18} />
-              </span>
-            </div>
-            <strong>{reviewCount}</strong>
-            <small>Human approval queue</small>
-          </div>
-
-          <div className="stat-card">
-            <div className="stat-top">
-              <span>Profile readiness</span>
-              <span className="stat-icon green">
-                <Target size={18} />
-              </span>
-            </div>
-            <strong>{profile?.skills?.length ? "Ready" : "Setup"}</strong>
-            <small>
-              {profile?.skills?.length
-                ? `${profile.skills.length} skills in your profile`
-                : "Add skills to improve matching"}
-            </small>
-          </div>
-        </section>
-
-        <section className="section-head">
-          <div>
-            <h2>Opportunity feed</h2>
-            <p>Ranked by how well each role fits your skills.</p>
-          </div>
-
-          <div className="actions">
-            <label className="searchbox">
-              <Search size={16} />
-              <input
-                placeholder="Search roles or companies"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-              />
-            </label>
-
-            <button
-              className="secondary-button"
-              onClick={() => setShowJobForm(true)}
-            >
-              <Plus size={16} /> Add job
-            </button>
-          </div>
-        </section>
-
-        <section className="filter-bar">
-          <label>
-            Status
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-            >
-              <option value="all">All</option>
-              <option value="none">Not tracked</option>
-              {Object.entries(STATUS_LABELS).map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label>
-            Min match
-            <select
-              value={minMatch}
-              onChange={(e) => setMinMatch(Number(e.target.value))}
-            >
-              <option value={0}>Any</option>
-              <option value={25}>25%+</option>
-              <option value={50}>50%+</option>
-              <option value={75}>75%+</option>
-            </select>
-          </label>
-
-          <label>
-            Source
-            <select
-              value={sourceFilter}
-              onChange={(e) => setSourceFilter(e.target.value)}
-            >
-              <option value="all">All</option>
-              {sources.map((src) => (
-                <option key={src} value={src}>
-                  {src}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label>
-            Sort by
-            <select
-              value={sortBy}
-              onChange={(e) =>
-                setSortBy(e.target.value as "best" | "newest" | "company")
-              }
-            >
-              <option value="best">Best match</option>
-              <option value="newest">Newest</option>
-              <option value="company">Company</option>
-            </select>
-          </label>
-        </section>
-
-        {jobs.some((j) => !j.match_breakdown?.length) && (
-          <div className="rescore-banner">
-            <span>Some jobs were scored before score explanations existed.</span>
-            <button
-              className="secondary-button"
-              onClick={() => void rescoreJobs()}
-              disabled={busy}
-            >
-              Re-score all jobs
-            </button>
+        {matchingAction && (
+          <div className="matching-progress" role="status" aria-live="polite">
+            <span className="matching-orbit" aria-hidden="true">
+              <Sparkles size={15} />
+            </span>
+            <span>
+              <strong>
+                {matchingAction === "job"
+                  ? "Scoring your new opportunity"
+                  : matchingAction === "profile"
+                    ? "Refreshing matches from your profile"
+                    : matchingAction === "preferences"
+                      ? "Refreshing matches from your preferences"
+                      : "Re-scoring saved opportunities"}
+              </strong>
+              <small>
+                The matching service is comparing saved job details with your current profile and preferences.
+              </small>
+            </span>
+            <span className="matching-progress-track" aria-hidden="true">
+              <span />
+            </span>
           </div>
         )}
 
-        <section className="jobs-list">
-          {visibleJobs.length === 0 ? (
-            <div className="empty-state">
-              <div className="empty-icon">
-                <BriefcaseBusiness size={25} />
-              </div>
-              <h3>Your next opportunity starts here</h3>
-              <p>
-                Add a job posting to start scoring opportunities against your
-                profile.
-              </p>
-              <button
-                className="primary-button"
-                onClick={() => setShowJobForm(true)}
-              >
-                <Plus size={16} /> Add your first job
-              </button>
-            </div>
-          ) : (
-            visibleJobs.map((job) => (
-              <article className="job-card" key={job.id}>
-                <div className="company-logo">
-                  {job.company.slice(0, 1).toUpperCase()}
-                </div>
-
-                <div className="job-info">
-                  <div className="job-title-row">
-                    <h3>{job.title}</h3>
-                    <span
-                      className={`match ${
-                        job.match_score >= 70
-                          ? "high"
-                          : job.match_score >= 40
-                            ? "mid"
-                            : "low"
-                      }`}
-                    >
-                      {Math.round(job.match_score)}% match
-                    </span>
-                  </div>
-
-                  <p>
-                    {job.company}
-                    {job.location ? ` · ${job.location}` : ""}
-                  </p>
-
-                  <div className="skill-list">
-                    {job.skills.slice(0, 5).map((skill) => (
-                      <span key={skill}>{skill}</span>
+        {page === "dashboard" && (
+          <div className="dashboard-page page-view">
+            {dashboardLoadState === "loading" ? (
+              <section className="dashboard-loading" role="status" aria-live="polite">
+                <p>Loading your dashboard...</p>
+                <div className="dashboard-skeleton" aria-hidden="true">
+                  <div className="stats-grid">
+                    {[0, 1, 2, 3].map((item) => (
+                      <div className="stat-card skeleton-stat" key={item}>
+                        <span className="skeleton-line skeleton-label" />
+                        <span className="skeleton-line skeleton-value" />
+                        <span className="skeleton-line skeleton-caption" />
+                      </div>
                     ))}
                   </div>
-
-                  {job.match_breakdown?.length ? (
-                    <MatchBreakdown job={job} />
-                  ) : (
-                    <MatchReasons reasons={job.match_reasons} />
-                  )}
-
-                  {dismissingId === job.id && (
-                    <div className="dismiss-panel" role="group" aria-label="Why not interested?">
-                      <span>Why not?</span>
-                      {DISMISS_REASONS.map((r) => (
-                        <button
-                          type="button"
-                          key={r.key}
-                          onClick={() => void saveFeedback(job, "not_interested", r.key)}
-                        >
-                          {r.label}
-                        </button>
+                  <div className="dash-grid">
+                    <section className="panel skeleton-panel">
+                      <span className="skeleton-line skeleton-heading" />
+                      {[0, 1, 2].map((item) => (
+                        <div className="skeleton-job" key={item}>
+                          <span className="skeleton-block" />
+                          <span className="skeleton-line" />
+                        </div>
                       ))}
-                      <button
-                        type="button"
-                        className="link-button"
-                        onClick={() => setDismissingId(null)}
-                      >
-                        Cancel
-                      </button>
+                    </section>
+                    <aside className="dash-side">
+                      {[0, 1, 2].map((item) => (
+                        <section className="panel skeleton-panel" key={item}>
+                          <span className="skeleton-line skeleton-heading" />
+                          <span className="skeleton-line" />
+                          <span className="skeleton-line skeleton-caption" />
+                        </section>
+                      ))}
+                    </aside>
+                  </div>
+                </div>
+              </section>
+            ) : dashboardLoadState === "error" ? (
+              <section className="dashboard-load-error dashboard-section-enter" role="alert">
+                <span className="empty-icon">
+                  <CircleAlert size={22} />
+                </span>
+                <h2>Dashboard data is unavailable</h2>
+                <p>{dashboardLoadError}</p>
+                <button
+                  className="primary-button"
+                  onClick={() => void load(true)}
+                >
+                  <RotateCcw size={15} /> Try again
+                </button>
+              </section>
+            ) : (
+              <>
+            <section className="stats-grid dashboard-section-enter dashboard-section-enter--1">
+              <div
+                className="stat-card clickable"
+                role="button"
+                tabIndex={0}
+                onClick={() => goTo("jobs")}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") goTo("jobs");
+                }}
+              >
+                <div className="stat-top">
+                  <span>Jobs saved</span>
+                  <span className="stat-icon blue">
+                    <BriefcaseBusiness size={18} />
+                  </span>
+                </div>
+                <strong>{jobs.length}</strong>
+                <small>In your opportunity list</small>
+              </div>
+
+              <div
+                className="stat-card clickable"
+                role="button"
+                tabIndex={0}
+                onClick={() => goTo("applications")}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") goTo("applications");
+                }}
+              >
+                <div className="stat-top">
+                  <span>Applications tracked</span>
+                  <span className="stat-icon blue">
+                    <Activity size={18} />
+                  </span>
+                </div>
+                <strong>{applications.length}</strong>
+                <small>{appliedCount} submitted or progressed</small>
+              </div>
+
+              <div className="stat-card">
+                <div className="stat-top">
+                  <span>Awaiting your review</span>
+                  <span className="stat-icon amber">
+                    <ShieldCheck size={18} />
+                  </span>
+                </div>
+                <strong>{reviewCount}</strong>
+                <small>Human approval queue</small>
+              </div>
+
+              <div className="stat-card">
+                <div className="stat-top">
+                  <span>Profile readiness</span>
+                  <span className="stat-icon green">
+                    <Target size={18} />
+                  </span>
+                </div>
+                <strong>{profile?.skills?.length ? "Ready" : "Setup"}</strong>
+                <small>
+                  {profile?.skills?.length
+                    ? `${profile.skills.length} skills in your profile`
+                    : "Add skills to improve matching"}
+                </small>
+              </div>
+            </section>
+
+            <div className="dash-grid dashboard-section-enter dashboard-section-enter--2" style={{ marginTop: 20 }}>
+              <section className="panel">
+                <div className="panel-head">
+                  <div>
+                    <h2>Recommended for you</h2>
+                    <p>Your highest-scoring saved jobs. Scores are calculated from your profile and preferences.</p>
+                  </div>
+                  <button className="link-button" onClick={() => goTo("jobs")}>
+                    View all <ArrowUpRight size={14} />
+                  </button>
+                </div>
+
+                {!profile?.skills?.length && (
+                  <div className="rescore-banner">
+                    <span>Your profile has no skills yet, so scores are low confidence.</span>
+                    <button className="secondary-button" onClick={() => openProfile()}>
+                      Add skills
+                    </button>
+                  </div>
+                )}
+
+                {recommended.length === 0 ? (
+                  <div className="empty-state">
+                    <div className="empty-icon">
+                      <BriefcaseBusiness size={25} />
                     </div>
+                    <h3>Your next opportunity starts here</h3>
+                    <p>Add a job posting to score it against your profile.</p>
+                    <button className="primary-button" onClick={() => setShowJobForm(true)}>
+                      <Plus size={16} /> Add your first job
+                    </button>
+                  </div>
+                ) : (
+                  <div className="jobs-list">{recommended.map((j) => renderJobCard(j, true))}</div>
+                )}
+              </section>
+
+              <aside className="dash-side">
+                <section className="panel approval-card">
+                  <div className="approval-note">
+                    <div className="secure-icon">
+                      <ShieldCheck size={18} />
+                    </div>
+                    <div>
+                      <h2>Human approval required</h2>
+                      <p style={{ marginTop: 4, fontSize: 13 }}>
+                        CareerPilot never submits an application for you. Approved and Submitted stay
+                        locked until the approval workflow is built.
+                      </p>
+                    </div>
+                  </div>
+                  <span className="status-pill">
+                    <i /> Approval gate enabled
+                  </span>
+                </section>
+
+                <section className="panel">
+                  <div className="panel-head">
+                    <h2>Pipeline</h2>
+                    <button className="link-button" onClick={() => goTo("applications")}>
+                      Open board
+                    </button>
+                  </div>
+                  {pipelineCounts.length === 0 ? (
+                    <p className="muted-note">No applications tracked yet.</p>
+                  ) : (
+                    pipelineCounts.map(([s, n]) => (
+                      <div className="pipeline-row" key={s}>
+                        <span>{statusLabel(s)}</span>
+                        <strong>{n}</strong>
+                        <span
+                          className="pipeline-track"
+                          role="img"
+                          aria-label={`${n} of ${applications.length} applications are ${statusLabel(s)}`}
+                        >
+                          <span
+                            style={{
+                              width: `${Math.round((n / applications.length) * 100)}%`,
+                            }}
+                          />
+                        </span>
+                      </div>
+                    ))
                   )}
+                </section>
+
+                <section className="panel">
+                  <div className="panel-head">
+                    <h2>Get set up</h2>
+                  </div>
+                  <ul className="checklist" style={{ marginTop: 0 }}>
+                    {setup.map((s) => (
+                      <li key={s.label} className={s.done ? "done" : ""}>
+                        {s.done ? <CheckCircle2 size={16} /> : <Circle size={16} />}
+                        {s.label}
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              </aside>
+            </div>
+
+            <section className="panel recent-applications dashboard-section-enter dashboard-section-enter--3">
+              <div className="panel-head">
+                <div>
+                  <h2>Recent applications</h2>
+                  <p>Your latest tracked opportunities and their current status.</p>
                 </div>
+                <button className="link-button" onClick={() => goTo("applications")}>
+                  View tracker <ArrowUpRight size={14} />
+                </button>
+              </div>
 
-                <div className="job-actions">
-                  <button
-                    type="button"
-                    className="ghost-button"
-                    aria-expanded={dismissingId === job.id}
-                    onClick={() =>
-                      setDismissingId(dismissingId === job.id ? null : job.id)
-                    }
-                  >
-                    <EyeOff size={14} /> Not interested
-                  </button>
-                  {job.url && (
-                    <a
-                      href={job.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="icon-link"
-                      aria-label="Open job posting"
-                    >
-                      <ArrowUpRight size={17} />
-                    </a>
-                  )}
-
-                  <button
-                    className="secondary-button"
-                    onClick={() => void trackJob(job)}
-                    disabled={busy}
-                  >
-                    Track job
+              {recentApplications.length === 0 ? (
+                <div className="recent-empty">
+                  <p>Applications you track will appear here.</p>
+                  <button className="secondary-button" onClick={() => goTo("jobs")}>
+                    Find jobs
                   </button>
                 </div>
-              </article>
-            ))
-          )}
-        </section>
-
-        {dismissTip && (
-          <div className="rescore-banner">
-            <span>
-              You passed on {dismissTip.count} jobs because of “
-              {dismissTip.label.toLowerCase()}”. Your{" "}
-              {dismissTip.page === "profile" ? "profile" : "job preferences"} may
-              need a tweak so these score lower.
-            </span>
-            <button
-              className="secondary-button"
-              onClick={() =>
-                dismissTip.page === "profile"
-                  ? setShowProfile(true)
-                  : setShowPreferences(true)
-              }
-            >
-              Open {dismissTip.page === "profile" ? "my profile" : "job preferences"}
-            </button>
+              ) : (
+                <div className="recent-list">
+                  {recentApplications.map((application) => {
+                    const updated = timeInStage(application);
+                    return (
+                      <article
+                        className={`recent-row ${
+                          transitioningApplicationId === application.id
+                            ? "status-transitioned"
+                            : ""
+                        }`}
+                        key={application.id}
+                      >
+                        <span className="recent-icon">
+                          <BriefcaseBusiness size={17} />
+                        </span>
+                        <div className="recent-job">
+                          <strong>{application.job_title}</strong>
+                          <span>{application.company}</span>
+                        </div>
+                        <div className="recent-status">
+                          <span className={`status status-${application.status}`}>
+                            {statusLabel(application.status)}
+                          </span>
+                          {updated && <small>Updated {updated}</small>}
+                          {(application.allowed_next ?? []).length > 0 ? (
+                            <select
+                              value=""
+                              disabled={updatingApplicationIds.has(application.id)}
+                              aria-label={`Move ${application.job_title} to another status`}
+                              onChange={(e) =>
+                                void changeApplicationStatus(application, e.target.value)
+                              }
+                            >
+                              <option value="">Move to...</option>
+                              {application.allowed_next.map((status) => (
+                                <option key={status} value={status}>
+                                  {statusLabel(status)}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <small>
+                              {(application.gated_next ?? []).length > 0
+                                ? "Approval workflow required"
+                                : "Final status"}
+                            </small>
+                          )}
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+              </>
+            )}
           </div>
         )}
 
-        {dismissedJobs.length > 0 && (
-          <details className="dismissed">
-            <summary>Not interested ({dismissedJobs.length})</summary>
-            {dismissedJobs.map((job) => (
-              <div className="dismissed-row" key={job.id}>
-                <div>
-                  <strong>{job.title}</strong>
-                  <small>
-                    {job.company} · {reasonLabel(job.feedback_reason)}
-                  </small>
-                </div>
+        {page === "jobs" && (
+          <div className="page-view">
+            <section className="panel search-card">
+              <label className="searchbox">
+                <Search size={18} />
+                <input
+                  placeholder="Search by title, company or location"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  aria-label="Search jobs"
+                />
+              </label>
+
+              <div className="filter-bar">
+                <label>
+                  Status
+                  <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+                    <option value="all">All</option>
+                    <option value="none">Not tracked</option>
+                    {Object.entries(STATUS_LABELS).map(([value, label]) => (
+                      <option key={value} value={value}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label>
+                  Min match
+                  <select value={minMatch} onChange={(e) => setMinMatch(Number(e.target.value))}>
+                    <option value={0}>Any</option>
+                    <option value={25}>25%+</option>
+                    <option value={50}>50%+</option>
+                    <option value={75}>75%+</option>
+                  </select>
+                </label>
+
+                <label>
+                  Source
+                  <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)}>
+                    <option value="all">All</option>
+                    {sources.map((src) => (
+                      <option key={src} value={src}>
+                        {src}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label>
+                  Sort by
+                  <select
+                    value={sortBy}
+                    onChange={(e) => setSortBy(e.target.value as "best" | "newest" | "company")}
+                  >
+                    <option value="best">Best match</option>
+                    <option value="newest">Newest</option>
+                    <option value="company">Company</option>
+                  </select>
+                </label>
+              </div>
+            </section>
+
+            {jobs.some((j) => !j.match_breakdown?.length) && (
+              <div className="rescore-banner">
+                <span>Some jobs were scored before score explanations existed.</span>
                 <button
-                  type="button"
                   className="secondary-button"
-                  onClick={() => void saveFeedback(job, "")}
+                  onClick={() => void rescoreJobs()}
+                  disabled={busy}
                 >
-                  <RotateCcw size={13} /> Restore
+                  Re-score all jobs
                 </button>
               </div>
-            ))}
-          </details>
+            )}
+
+            <section className="section-head" style={{ marginTop: 20 }}>
+              <div>
+                <h2>
+                  {visibleJobs.length} job{visibleJobs.length === 1 ? "" : "s"}
+                </h2>
+                <p>Match scores are calculated from your profile and preferences.</p>
+              </div>
+            </section>
+
+            <section className="jobs-list">
+              {visibleJobs.length === 0 ? (
+                <div className="empty-state">
+                  <div className="empty-icon">
+                    <BriefcaseBusiness size={25} />
+                  </div>
+                  <h3>{jobs.length === 0 ? "Your next opportunity starts here" : "No jobs match these filters"}</h3>
+                  <p>
+                    {jobs.length === 0
+                      ? "Add a job posting to start scoring opportunities against your profile."
+                      : "Try clearing the search or lowering the minimum match."}
+                  </p>
+                  {jobs.length === 0 && (
+                    <button className="primary-button" onClick={() => setShowJobForm(true)}>
+                      <Plus size={16} /> Add your first job
+                    </button>
+                  )}
+                </div>
+              ) : (
+                visibleJobs.map((job) => renderJobCard(job))
+              )}
+            </section>
+
+            {dismissTip && (
+              <div className="rescore-banner" style={{ marginTop: 16 }}>
+                <span>
+                  You passed on {dismissTip.count} jobs because of “{dismissTip.label.toLowerCase()}
+                  ”. Your {dismissTip.page === "profile" ? "profile" : "job preferences"} may need a
+                  tweak so these score lower.
+                </span>
+                <button
+                  className="secondary-button"
+                  onClick={() =>
+                    dismissTip.page === "profile" ? openProfile() : openPreferences()
+                  }
+                >
+                  Open {dismissTip.page === "profile" ? "my profile" : "job preferences"}
+                </button>
+              </div>
+            )}
+
+            {dismissedJobs.length > 0 && (
+              <details className="dismissed">
+                <summary>Not interested ({dismissedJobs.length})</summary>
+                {dismissedJobs.map((job) => (
+                  <div className="dismissed-row" key={job.id}>
+                    <div>
+                      <strong>{job.title}</strong>
+                      <small>
+                        {job.company} · {reasonLabel(job.feedback_reason)}
+                      </small>
+                    </div>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => void saveFeedback(job, "")}
+                    >
+                      <RotateCcw size={13} /> Restore
+                    </button>
+                  </div>
+                ))}
+              </details>
+            )}
+          </div>
         )}
 
-          </>
-        ) : (
-          <>
+        {page === "copilot" && (
+          <section className="copilot page-view">
+            <div className="panel chat-card">
+              <div className="chat-head">
+                <span className="bot-avatar">
+                  <Bot size={20} />
+                </span>
+                <div>
+                  <strong>Career Copilot</strong>
+                  <small>Answers come from your saved jobs, profile and applications</small>
+                </div>
+              </div>
+
+              <div className="chat-thread" ref={threadRef} aria-live="polite">
+                {chat.map((m) =>
+                  m.role === "user" ? (
+                    <div className="bubble-row user" key={m.id}>
+                      <div className="bubble user">{m.text}</div>
+                    </div>
+                  ) : (
+                    <div className="bubble-row" key={m.id}>
+                      <span className="bot-avatar">
+                        <Bot size={16} />
+                      </span>
+                      <div className="bubble assistant">
+                        <div>{m.text}</div>
+                        {m.lines && m.lines.length > 0 && (
+                          <ul>
+                            {m.lines.map((line) => (
+                              <li key={line}>{line}</li>
+                            ))}
+                          </ul>
+                        )}
+                        {m.cta && (
+                          <div className="bubble-actions">
+                            <button className="secondary-button" onClick={m.cta.run}>
+                              {m.cta.label}
+                            </button>
+                          </div>
+                        )}
+                        {m.derived && (
+                          <div>
+                            <span className="tag-derived">
+                              <CheckCircle2 size={12} /> Computed from your data
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ),
+                )}
+              </div>
+
+              <div className="chip-row" role="group" aria-label="Quick actions">
+                <button className="chip" onClick={() => runQuickAction("top")}>
+                  <Sparkles size={14} /> Best matches
+                </button>
+                <button className="chip" onClick={() => runQuickAction("gaps")}>
+                  <Lightbulb size={14} /> Skill gaps
+                </button>
+                <button className="chip" onClick={() => runQuickAction("approval")}>
+                  <ShieldCheck size={14} /> Needs my approval
+                </button>
+                <button className="chip" onClick={() => runQuickAction("profile")}>
+                  <User size={14} /> Profile check
+                </button>
+                <button className="chip" onClick={() => runQuickAction("rescore")} disabled={busy}>
+                  <RotateCcw size={14} /> Re-score jobs
+                </button>
+                <button className="chip" onClick={() => runQuickAction("add")}>
+                  <Plus size={14} /> Add a job
+                </button>
+              </div>
+
+              <form className="composer" onSubmit={(e) => e.preventDefault()}>
+                <input
+                  disabled
+                  placeholder="Free-text chat is not available yet"
+                  aria-label="Message the Copilot"
+                />
+                <button type="submit" disabled aria-label="Send">
+                  <Send size={16} />
+                </button>
+              </form>
+              <p className="composer-note">
+                Free-text questions need a Copilot endpoint that the backend does not have yet.
+                Quick actions work today.
+              </p>
+            </div>
+
+            <aside className="dash-side">
+              <section className="panel">
+                <div className="panel-head">
+                  <h2>What the Copilot can see</h2>
+                </div>
+                <div className="pipeline-row">
+                  <span>Saved jobs</span>
+                  <strong>{jobs.length}</strong>
+                </div>
+                <div className="pipeline-row">
+                  <span>Applications</span>
+                  <strong>{applications.length}</strong>
+                </div>
+                <div className="pipeline-row">
+                  <span>Profile skills</span>
+                  <strong>{profile?.skills?.length ?? 0}</strong>
+                </div>
+                <div className="pipeline-row">
+                  <span>Active resume</span>
+                  <strong>{resumes.find((r) => r.is_active)?.label ?? "None"}</strong>
+                </div>
+              </section>
+
+              <section className="panel approval-card">
+                <div className="approval-note">
+                  <div className="secure-icon">
+                    <ShieldCheck size={18} />
+                  </div>
+                  <div>
+                    <h2>You stay in control</h2>
+                    <p style={{ marginTop: 4, fontSize: 13 }}>
+                      The Copilot only reads and summarises. It cannot apply to a job.
+                    </p>
+                  </div>
+                </div>
+              </section>
+            </aside>
+          </section>
+        )}
+
+        {page === "applications" && (
+          <div className="page-view">
         {applications.length > 0 && (
           <section className="kb-toolbar page-toolbar">
             <span className="kb-summary">
@@ -1995,8 +2839,8 @@ function App() {
               Track a job from the opportunity feed and it will appear here as
               a card you can move across the board.
             </p>
-            <button className="primary-button" onClick={() => goTo("overview")}>
-              Go to the opportunity feed
+            <button className="primary-button" onClick={() => goTo("jobs")}>
+              Find jobs
             </button>
           </section>
         ) : trackerView === "board" ? (
@@ -2086,8 +2930,12 @@ function App() {
                           key={application.id}
                           className={`kanban-card ${
                             draggedAppId === application.id ? "is-dragging" : ""
+                          } ${
+                            transitioningApplicationId === application.id
+                              ? "status-transitioned"
+                              : ""
                           }`}
-                          draggable
+                          draggable={!updatingApplicationIds.has(application.id)}
                           onDragStart={(e) =>
                             handleCardDragStart(e, application.id)
                           }
@@ -2133,7 +2981,10 @@ function App() {
                           <div className="kanban-card-controls">
                             <select
                               value=""
-                              disabled={nextStatuses.length === 0}
+                              disabled={
+                                nextStatuses.length === 0 ||
+                                updatingApplicationIds.has(application.id)
+                              }
                               aria-label={`Move ${application.job_title} to another status`}
                               onChange={(e) => {
                                 void changeApplicationStatus(
@@ -2203,7 +3054,14 @@ function App() {
               const nextStatuses = application.allowed_next ?? [];
 
               return (
-                <article className="application-row" key={application.id}>
+                <article
+                  className={`application-row ${
+                    transitioningApplicationId === application.id
+                      ? "status-transitioned"
+                      : ""
+                  }`}
+                  key={application.id}
+                >
                   <div className="application-symbol">
                     <BriefcaseBusiness size={17} />
                   </div>
@@ -2224,7 +3082,10 @@ function App() {
 
                   <select
                     value=""
-                    disabled={nextStatuses.length === 0}
+                    disabled={
+                      nextStatuses.length === 0 ||
+                      updatingApplicationIds.has(application.id)
+                    }
                     aria-label={`Move ${application.job_title} to next status`}
                     onChange={(e) => {
                       void changeApplicationStatus(application, e.target.value);
@@ -2273,14 +3134,26 @@ function App() {
             })}
           </section>
         )}
-
-          </>
+          </div>
         )}
 
         <footer>
           CAREERPILOT AI <span>·</span> Thoughtful automation, human decisions.
         </footer>
       </main>
+
+      {analysisJob && (
+        <MatchAnalysis
+          job={jobsById.get(String(analysisJob.id)) ?? analysisJob}
+          busy={busy}
+          onClose={() => setAnalysisJob(null)}
+          onTrack={() => {
+            const job = analysisJob;
+            setAnalysisJob(null);
+            void trackJob(job);
+          }}
+        />
+      )}
 
       {showJobForm && (
         <div
@@ -2558,7 +3431,9 @@ function App() {
               </small>
             </div>
 
-            <h3 className="section-title">My resumes</h3>
+            <h3 className="section-title" id="my-resumes">
+              My resumes
+            </h3>
             <small className="muted-note">
               Keep up to {MAX_RESUMES} PDF resumes and choose which one is
               active. New applications use the active resume. The upload
