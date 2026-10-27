@@ -3,6 +3,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.database import get_db
+from app.job_fetch import FetchedPage, JobFetchError
 from app.job_import import extract_job
 from app.main import app
 
@@ -131,6 +132,84 @@ def test_preview_returns_a_draft_and_saves_nothing(client):
     body = r.json()
     assert body["draft"]["title"] == "Senior Frontend Developer"
     assert "salary" in body["found"] and body["missing"] == []
+    assert _db.jobs.count_documents({}) == 0
+
+
+def test_url_pasted_in_import_textarea_is_fetched_and_remains_a_draft(client, monkeypatch):
+    url = "https://jobs.example.com/careers/job/123"
+    posting = (
+        "Title: Staff Software Engineer\n"
+        "Company: Northwind\n"
+        "Location: Seattle\n\n"
+        "Build reliable services and improve our production platform with Python and SQL."
+    )
+    requested = []
+
+    def fake_fetch(value):
+        requested.append(value)
+        return FetchedPage(text=posting, final_url=value)
+
+    monkeypatch.setattr("app.main.fetch_job_text", fake_fetch)
+    response = client.post("/api/jobs/import-preview", json={"text": url})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert requested == [url]
+    assert body["source"] == "url"
+    assert body["draft"]["title"] == "Staff Software Engineer"
+    assert body["draft"]["company"] == "Northwind"
+    assert body["draft"]["url"] == url
+    assert _db.jobs.count_documents({}) == 0
+
+
+def test_url_field_preview_is_not_saved(client, monkeypatch):
+    url = "https://jobs.example.com/careers/job/456"
+    posting = "Title: Product Designer\nCompany: Contoso\n" + ("Design useful products. " * 4)
+    monkeypatch.setattr(
+        "app.main.fetch_job_text",
+        lambda value: FetchedPage(
+            text=posting,
+            final_url=value,
+            warnings=["Hidden page text was ignored."],
+        ),
+    )
+
+    response = client.post("/api/jobs/import-preview", json={"url": url})
+
+    assert response.status_code == 200
+    assert response.json()["source"] == "url"
+    assert response.json()["draft"]["title"] == "Product Designer"
+    assert response.json()["warnings"] == ["Hidden page text was ignored."]
+    assert _db.jobs.count_documents({}) == 0
+
+
+def test_search_results_url_gets_actionable_message_without_fetching(client, monkeypatch):
+    def unexpected_fetch(_url):
+        pytest.fail("search-results URL should be rejected before fetching")
+
+    monkeypatch.setattr("app.main.fetch_job_text", unexpected_fetch)
+    response = client.post(
+        "/api/jobs/import-preview",
+        json={"url": "https://jobs.example.com/careers?start=0&sort_by=relevance"},
+    )
+
+    assert response.status_code == 422
+    assert "individual posting" in response.json()["detail"]
+    assert _db.jobs.count_documents({}) == 0
+
+
+def test_fetch_failure_is_returned_to_the_user(client, monkeypatch):
+    def blocked(_url):
+        raise JobFetchError("The site blocked reading. Paste the job description instead.", 422)
+
+    monkeypatch.setattr("app.main.fetch_job_text", blocked)
+    response = client.post(
+        "/api/jobs/import-preview",
+        json={"url": "https://jobs.example.com/careers/job/789"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "The site blocked reading. Paste the job description instead."
     assert _db.jobs.count_documents({}) == 0
 
 

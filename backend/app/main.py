@@ -28,9 +28,11 @@ from pypdf import PdfReader
 from starlette.datastructures import Headers
 
 from app import schemas
+from app.adzuna import AdzunaError, search_adzuna_jobs
 from app.config import settings
 from app.database import ensure_indexes, get_db
-from app.job_import import extract_job
+from app.job_fetch import JobFetchError, fetch_job_text, is_search_results_url
+from app.job_import import MIN_IMPORT_CHARS, extract_job
 from app.matching import score_job
 from app.preferences import clean_preferences, preferences_problems
 from app.resumes import (
@@ -811,12 +813,75 @@ def list_jobs(
     ]
 
 
+@app.get("/api/jobs/discover", response_model=schemas.JobDiscoveryResponse)
+def discover_jobs(
+    what: str = Query(min_length=2, max_length=100),
+    where: str = Query(default="", max_length=100),
+    country: str = Query(default="gb", pattern=r"^[a-z]{2}$"),
+    page: int = Query(default=1, ge=1, le=100),
+):
+    """Search Adzuna live; results stay transient until the user saves one."""
+    if not what.strip():
+        raise HTTPException(status_code=422, detail="Enter a job-search keyword.")
+    try:
+        return search_adzuna_jobs(
+            country=country,
+            what=what.strip(),
+            where=where.strip(),
+            page=page,
+        )
+    except AdzunaError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.message) from None
+
+
 @app.post("/api/jobs/import-preview", response_model=schemas.JobImportPreview)
 def import_job_preview(payload: schemas.JobImportRequest):
-    """Read pasted job text and return a draft. Saves nothing; you review and save from the form."""
-    if not payload.text.strip() or len(payload.text.strip()) < 20:
-        raise HTTPException(status_code=422, detail="Paste the full job posting text.")
-    return extract_job(payload.text, payload.url.strip())
+    """Read pasted job text (or, if none is given, the posting link) and return a draft.
+
+    Saves nothing; you review and save from the form. Pasted text works exactly as
+    before. A link is only opened when there is no pasted text, through the safe
+    fetcher in job_fetch.py, and its text goes through the same parser.
+    """
+    text = payload.text.strip()
+    url = payload.url.strip()
+
+    # The import textarea is also a natural place users paste a single URL.
+    # Treat only a URL-only value as a link; mixed posting text remains text.
+    if text and len(text.splitlines()) == 1 and re.match(r"^https?://\S+$", text, re.I):
+        url, text = url or text, ""
+
+    if text:
+        if len(text) < MIN_IMPORT_CHARS:
+            raise HTTPException(status_code=422, detail="Paste the full job posting text.")
+        return {**extract_job(text, url), "source": "text", "warnings": []}
+
+    if not url:
+        raise HTTPException(
+            status_code=422,
+            detail="Paste the full job posting text, or enter the job posting link.",
+        )
+    if is_search_results_url(url):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "That link looks like a job search or careers listing, not an individual posting. "
+                "Open a specific job and use its job URL, or paste the job description."
+            ),
+        )
+    try:
+        page = fetch_job_text(url)
+    except JobFetchError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.message) from None
+    preview = extract_job(page.text, url)
+    if not preview["found"]:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "I could not identify job details on that page. Use an individual job posting URL "
+                "or paste the job description."
+            ),
+        )
+    return {**preview, "source": "url", "warnings": page.warnings}
 
 
 @app.post("/api/jobs/rescore")

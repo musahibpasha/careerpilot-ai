@@ -125,6 +125,7 @@ type Job = {
   company: string;
   location: string | null;
   source: string;
+  source_job_id?: string | null;
   url: string | null;
   description: string;
   skills: string[];
@@ -137,6 +138,23 @@ type Job = {
   match_breakdown?: MatchFactor[];
   feedback?: "" | "not_interested";
   feedback_reason?: string;
+};
+
+type DiscoveredJob = {
+  source_job_id: string;
+  title: string;
+  company: string;
+  location: string | null;
+  url: string;
+  description: string;
+  skills: string[];
+  nice_to_have_skills: string[];
+  work_arrangement: string;
+  experience_level: string;
+  salary_min: number | null;
+  salary_max: number | null;
+  salary_currency: string;
+  salary_period: "year" | "month";
 };
 
 // Why you passed on a job. "page" is where the matching setting lives.
@@ -794,6 +812,15 @@ function App() {
   const [minMatch, setMinMatch] = useState(0);
   const [sourceFilter, setSourceFilter] = useState("all");
   const [sortBy, setSortBy] = useState<"best" | "newest" | "company">("best");
+  const [discoveryCountry, setDiscoveryCountry] = useState("gb");
+  const [discoveryWhat, setDiscoveryWhat] = useState("");
+  const [discoveryWhere, setDiscoveryWhere] = useState("");
+  const [discoveryResults, setDiscoveryResults] = useState<DiscoveredJob[]>([]);
+  const [discoveryPage, setDiscoveryPage] = useState(1);
+  const [discoveryHasMore, setDiscoveryHasMore] = useState(false);
+  const [discoveryBusy, setDiscoveryBusy] = useState(false);
+  const [discoveryMessage, setDiscoveryMessage] = useState("");
+  const [savingDiscoveryId, setSavingDiscoveryId] = useState<string | null>(null);
 
   // Application tracker: board (Kanban) or list, remembered between visits.
   const [trackerView, setTrackerView] = useState<"board" | "list">(() =>
@@ -968,6 +995,82 @@ function App() {
     }
   }
 
+  async function searchAdzuna(page = 1) {
+    setDiscoveryBusy(true);
+    setDiscoveryMessage("");
+    try {
+      const params = new URLSearchParams({
+        what: discoveryWhat.trim(),
+        where: discoveryWhere.trim(),
+        country: discoveryCountry.trim().toLowerCase(),
+        page: String(page),
+      });
+      const response = await fetch(`${API}/api/jobs/discover?${params}`);
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(errorText(data, `Adzuna search failed (HTTP ${response.status}).`));
+      }
+      if (!Array.isArray(data?.results) || typeof data?.page !== "number") {
+        throw new Error("Adzuna returned an invalid search response.");
+      }
+      setDiscoveryResults(data.results);
+      setDiscoveryPage(data.page);
+      setDiscoveryHasMore(Boolean(data.has_more));
+      if (data.results.length === 0) {
+        setDiscoveryMessage(page > 1 ? "No more listings on this page." : "No listings matched that search.");
+      }
+    } catch (e) {
+      setDiscoveryResults([]);
+      setDiscoveryHasMore(false);
+      setDiscoveryMessage(e instanceof Error ? e.message : "Could not search Adzuna.");
+    } finally {
+      setDiscoveryBusy(false);
+    }
+  }
+
+  async function saveDiscoveredJob(job: DiscoveredJob) {
+    setSavingDiscoveryId(job.source_job_id);
+    setDiscoveryMessage("");
+    try {
+      const response = await fetch(`${API}/api/jobs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: job.title,
+          company: job.company,
+          location: job.location,
+          source: "adzuna",
+          source_job_id: job.source_job_id,
+          url: job.url,
+          description: job.description,
+          skills: job.skills,
+          nice_to_have_skills: job.nice_to_have_skills,
+          work_arrangement: job.work_arrangement,
+          experience_level: job.experience_level,
+          salary_min: job.salary_min,
+          salary_max: job.salary_max,
+          salary_currency: job.salary_currency,
+          salary_period: job.salary_period,
+        }),
+      });
+      const data = await response.json().catch(() => null);
+      if (response.status === 409) {
+        setDiscoveryMessage("This Adzuna listing is already saved.");
+        return;
+      }
+      if (!response.ok) {
+        throw new Error(errorText(data, `Could not save this listing (HTTP ${response.status}).`));
+      }
+      setJobs((current) => [data, ...current.filter((saved) => saved.id !== data.id)]);
+      setNotice(`Saved ${job.title} and calculated its match score.`);
+      setDiscoveryMessage("Listing saved to Find jobs.");
+    } catch (e) {
+      setDiscoveryMessage(e instanceof Error ? e.message : "Could not save this listing.");
+    } finally {
+      setSavingDiscoveryId(null);
+    }
+  }
+
   useEffect(() => {
     void load(true);
   }, []);
@@ -1112,13 +1215,21 @@ function App() {
       }));
       const found = (data.found as string[]).map((k) => IMPORT_LABELS[k] ?? k);
       const missing = (data.missing as string[]).map((k) => IMPORT_LABELS[k] ?? k);
-      setImportMessage(
-        found.length
+      const titleOrCompanyFound = (data.found as string[]).some(
+        (key) => key === "title" || key === "company",
+      );
+      const baseMessage =
+        found.length && titleOrCompanyFound
           ? `Filled in: ${found.join(", ")}.` +
               (missing.length ? ` Not found: ${missing.join(", ")}.` : "") +
               " Please check the details below before saving."
-          : "I could not recognise any details. Add them by hand below.",
-      );
+          : found.length
+            ? `I read the posting and found ${found.join(", ")}, but couldn't clearly identify the job title or company. Please fill those in by hand, then check the other details before saving.`
+            : "I could not recognise any details. Add them by hand below.";
+      const warnings = Array.isArray(data.warnings)
+        ? data.warnings.filter((warning: unknown): warning is string => typeof warning === "string")
+        : [];
+      setImportMessage([baseMessage, ...warnings].join(" "));
     } catch (e) {
       setImportMessage(e instanceof Error ? e.message : "Could not read that posting.");
     } finally {
@@ -2498,6 +2609,164 @@ function App() {
         {page === "jobs" && (
           <div className="page-view">
             <section className="panel search-card">
+              <div className="panel-head">
+                <div>
+                  <h2>Search live Adzuna listings</h2>
+                  <p>
+                    Results are fetched live and are not saved until you choose Save job.
+                    Descriptions are provider snippets.
+                  </p>
+                </div>
+              </div>
+              <form
+                className="filter-bar"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void searchAdzuna(1);
+                }}
+              >
+                <label>
+                  Keywords
+                  <input
+                    value={discoveryWhat}
+                    onChange={(event) => setDiscoveryWhat(event.target.value)}
+                    placeholder="e.g. software engineer"
+                    minLength={2}
+                    maxLength={100}
+                    required
+                  />
+                </label>
+                <label>
+                  Location
+                  <input
+                    value={discoveryWhere}
+                    onChange={(event) => setDiscoveryWhere(event.target.value)}
+                    placeholder="Optional, e.g. London"
+                    maxLength={100}
+                  />
+                </label>
+                <label>
+                  Country code
+                  <input
+                    value={discoveryCountry}
+                    onChange={(event) => setDiscoveryCountry(event.target.value)}
+                    pattern="[a-zA-Z]{2}"
+                    maxLength={2}
+                    aria-label="Two-letter Adzuna country code"
+                    title="Enter a two-letter Adzuna country code. The documented example is gb."
+                    required
+                  />
+                </label>
+                <button className="primary-button" type="submit" disabled={discoveryBusy}>
+                  {discoveryBusy ? "Searching..." : "Search Adzuna"}
+                </button>
+              </form>
+              <small>
+                The API docs demonstrate <code>gb</code>; India availability and the
+                corresponding country code have not yet been verified.
+              </small>
+              {discoveryMessage && (
+                <p className="import-message" role="status">{discoveryMessage}</p>
+              )}
+              {discoveryResults.length > 0 && (
+                <>
+                  <p className="reason">
+                    Page {discoveryPage} · {discoveryResults.length} live listing
+                    {discoveryResults.length === 1 ? "" : "s"}
+                  </p>
+                  <section className="jobs-list">
+                    {discoveryResults.map((job) => {
+                      const saved = jobs.some(
+                        (existing) =>
+                          existing.source === "adzuna" &&
+                          existing.source_job_id === job.source_job_id,
+                      );
+                      return (
+                        <article className="job-card" key={job.source_job_id}>
+                          <div className="company-logo">
+                            {job.company.slice(0, 1).toUpperCase()}
+                          </div>
+                          <div className="job-info">
+                            <h3>{job.title}</h3>
+                            <p>
+                              {job.company}
+                              {job.location ? ` · ${job.location}` : ""}
+                            </p>
+                            {job.description && <p>{job.description}</p>}
+                            {job.skills.length > 0 && (
+                              <div className="skill-list">
+                                {job.skills.slice(0, 6).map((skill) => (
+                                  <span key={skill}>{skill}</span>
+                                ))}
+                              </div>
+                            )}
+                            <a
+                              href={job.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              style={{
+                                display: "inline-flex",
+                                width: 116,
+                                height: 23,
+                                alignItems: "center",
+                                justifyContent: "center",
+                                fontWeight: 700,
+                              }}
+                            >
+                              Adzuna
+                            </a>
+                          </div>
+                          <div className="job-actions">
+                            <button
+                              className="primary-button"
+                              type="button"
+                              disabled={saved || savingDiscoveryId === job.source_job_id}
+                              onClick={() => void saveDiscoveredJob(job)}
+                            >
+                              {saved
+                                ? "Saved"
+                                : savingDiscoveryId === job.source_job_id
+                                  ? "Saving..."
+                                  : "Save job"}
+                            </button>
+                            <a
+                              href={job.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="secondary-button"
+                            >
+                              Open listing <ArrowUpRight size={14} />
+                            </a>
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </section>
+                </>
+              )}
+              {(discoveryResults.length > 0 || discoveryPage > 1) && (
+                <div className="row" style={{ justifyContent: "center", marginTop: 16 }}>
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    disabled={discoveryBusy || discoveryPage <= 1}
+                    onClick={() => void searchAdzuna(discoveryPage - 1)}
+                  >
+                    Previous page
+                  </button>
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    disabled={discoveryBusy || !discoveryHasMore || discoveryPage >= 100}
+                    onClick={() => void searchAdzuna(discoveryPage + 1)}
+                  >
+                    Next page
+                  </button>
+                </div>
+              )}
+            </section>
+
+            <section className="panel search-card">
               <label className="searchbox">
                 <Search size={18} />
                 <input
@@ -3182,7 +3451,7 @@ function App() {
               open={pasteOpen}
               onToggle={(e) => setPasteOpen(e.currentTarget.open)}
             >
-              <summary>Paste a job posting to fill this form</summary>
+              <summary>Paste job details or use a job URL to fill this form</summary>
               <textarea
                 rows={5}
                 value={pasteText}
@@ -3193,12 +3462,12 @@ function App() {
                 <button
                   type="button"
                   className="secondary-button"
-                  disabled={importing || pasteText.trim().length < 20}
+                  disabled={importing || (pasteText.trim().length < 20 && !form.url.trim())}
                   onClick={() => void importFromText()}
                 >
                   {importing ? "Reading..." : "Fill the form"}
                 </button>
-                <small>Nothing is saved until you press Save opportunity.</small>
+                <small>Paste text above or enter the job URL below. Nothing is saved until you press Save opportunity.</small>
               </div>
               {importMessage && <p className="import-message">{importMessage}</p>}
             </details>

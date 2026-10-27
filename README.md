@@ -50,6 +50,8 @@ The long-term goal is to support a human-approved workflow: find relevant opport
 - **Explainable matching** — each job is scored 0-100 from weighted factors: skills (50, must-have vs nice-to-have), role fit against your target roles (15), location and work style (15), experience level (10) and salary (10). Every factor shows a plain-English reason, missing skills are listed, and a factor that cannot be judged (the job or your preferences do not say enough) is left out instead of counted as a miss. A low/medium/high confidence label shows how much of the picture was judged. Scores update when you save your profile or preferences, or call `POST /api/jobs/rescore`. Salary is only compared when both sides use the same currency. Each job card has a "Why this score?" panel with a bar per factor, the confidence label, missing skills, and the factors that were not counted; the add-job form has an optional "More details" section (nice-to-have skills, work style, level, salary).
 - **Not interested, with a reason** — dismiss a job from its card and say why (role, skills, location, pay, level, company, other). Dismissed jobs move to a collapsible list with a Restore button, and after two dismissals for the same reason the app points you to the profile or preference setting that controls it. This is only recorded for now; it does not change scores.
 - **Paste-a-job import** — in Add job, paste a whole posting and press Fill the form. Rules (not AI) read the title, company, location, work style, level, salary (LPA, lakh, $ ranges, monthly or yearly) and known skills, splitting must-have from nice-to-have. You review the filled form and save; nothing is saved automatically, and details it cannot find are listed so you can add them.
+- **Job link import** — in Add job, leave the paste box empty, type a public job posting link in *Job posting URL* and press Fill the form. The backend (`app/job_fetch.py`) opens the page, pulls out the readable text (and the page's structured job data when it has some), then hands it to the same rule-based parser as pasted text, so you get the same kind of draft to review and edit before saving. If you paste text as well, the pasted text is used and the link is only kept as the posting URL. Safety rules: only `http`/`https` on ports 80/443; links to localhost, private, link-local, cloud-metadata and other internal addresses are refused (the name is looked up by the app, every answer is checked, and the connection goes to the checked address, so a name cannot be switched to an internal address afterwards); every redirect is re-checked, at most 5; 8-second total limit, 1 MB size limit, only HTML or plain-text pages; hidden page text and invisible characters are dropped, and text that looks like instructions to an AI is flagged and never followed. It does not log in, solve CAPTCHAs or get around blocking: if a site refuses, needs JavaScript or a login, the message tells you to paste the description instead. No new dependency was added.
+- **Live public job discovery (Adzuna)** — the Find jobs screen can search live listings by keyword, optional location, Adzuna country code, and page. Results remain transient until you choose **Save job**; saved jobs use the existing `/api/jobs` endpoint, duplicate checks, and match scoring. Descriptions returned by Adzuna are snippets. Each result links to its Adzuna listing and displays the required Adzuna attribution. Add `ADZUNA_APP_ID` and `ADZUNA_APP_KEY` to `backend/.env`; never put these credentials in frontend code or source control. The provider documents the `gb` country example; India availability/country code is not yet verified. Automated tests use mocked responses; live data has not been verified because no API credentials are configured. Adzuna's free key is for evaluation, with account-specific limits; review the [API terms](https://developer.adzuna.com/docs/terms_of_service) before use, especially before public/commercial deployment.
 - **Safer loading behavior** — the job tracker can still load if the profile request fails.
 - **Automated tests** — cover areas including matching, normalization, duplicates, profile validation, resume parsing, status transitions, status history, the approval block, the status migration, job preferences, and resume files. Run `cd backend && python -m pytest -q`.
 
@@ -80,7 +82,7 @@ Work is being delivered incrementally so each stage can be tested before moving 
 | 1 | Stabilize the existing app, database, tests, and basic approval block | ✅ Built |
 | 2 | Profile and application tracking | 🟡 Status history, job preferences, and multiple resumes built; Kanban board remains |
 | 3 | Smart, explainable job matching | ✅ Complete |
-| 4 | Job discovery, import, and permitted source connectors | 🟡 Paste-a-job import done; discovery sources and link fetching remain |
+| 4 | Job discovery, import, and permitted source connectors | 🟡 Adzuna discovery implemented and mock-tested; live credentials and India country coverage remain unverified. Import is user-reported working. |
 | 5 | Application preparation and browser-assisted prefill | 🔜 Planned |
 | 6 | Explicit approval workflow and server-side safeguards | 🔜 Planned |
 | 7 | Analytics, alerts, interview preparation, authentication, security, and deployment | 🔜 Planned |
@@ -89,7 +91,7 @@ Work is being delivered incrementally so each stage can be tested before moving 
 
 1. ~~Stage 2: Kanban board, status history, job preferences, multiple resumes.~~ Done.
 2. ~~Stage 3: explainable matching and skill-gap insights.~~ Done.
-3. Build Stage 4: job import and permitted discovery sources.
+3. Finish Stage 4 verification: configure an Adzuna key, confirm the desired country code is supported, then manually test live results and saving.
 4. Build Stage 5: application document preparation and safe form prefill.
 5. Build Stage 6: a complete approval flow enforced by the backend.
 6. Build Stage 7: analytics, notifications, authentication, and production hardening.
@@ -105,6 +107,8 @@ flowchart TD
     RES --> AI[OpenRouter model]
     AI --> RES
     API --> MATCH[Skill normalization and basic matching]
+    API --> ADZ[Adzuna public jobs API]
+    ADZ --> API
     MATCH --> API
     API --> FE
     FE --> U
@@ -119,7 +123,7 @@ flowchart TD
 | Database | MongoDB, PyMongo | Store profile and job-tracking data |
 | Resume extraction | pypdf | Extract text from PDF resumes |
 | AI extraction | OpenRouter | Assist with extracting structured profile fields |
-| Testing | Python test suite | Validate key backend behaviors |
+| Testing | Python test suite | Validate key backend behaviors, including mocked Adzuna API responses |
 
 ## 📂 Project Structure
 
@@ -132,6 +136,7 @@ careerpilot-ai/
 ├── backend/
 │   ├── app/
 │   │   ├── main.py
+│   │   ├── adzuna.py
 │   │   ├── config.py
 │   │   ├── database.py
 │   │   ├── schemas.py
@@ -195,6 +200,15 @@ Create `backend/.env` using the variable names expected by `backend/app/config.p
 
 **Never paste secrets into this README or commit your `.env` file.**
 
+To try live job discovery, register through [Adzuna's developer portal](https://developer.adzuna.com/signup), review its [API terms](https://developer.adzuna.com/docs/terms_of_service), then add your credentials to `backend/.env`:
+
+```dotenv
+ADZUNA_APP_ID=your_app_id
+ADZUNA_APP_KEY=your_app_key
+```
+
+Restart FastAPI after changing `.env`. The API docs show `gb` as an example country code; India coverage and its country code have not yet been confirmed. Adzuna's free key is intended for evaluation, and current limits are shown in the account. Its terms require removal of Adzuna data from displayed pages if access is terminated; this app currently has no provider-specific deletion UI, so do not terminate API access until saved Adzuna entries can be removed from MongoDB. Live API behavior remains unverified until you configure credentials.
+
 Start the API:
 
 ```bash
@@ -251,6 +265,7 @@ The test suite (run with `cd backend && python -m pytest -q`) covers key areas s
 - Resume parsing behavior.
 - Application status transitions, timestamped status history, and the migration from the old statuses.
 - The application-approval block: `approved` and `submitted` are refused by the backend.
+- Job link import (`tests/test_job_fetch.py`, `tests/test_job_import_url.py`): valid public HTML, structured job data, malformed/empty pages, login and CAPTCHA pages, unsupported content types, timeouts, oversized responses, redirect limit, localhost/private/metadata/IPv6 targets, redirects to private addresses, names that resolve to internal addresses, and the pasted-text regression. No test opens a real website.
 
 As features are added, tests should be added for both successful and failure cases. The count may change as the project evolves.
 

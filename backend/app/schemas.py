@@ -91,9 +91,13 @@ class JobFeedback(BaseModel):
 
 
 class JobImportRequest(BaseModel):
-    """Pasted job-posting text. Nothing is saved; the result only fills in the form."""
+    """Pasted job-posting text, or a link to read when no text is given.
 
-    text: str = Field(min_length=20, max_length=20_000)
+    Pasted text of 20+ characters always wins (the link is then only saved as the
+    posting URL). Nothing is saved; the result only fills in the form.
+    """
+
+    text: str = Field(default="", max_length=20_000)
     url: str = Field(default="", max_length=2000)
 
 
@@ -117,6 +121,34 @@ class JobImportPreview(BaseModel):
     draft: JobImportDraft
     found: list[str]  # which details were recognised
     missing: list[str]  # which details were not, so the screen can say so
+    source: Literal["text", "url"] = "text"  # where the text came from
+    warnings: list[str] = Field(default_factory=list)  # e.g. hidden text was ignored
+
+
+class JobDiscoveryListing(BaseModel):
+    source_job_id: str
+    title: str
+    company: str
+    location: str | None = None
+    url: HttpUrl
+    description: str = ""
+    skills: list[str] = Field(default_factory=list)
+    nice_to_have_skills: list[str] = Field(default_factory=list)
+    work_arrangement: str = ""
+    experience_level: str = ""
+    salary_min: int | None = None
+    salary_max: int | None = None
+    salary_currency: str = ""
+    salary_period: str = "year"
+
+
+class JobDiscoveryResponse(BaseModel):
+    source: Literal["adzuna"] = "adzuna"
+    country: str
+    page: int
+    results: list[JobDiscoveryListing]
+    has_more: bool
+    description_is_snippet: bool = True
 
 
 class ApplicationCreate(BaseModel):

@@ -72,6 +72,8 @@ NICE_PHRASES = re.compile(
 )
 
 LABEL_TITLE = re.compile(r"^(?:job\s+)?(?:title|position|role)\s*[:\-–]\s*(.+)$", re.I)
+LABEL_PAGE_TITLE = re.compile(r"^(?:page\s+title|og:title|meta\s+title)\s*[:\-–]\s*(.+)$", re.I)
+LABEL_SITE_NAME = re.compile(r"^(?:site\s+name|og:site_name)\s*[:\-–]\s*(.+)$", re.I)
 LABEL_COMPANY = re.compile(
     r"^(?:company|employer|organi[sz]ation|hiring company|client)(?:\s+name)?\s*[:\-–]\s*(.+)$", re.I
 )
@@ -86,7 +88,8 @@ ABOUT_HEADING = re.compile(
 IS_HIRING = re.compile(r"^(.{2,50}?)\s+(?:is hiring|is looking for|is seeking|are hiring)\b", re.I)
 SKIP_TITLE_LINES = re.compile(
     r"^(?:job description|about (?:us|the (?:job|role|company))|we(?:'|’)?re hiring|we are hiring|"
-    r"apply(?: now)?|overview|summary|description|job details)\s*:?$",
+    r"apply(?: now)?|overview|summary|description|job details|(?:required )?skills|requirements|qualifications|"
+    r"responsibilities|key responsibilities|what you(?:'|’)?ll do|who you are|about the role)\s*:?$",
     re.I,
 )
 # Words that mean the part after " - " is more job description, not a company name.
@@ -137,22 +140,52 @@ def _num(raw: str, k: str | None = None) -> float:
 # --------------------------------------------------------------------------
 # Individual fields
 # --------------------------------------------------------------------------
+def _clean_page_title(raw: str) -> tuple[str, str]:
+    """Split common SEO/job-board titles into a useful role and optional company."""
+    value = _clean(raw, 240)
+    # Search snippets often append the job board after a pipe.
+    parts = re.split(r"\s+\|\s+", value)
+    if len(parts) > 1:
+        board_names = {"linkedin", "indeed", "glassdoor", "monster", "naukri", "workday", "lever", "greenhouse"}
+        if parts[-1].strip().casefold() in board_names or len(parts[-1].split()) <= 3:
+            value = parts[0].strip()
+
+    # "Role - Company" is common on career pages. Avoid interpreting a second
+    # role/work-mode phrase as a company name.
+    m = re.match(r"^(.{2,100}?)\s+[-–—]\s+([A-Z0-9][\w&.']*(?:\s+[A-Z0-9][\w&.']*){0,4})$", value)
+    if m and not re.search(JOB_WORDS, m.group(2)):
+        return _clean(m.group(1), 150), _clean(m.group(2), 100)
+    return _clean(value, 150), ""
+
+
 def _find_title_and_company(lines: list[str]) -> tuple[str, str]:
     head = lines[:40]
     title = company = ""
+    page_title = ""
+    site_name = ""
 
     for ln in head:
         if not title and (m := LABEL_TITLE.match(ln)):
             title = _clean(m.group(1), 150)
+        if not page_title and (m := LABEL_PAGE_TITLE.match(ln)):
+            page_title = _clean(m.group(1), 240)
         if not company and (m := LABEL_COMPANY.match(ln)):
             company = _clean(m.group(1), 100)
+        if not site_name and (m := LABEL_SITE_NAME.match(ln)):
+            site_name = _clean(m.group(1), 100)
+
+    if not title and page_title:
+        title, inferred_company = _clean_page_title(page_title)
+        company = company or inferred_company
 
     if not title:
         for ln in lines[:5]:
             if (LABEL_COMPANY.match(ln) or LABEL_LOCATION.match(ln) or LABEL_MODE.match(ln)
-                    or SKIP_TITLE_LINES.match(ln) or len(ln) > 100 or URL_RE.match(ln)
-                    or ln.endswith(".") or len(ln.split()) > 12):
-                continue  # a full sentence is not a job title
+                    or LABEL_SITE_NAME.match(ln)
+                    or re.match(r"^(?:(?:required )?skills|requirements|qualifications|responsibilities)\s*[:\-–]", ln, re.I)
+                    or SKIP_TITLE_LINES.match(ln) or len(ln) > 100
+                    or URL_RE.match(ln) or ln.endswith(".") or len(ln.split()) > 12):
+                continue
             title = _clean(TITLE_PREFIX.sub("", ln), 150)
             break
 
@@ -178,6 +211,10 @@ def _find_title_and_company(lines: list[str]) -> tuple[str, str]:
             if (m := IS_HIRING.match(ln)):
                 company = _clean(m.group(1), 100)
                 break
+    if not company and site_name:
+        generic_boards = {"linkedin", "indeed", "glassdoor", "monster", "naukri", "workday", "lever", "greenhouse"}
+        if site_name.casefold() not in generic_boards:
+            company = site_name
     return title, company
 
 
