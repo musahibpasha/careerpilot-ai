@@ -193,6 +193,7 @@ type ProfileDocument = {
 };
 
 type DiscoveredJob = {
+  source: string;
   source_job_id: string;
   title: string;
   company: string;
@@ -210,6 +211,34 @@ type DiscoveredJob = {
   salary_currency: string;
   salary_period: "year" | "month";
 };
+
+type JobSearchSource =
+  | "linkedin"
+  | "indeed"
+  | "glassdoor"
+  | "zip_recruiter"
+  | "bayt"
+  | "naukri"
+  | "bdjobs"
+  | "hellowork"
+  | "jobicy";
+
+const JOB_SEARCH_SOURCES: {
+  id: JobSearchSource;
+  label: string;
+  mark: string;
+  description: string;
+}[] = [
+  { id: "linkedin", label: "LinkedIn", mark: "in", description: "Professional network" },
+  { id: "indeed", label: "Indeed", mark: "I", description: "Global job listings" },
+  { id: "glassdoor", label: "Glassdoor", mark: "G", description: "Jobs and company reviews" },
+  { id: "zip_recruiter", label: "ZipRecruiter", mark: "Z", description: "Personalized job search" },
+  { id: "bayt", label: "Bayt", mark: "B", description: "Middle East opportunities" },
+  { id: "naukri", label: "Naukri", mark: "N", description: "Jobs across India" },
+  { id: "bdjobs", label: "BDJobs", mark: "BD", description: "Jobs across Bangladesh" },
+  { id: "hellowork", label: "HelloWork", mark: "H", description: "Jobs across France" },
+  { id: "jobicy", label: "Jobicy", mark: "J", description: "Remote-first listings" },
+];
 
 // Why you passed on a job. "page" is where the matching setting lives.
 const DISMISS_REASONS: { key: string; label: string; page?: "profile" | "preferences" }[] = [
@@ -1118,7 +1147,7 @@ function App() {
   const [draggedAppId, setDraggedAppId] = useState<string | null>(null);
   const [dragOverStatus, setDragOverStatus] = useState<string | null>(null);
   const [showJobForm, setShowJobForm] = useState(false);
-  const [jobSource, setJobSource] = useState<"linkedin" | "jobicy">("linkedin");
+  const [jobSource, setJobSource] = useState<JobSearchSource>("linkedin");
   const [linkedinKeywords, setLinkedinKeywords] = useState("software engineer");
   const [linkedinLocation, setLinkedinLocation] = useState("Bengaluru, India");
   const [linkedinWorkArrangement, setLinkedinWorkArrangement] = useState("any");
@@ -1345,7 +1374,12 @@ function App() {
         throw new Error("Jobicy returned an invalid search response.");
       }
       if (requestId !== discoveryRequestId.current) return;
-      setDiscoveryResults(data.results);
+      setDiscoveryResults(
+        data.results.map((job: Omit<DiscoveredJob, "source">) => ({
+          ...job,
+          source: "jobicy",
+        })),
+      );
       setDiscoveryPage(pageNumber);
       setDiscoveryHasMore(data.has_more);
       setDiscoveryNextCursor(
@@ -1370,6 +1404,71 @@ function App() {
         setDiscoveryBusy(false);
       }
     }
+  }
+
+  async function searchJobBoard() {
+    const requestId = ++discoveryRequestId.current;
+    setDiscoveryBusy(true);
+    setDiscoveryMessage("");
+    setDiscoveryError(false);
+    try {
+      const params = new URLSearchParams({
+        site: jobSource,
+        what: linkedinKeywords.trim(),
+        where: linkedinLocation.trim(),
+      });
+      const jobType = {
+        "Full-time": "fulltime",
+        "Part-time": "parttime",
+        Internship: "internship",
+        Contract: "contract",
+        Temporary: "temporary",
+      }[linkedinEmploymentType];
+      if (jobType) params.set("job_type", jobType);
+      if (linkedinWorkArrangement === "remote") params.set("is_remote", "true");
+      const hoursOld = {
+        "24-hours": "24",
+        week: "168",
+        month: "720",
+      }[linkedinPostedWithin];
+      if (hoursOld) params.set("hours_old", hoursOld);
+
+      const response = await fetch(`${API}/api/jobs/discover/board?${params}`);
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(errorText(data, `Job search failed (HTTP ${response.status}).`));
+      }
+      if (!Array.isArray(data?.results) || data?.source !== jobSource) {
+        throw new Error(`${jobSource} returned an invalid search response.`);
+      }
+      if (requestId !== discoveryRequestId.current) return;
+      setDiscoveryResults(
+        data.results.map((job: Omit<DiscoveredJob, "source">) => ({
+          ...job,
+          source: data.source,
+        })),
+      );
+      setDiscoveryPage(1);
+      setDiscoveryHasMore(false);
+      setDiscoveryNextCursor(null);
+      if (data.results.length === 0) {
+        setDiscoveryMessage("No listings matched those search criteria. Try broader keywords or another source.");
+      }
+    } catch (e) {
+      if (requestId !== discoveryRequestId.current) return;
+      setDiscoveryResults([]);
+      setDiscoveryHasMore(false);
+      setDiscoveryNextCursor(null);
+      setDiscoveryError(true);
+      setDiscoveryMessage(e instanceof Error ? e.message : "Could not search this job board.");
+    } finally {
+      if (requestId === discoveryRequestId.current) setDiscoveryBusy(false);
+    }
+  }
+
+  function selectJobSource(source: JobSearchSource) {
+    if (source !== jobSource) clearDiscoveryResults();
+    setJobSource(source);
   }
 
   function useProfileForLinkedInSearch() {
@@ -1414,7 +1513,7 @@ function App() {
           title: job.title,
           company: job.company,
           location: job.location,
-          source: "jobicy",
+          source: job.source,
           source_job_id: job.source_job_id,
           url: job.url,
           description: job.description,
@@ -3336,51 +3435,42 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                   <BriefcaseBusiness size={18} />
                 </span>
                 <div>
-                  <h2>Job source</h2>
-                  <p>Choose where you want to search for jobs.</p>
+                  <h2>Choose a job board</h2>
+                  <p>Search listings from one source at a time.</p>
                 </div>
               </div>
-              <div className="job-source-options" role="group" aria-label="Job source">
-                <button
-                  type="button"
-                  className={`job-source-option ${jobSource === "linkedin" ? "selected" : ""}`}
-                  aria-pressed={jobSource === "linkedin"}
-                  onClick={() => setJobSource("linkedin")}
-                >
-                  <span className="source-option-title">
-                    <span className="source-brand-icon linkedin-brand">in</span>
-                    LinkedIn
-                    {jobSource === "linkedin" && <ArrowUpRight size={14} />}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  className={`job-source-option ${jobSource === "jobicy" ? "selected" : ""}`}
-                  aria-pressed={jobSource === "jobicy"}
-                  onClick={() => setJobSource("jobicy")}
-                >
-                  <span className="source-option-title">
-                    <span className="source-brand-icon jobicy-brand">J</span>
-                    Jobicy
-                    {jobSource === "jobicy" && <CheckCircle2 size={14} />}
-                  </span>
-                </button>
-                <div className="more-sources-note" aria-label="Two job search sources">
-                  2 search sources
-                </div>
+              <div className="job-source-options" role="group" aria-label="Job boards">
+                {JOB_SEARCH_SOURCES.map((source) => (
+                  <button
+                    key={source.id}
+                    type="button"
+                    className={`job-source-option ${jobSource === source.id ? "selected" : ""}`}
+                    aria-pressed={jobSource === source.id}
+                    onClick={() => selectJobSource(source.id)}
+                  >
+                    <span className="source-option-title">
+                      <span className={`source-brand-icon ${source.id.replace("_", "-")}-brand`}>
+                        {source.mark}
+                      </span>
+                      {source.label}
+                      {jobSource === source.id && <CheckCircle2 size={14} />}
+                    </span>
+                    <small>{source.description}</small>
+                  </button>
+                ))}
               </div>
               <p className="source-disclaimer">
-                LinkedIn opens a search in your browser and is manual-only. Jobicy supplies remote listings; its saved URL is the source listing, not the employer application form. Automated form filling is currently limited to Greenhouse and Lever application pages.
+                Job boards use JobSpy; Jobicy uses its public jobs API. Listings stay here until you save them. Availability and filters vary by source; application form filling remains review-first and is only supported on select employer sites.
               </p>
             </section>
 
-            {jobSource === "linkedin" ? (
+            {jobSource !== "jobicy" ? (
             <>
             <section className="panel search-card linkedin-search-card">
               <div className="panel-head criteria-panel-head">
                 <div>
                   <h2>Search criteria</h2>
-                  <p>Set your preferences to find the right jobs.</p>
+                  <p>Find listings on {JOB_SEARCH_SOURCES.find((source) => source.id === jobSource)?.label}.</p>
                 </div>
                 <button
                   className="secondary-button"
@@ -3506,18 +3596,19 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                   </select>
                 </label>
                 <div className="criteria-search-action">
-                  <a
+                  <button
                     className="primary-button"
-                    href={`https://www.linkedin.com/jobs/search/?keywords=${encodeURIComponent(
-                      linkedinKeywords.trim(),
-                    )}&location=${encodeURIComponent(linkedinLocation.trim())}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
+                    type="button"
+                    disabled={discoveryBusy || linkedinKeywords.trim().length < 2}
+                    onClick={() => void searchJobBoard()}
                   >
-                    Search LinkedIn jobs <ArrowUpRight size={14} />
-                  </a>
+                    {discoveryBusy
+                      ? "Searching..."
+                      : `Search ${JOB_SEARCH_SOURCES.find((source) => source.id === jobSource)?.label} jobs`}
+                    <Search size={14} />
+                  </button>
                   <small>
-                    This opens LinkedIn’s search. CareerPilot does not fetch or store LinkedIn listings.
+                    Search results are temporary until you save a listing. Resume details are not sent to the job board.
                   </small>
                 </div>
               </div>
@@ -3547,8 +3638,93 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
               )}
 
               <small className="criteria-disclaimer">
-                LinkedIn receives only your keywords and location. Other filters must be applied on LinkedIn if available; your resume is not sent.
+                JobSpy searches this board using your keywords and location. Some boards may ignore filters they do not support; review each listing on its original site.
               </small>
+              {discoveryBusy && (
+                <p className="source-loading" role="status" aria-live="polite">
+                  Searching {JOB_SEARCH_SOURCES.find((source) => source.id === jobSource)?.label}…
+                </p>
+              )}
+              {discoveryMessage && (
+                <div className={discoveryError ? "source-feedback error" : "source-feedback"} role={discoveryError ? "alert" : "status"}>
+                  <span>{discoveryMessage}</span>
+                  {discoveryError && (
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => void searchJobBoard()}
+                      disabled={discoveryBusy}
+                    >
+                      Try again
+                    </button>
+                  )}
+                </div>
+              )}
+              {discoveryResults.length > 0 && (
+                <>
+                  <div className="source-results-heading">
+                    <h3>{JOB_SEARCH_SOURCES.find((source) => source.id === jobSource)?.label} results</h3>
+                    <span>{discoveryResults.length} listing{discoveryResults.length === 1 ? "" : "s"}</span>
+                  </div>
+                  <section className="jobs-list jobicy-results">
+                    {discoveryResults.map((job) => {
+                      const saved = jobs.some(
+                        (existing) =>
+                          existing.source === job.source &&
+                          existing.source_job_id === job.source_job_id,
+                      );
+                      const publishedDate = job.published_at
+                        ? new Date(job.published_at)
+                        : null;
+                      return (
+                        <article className="job-card" key={`${job.source}-${job.source_job_id}`}>
+                          <div className="company-logo">{job.company.slice(0, 1).toUpperCase()}</div>
+                          <div className="job-info">
+                            <h3>{job.title}</h3>
+                            <p>{job.company}{job.location ? ` · ${job.location}` : ""}</p>
+                            <div className="job-meta">
+                              {job.work_arrangement && <span>{job.work_arrangement}</span>}
+                              {job.employment_types.map((type) => <span key={type}>{type}</span>)}
+                              {(job.salary_min != null || job.salary_max != null) && (
+                                <span>
+                                  {job.salary_currency ? `${job.salary_currency} ` : ""}
+                                  {job.salary_min != null ? job.salary_min.toLocaleString() : "—"}
+                                  –{job.salary_max != null ? job.salary_max.toLocaleString() : "—"}
+                                  {" / "}{job.salary_period}
+                                </span>
+                              )}
+                              {publishedDate && !Number.isNaN(publishedDate.getTime()) && (
+                                <span>Posted {publishedDate.toLocaleDateString()}</span>
+                              )}
+                            </div>
+                            {job.description && <p>{job.description.slice(0, 900)}</p>}
+                            <small className="source-attribution">
+                              Source: {JOB_SEARCH_SOURCES.find((source) => source.id === job.source)?.label ?? job.source}
+                            </small>
+                          </div>
+                          <div className="job-actions">
+                            <button
+                              className="primary-button"
+                              type="button"
+                              disabled={saved || savingDiscoveryId === job.source_job_id}
+                              onClick={() => void saveDiscoveredJob(job)}
+                            >
+                              {saved
+                                ? "Saved"
+                                : savingDiscoveryId === job.source_job_id
+                                  ? "Saving..."
+                                  : "Save job"}
+                            </button>
+                            <a href={job.url} target="_blank" rel="noreferrer" className="secondary-button">
+                              Original posting <ArrowUpRight size={14} />
+                            </a>
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </section>
+                </>
+              )}
             </section>
             </>
             ) : (
@@ -3848,7 +4024,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                   <h3>{jobs.length === 0 ? "Your next opportunity starts here" : "No jobs match these filters"}</h3>
                   <p>
                     {jobs.length === 0
-                      ? "Search LinkedIn or Jobicy, or add a posting to start scoring opportunities against your profile."
+                      ? "Search a job board or add a posting to start scoring opportunities against your profile."
                       : "Try clearing the search or lowering the minimum match."}
                   </p>
                   {jobs.length === 0 && (

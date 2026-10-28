@@ -163,6 +163,20 @@ class JobDiscoveryResponse(BaseModel):
     next_cursor: str | None = None
 
 
+class JobSpyDiscoveryResponse(BaseModel):
+    source: Literal[
+        "linkedin",
+        "indeed",
+        "glassdoor",
+        "zip_recruiter",
+        "bayt",
+        "naukri",
+        "bdjobs",
+        "hellowork",
+    ]
+    results: list[JobDiscoveryListing]
+
+
 class JobApplicationPlan(BaseModel):
     job_id: str
     title: str

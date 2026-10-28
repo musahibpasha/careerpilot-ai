@@ -45,6 +45,7 @@ from app.jobicy import ALLOWED_GEOS, JobicyError, search_jobicy_jobs
 from app.job_scan import scan_and_save
 from app.job_fetch import JobFetchError, fetch_job_text, is_search_results_url
 from app.job_import import MIN_IMPORT_CHARS, extract_job
+from app.jobspy_search import JobSpyError, SUPPORTED_SITES, search_jobspy_jobs
 from app.matching import build_application_plan, score_job
 from app.preferences import clean_preferences, preferences_problems
 from app.resumes import (
@@ -866,6 +867,36 @@ def discover_jobs(
             cursor=cursor,
         )
     except JobicyError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.message) from None
+
+
+@app.get("/api/jobs/discover/board", response_model=schemas.JobSpyDiscoveryResponse)
+def discover_board_jobs(
+    site: str = Query(..., min_length=2, max_length=30),
+    what: str = Query(default="software engineer", min_length=2, max_length=100),
+    where: str = Query(default="", max_length=100),
+    job_type: str | None = Query(
+        default=None,
+        pattern=r"^(fulltime|parttime|contract|temporary|internship|perdiem|other|volunteer)$",
+    ),
+    is_remote: bool | None = None,
+    hours_old: int | None = Query(default=None, ge=1, le=720),
+):
+    """Search one public job board using JobSpy; results stay transient until saved."""
+    if site not in SUPPORTED_SITES:
+        raise HTTPException(status_code=422, detail="Choose a supported job-search source.")
+    if not what.strip():
+        raise HTTPException(status_code=422, detail="Enter a job-search keyword.")
+    try:
+        return search_jobspy_jobs(
+            site=site,
+            what=what.strip(),
+            where=where.strip(),
+            job_type=job_type,
+            is_remote=is_remote,
+            hours_old=hours_old,
+        )
+    except JobSpyError as error:
         raise HTTPException(status_code=error.status_code, detail=error.message) from None
 
 
