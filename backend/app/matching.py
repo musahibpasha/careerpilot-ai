@@ -371,6 +371,76 @@ def score_job(job: dict, profile: dict | None, preferences: dict | None) -> dict
     return {"score": score, "confidence": confidence, "breakdown": breakdown, "reasons": reasons}
 
 
+def build_application_plan(job: dict, profile: dict | None, preferences: dict | None) -> dict:
+    """Create a light-weight application-prep brief without automating submission."""
+    profile = profile or {}
+    preferences = preferences or {}
+    match = score_job(job, profile, preferences)
+    owned = normalize_skills(profile.get("skills", []))
+    required = normalize_skills(job.get("skills", []))
+    nice = normalize_skills(job.get("nice_to_have_skills", []))
+    strengths = sorted((required | nice) & owned)
+    gaps = sorted((required | nice) - owned)
+
+    target_roles = [str(role).strip() for role in profile.get("target_roles", []) if str(role).strip()]
+    fit_target = target_roles[0] if target_roles else job.get("title", "the role")
+    fit_summary = (
+        f"This role is a {match['score']:.1f}% fit for your profile and is strongest on "
+        f"{', '.join(strengths[:3]) if strengths else 'your relevant background'}."
+    )
+    if gaps:
+        fit_summary += f" The main gaps are {', '.join(gaps[:3])}."
+
+    positioning = []
+    if strengths:
+        positioning.append(f"Lead with your experience in {', '.join(strengths[:3])}.")
+    if fit_target:
+        positioning.append(f"Frame your background around the {fit_target} profile and show how it maps to this opening.")
+    if profile.get("experience_summary"):
+        positioning.append("Use your summary to connect your strongest achievements to the company’s goals.")
+
+    resume_focus = []
+    if strengths:
+        resume_focus.append(f"Highlight projects and responsibilities that used {', '.join(strengths[:3])}.")
+    if gaps:
+        resume_focus.append(f"Be ready to explain how you would ramp up on {', '.join(gaps[:3])} with a short plan or learning example.")
+    if profile.get("projects"):
+        resume_focus.append("Choose the project most similar to the job’s scope and describe outcomes and impact.")
+
+    cover_letter_angle = (
+        "Write the cover letter around the overlap between your background and the role’s top requirements, "
+        "then briefly acknowledge the adjacent skills you can learn quickly."
+    )
+    if strengths:
+        cover_letter_angle = (
+            f"Emphasize your experience with {', '.join(strengths[:3])} and connect it to the role’s goals, "
+            "while keeping the tone concrete and measurable."
+        )
+
+    interview_questions = []
+    if required:
+        interview_questions.append(f"Be prepared to discuss your experience with {', '.join(sorted(required)[:3])} in a real project.")
+    if gaps:
+        interview_questions.append(f"Prepare a brief answer for how you would learn {', '.join(gaps[:3])} quickly and apply it in the role.")
+    if job.get("location"):
+        interview_questions.append(f"Explain why this {job.get('location')} role matches your location and work-style preference.")
+
+    return {
+        "job_id": str(job.get("_id", "")),
+        "title": str(job.get("title", "")),
+        "company": str(job.get("company", "")),
+        "score": float(match["score"]),
+        "confidence": match["confidence"],
+        "fit_summary": fit_summary,
+        "strengths": strengths,
+        "gaps": gaps,
+        "positioning": positioning,
+        "resume_focus": resume_focus,
+        "cover_letter_angle": cover_letter_angle,
+        "interview_questions": interview_questions,
+    }
+
+
 def _unknown_reason(key: str, job: dict, profile: dict, prefs: dict) -> str:
     if key == "skills":
         return "The job has no listed skills or description to compare."

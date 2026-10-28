@@ -154,6 +154,29 @@ def test_salary_input_is_validated(client):
     assert client.post("/api/jobs", json={**base, "salary_max": 5}).status_code == 422
 
 
+def test_application_plan_is_generated_from_profile_and_job_details(client):
+    client.put("/api/profile", json=profile(
+        skills=["React", "TypeScript", "CSS"],
+        projects=[{"name": "Portfolio", "description": "Built a React dashboard"}],
+        target_roles=["Front-End Developer"],
+    ))
+    job = client.post("/api/jobs", json={
+        "title": "Front-End Developer",
+        "company": "A",
+        "skills": ["React", "TypeScript", "Next.js", "GraphQL"],
+        "nice_to_have_skills": ["CSS"],
+    }).json()
+
+    plan = client.get(f"/api/jobs/{job['id']}/application-plan").json()
+    assert plan["job_id"] == job["id"]
+    assert plan["score"] >= 60.0
+    assert "react" in plan["strengths"]
+    assert "graphql" in plan["gaps"]
+    assert plan["fit_summary"]
+    assert plan["cover_letter_angle"]
+    assert plan["interview_questions"]
+
+
 def test_rescore_endpoint_fills_in_old_jobs(client):
     _db.jobs.insert_one({"title": "Dev", "company": "Old", "skills": ["react"],
                          "created_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc)})

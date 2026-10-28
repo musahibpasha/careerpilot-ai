@@ -1,6 +1,11 @@
+import json
+from io import BytesIO
+
 import mongomock
 from fastapi.testclient import TestClient
+from pypdf import PdfReader
 
+from app import main
 from app.main import app
 from app.database import get_db
 from app.matching import calculate_match
@@ -89,6 +94,160 @@ def test_health():
     assert response.json()["status"] == "ok"
 
 
+def test_generate_job_application_materials_uses_profile_and_job(monkeypatch):
+    profile = valid_profile(
+        skills=["Python", "FastAPI"],
+        experience_summary="Backend developer who builds APIs.",
+        work_experience=[
+            {
+                "title": "Developer",
+                "company": "Example Co",
+                "duration": "2024 - 2025",
+                "description": "Built REST APIs with Python.",
+            }
+        ],
+    )
+    assert client.put("/api/profile", json=profile).status_code == 200
+    job_response = client.post(
+        "/api/jobs",
+        json={
+            "title": "Python Engineer",
+            "company": "Hiring Co",
+            "description": "Build APIs with Python and FastAPI.",
+            "skills": ["Python", "FastAPI"],
+        },
+    )
+    assert job_response.status_code == 201
+    job_id = job_response.json()["id"]
+    sent_messages = []
+
+    class FakeResponse:
+        status_code = 200
+        is_error = False
+
+        def json(self):
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "cover_letter": "Dear Hiring Manager,\nI build APIs with Python.",
+                                    "resume_summary": "Backend developer experienced in Python APIs.",
+                                    "skills_to_prioritize": ["Python", "FastAPI", "Kubernetes"],
+                                    "bullet_suggestions": [
+                                        {
+                                            "section": "Developer at Example Co",
+                                            "source_text": "Built REST APIs with Python.",
+                                            "tailored_text": "Built REST APIs using Python.",
+                                        },
+                                        {
+                                            "section": "Invented role",
+                                            "source_text": "Managed a team of 10.",
+                                            "tailored_text": "Led a team of 10 engineers.",
+                                        },
+                                    ],
+                                    "caveats": [],
+                                }
+                            )
+                        }
+                    }
+                ]
+            }
+
+    async def fake_completion(client_arg, messages):
+        sent_messages.extend(messages)
+        return FakeResponse()
+
+    monkeypatch.setattr(main.settings, "openrouter_api_key", "mock-test-key")
+    monkeypatch.setattr(main, "_post_with_retry_and_fallback", fake_completion)
+
+    response = client.post(f"/api/jobs/{job_id}/application-materials")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["job_id"] == job_id
+    assert body["cover_letter"].startswith("Dear Hiring Manager")
+    assert body["resume_summary"].startswith("Backend developer")
+    assert body["skills_to_prioritize"] == ["Python", "FastAPI"]
+    assert len(body["bullet_suggestions"]) == 1
+    assert body["bullet_suggestions"][0]["source_text"] == "Built REST APIs with Python."
+    assert "was omitted" in body["caveats"][0]
+    submitted_context = sent_messages[1]["content"]
+    assert "Python Engineer" in submitted_context
+    assert "Built REST APIs with Python." in submitted_context
+    assert "jane@example.com" not in submitted_context
+    assert "+91 98765 43210" not in submitted_context
+
+
+def test_generate_job_application_materials_requires_openrouter_key(monkeypatch):
+    job_response = client.post("/api/jobs", json={"title": "Engineer", "company": "Example"})
+    assert job_response.status_code == 201
+    monkeypatch.setattr(main.settings, "openrouter_api_key", "")
+
+    response = client.post(
+        f"/api/jobs/{job_response.json()['id']}/application-materials"
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "OpenRouter API key is not configured."
+
+
+def test_download_cover_letter_pdf_contains_reviewed_text_and_job_context():
+    assert client.put("/api/profile", json=valid_profile()).status_code == 200
+    job_response = client.post(
+        "/api/jobs",
+        json={
+            "title": "Python Engineer",
+            "company": "Hiring & Co",
+        },
+    )
+    assert job_response.status_code == 201
+
+    response = client.post(
+        f"/api/jobs/{job_response.json()['id']}/cover-letter.pdf",
+        json={
+            "cover_letter": (
+                "Dear Hiring Manager,\n\n"
+                "I build reliable Python services and would welcome a conversation."
+            )
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/pdf"
+    assert response.headers["content-disposition"].startswith("attachment; filename=")
+    reader = PdfReader(BytesIO(response.content))
+    extracted = "\n".join(page.extract_text() or "" for page in reader.pages)
+    assert "Jane Example" in extracted
+    assert "Python Engineer" in extracted
+    assert "Hiring & Co" in extracted
+    assert "I build reliable Python services" in extracted
+
+
+def test_download_cover_letter_pdf_rejects_missing_job_and_empty_text():
+    missing_job = client.post(
+        "/api/jobs/000000000000000000000000/cover-letter.pdf",
+        json={"cover_letter": "Dear Hiring Manager"},
+    )
+    assert missing_job.status_code == 404
+
+    job_response = client.post(
+        "/api/jobs",
+        json={"title": "Engineer", "company": "Example"},
+    )
+    empty_letter = client.post(
+        f"/api/jobs/{job_response.json()['id']}/cover-letter.pdf",
+        json={"cover_letter": ""},
+    )
+    assert empty_letter.status_code == 422
+    whitespace_letter = client.post(
+        f"/api/jobs/{job_response.json()['id']}/cover-letter.pdf",
+        json={"cover_letter": " \n "},
+    )
+    assert whitespace_letter.status_code == 422
+
+
 def test_duplicate_source_id_and_url():
     body = {
         "title": "Dev",
@@ -108,6 +267,32 @@ def test_duplicate_source_id_and_url():
 
     assert client.post("/api/jobs", json=url_body).status_code == 201
     assert client.post("/api/jobs", json=url_body).status_code == 409
+
+
+def test_jobicy_listing_metadata_is_saved_and_returned():
+    response = client.post(
+        "/api/jobs",
+        json={
+            "title": "Remote Python Engineer",
+            "company": "Example Ltd",
+            "source": "jobicy",
+            "source_job_id": "jobicy-test-123",
+            "url": "https://jobicy.com/jobs/jobicy-test-123",
+            "employment_types": ["Full-Time"],
+            "published_at": "2026-10-27T09:00:00Z",
+            "work_arrangement": "remote",
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["employment_types"] == ["Full-Time"]
+    assert response.json()["published_at"] == "2026-10-27T09:00:00Z"
+
+    saved = client.get("/api/jobs").json()
+    job = next(item for item in saved if item["source_job_id"] == "jobicy-test-123")
+    assert job["source"] == "jobicy"
+    assert job["published_at"] == "2026-10-27T09:00:00Z"
+    assert job["employment_types"] == ["Full-Time"]
 
 
 def set_status(application_id, status, note=None):

@@ -15,10 +15,6 @@ class Settings(BaseSettings):
     openrouter_fallback_models: str = "google/gemini-2.5-flash,openrouter/free"
     openrouter_max_retries: int = 2
 
-    # Adzuna job-search API credentials; kept on the backend only.
-    adzuna_app_id: str = ""
-    adzuna_app_key: str = ""
-
     model_config = SettingsConfigDict(
         env_file=".env",
         extra="ignore",

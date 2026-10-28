@@ -130,6 +130,8 @@ type Job = {
   description: string;
   skills: string[];
   nice_to_have_skills?: string[];
+  employment_types?: string[];
+  published_at?: string | null;
   work_arrangement?: string;
   experience_level?: string;
   match_score: number;
@@ -138,6 +140,55 @@ type Job = {
   match_breakdown?: MatchFactor[];
   feedback?: "" | "not_interested";
   feedback_reason?: string;
+};
+
+type ApplicationPlan = {
+  job_id: string;
+  title: string;
+  company: string;
+  score: number;
+  confidence: "low" | "medium" | "high";
+  fit_summary: string;
+  strengths: string[];
+  gaps: string[];
+  positioning: string[];
+  resume_focus: string[];
+  cover_letter_angle: string;
+  interview_questions: string[];
+};
+
+type ResumeBulletSuggestion = {
+  section: string;
+  source_text: string;
+  tailored_text: string;
+};
+
+type ApplicationMaterials = {
+  job_id: string;
+  title: string;
+  company: string;
+  cover_letter: string;
+  resume_summary: string;
+  skills_to_prioritize: string[];
+  bullet_suggestions: ResumeBulletSuggestion[];
+  caveats: string[];
+};
+
+type ProfileDocument = {
+  full_name: string;
+  email: string;
+  phone: string;
+  location: string;
+  github: string;
+  linkedin: string;
+  portfolio: string;
+  skills: string[];
+  experience_summary: string;
+  work_experience: WorkForm[];
+  projects: ProjectForm[];
+  education: EduForm[];
+  certifications: CertForm[];
+  achievements: string[];
 };
 
 type DiscoveredJob = {
@@ -149,6 +200,8 @@ type DiscoveredJob = {
   description: string;
   skills: string[];
   nice_to_have_skills: string[];
+  employment_types: string[];
+  published_at: string | null;
   work_arrangement: string;
   experience_level: string;
   salary_min: number | null;
@@ -211,11 +264,31 @@ function MatchAnalysis({
   busy,
   onClose,
   onTrack,
+  plan,
+  planLoading,
+  onLoadPlan,
+  materials,
+  materialsLoading,
+  onGenerateMaterials,
+  onUpdateMaterials,
+  onCopyText,
+  onDownloadCoverLetter,
+  onDownloadResume,
 }: {
   job: Job;
   busy: boolean;
   onClose: () => void;
   onTrack: () => void;
+  plan?: ApplicationPlan | null;
+  planLoading?: boolean;
+  onLoadPlan?: () => void;
+  materials?: ApplicationMaterials | null;
+  materialsLoading?: boolean;
+  onGenerateMaterials?: () => void;
+  onUpdateMaterials?: (updates: Partial<ApplicationMaterials>) => void;
+  onCopyText?: (text: string, label: string) => void;
+  onDownloadCoverLetter?: () => void;
+  onDownloadResume?: () => void;
 }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -377,7 +450,226 @@ function MatchAnalysis({
           </p>
         )}
 
+        {plan && (
+          <>
+            <h3>Application prep</h3>
+            <div className="analysis-note" style={{ marginTop: 0 }}>
+              <strong>{plan.score.toFixed(1)}% fit</strong> · {plan.confidence} confidence
+            </div>
+            <p>{plan.fit_summary}</p>
+            {plan.strengths.length > 0 && (
+              <div className="skill-list">
+                {plan.strengths.map((s) => (
+                  <span key={`plan-strength-${s}`} className="matched">
+                    {s}
+                  </span>
+                ))}
+              </div>
+            )}
+            {plan.gaps.length > 0 && (
+              <>
+                <h4>Key gaps</h4>
+                <div className="skill-list">
+                  {plan.gaps.map((s) => (
+                    <span key={`plan-gap-${s}`} className="missing">
+                      Missing: {s}
+                    </span>
+                  ))}
+                </div>
+              </>
+            )}
+            <div className="suggest-grid">
+              <div className="suggest-card">
+                <strong>Positioning</strong>
+                <ul>
+                  {plan.positioning.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+              <div className="suggest-card">
+                <strong>Resume focus</strong>
+                <ul>
+                  {plan.resume_focus.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+            <div className="suggest-card" style={{ marginTop: 12 }}>
+              <strong>Suggested cover-letter angle</strong>
+              <p>{plan.cover_letter_angle}</p>
+            </div>
+            {plan.interview_questions.length > 0 && (
+              <div className="suggest-card" style={{ marginTop: 12 }}>
+                <strong>Interview prep</strong>
+                <ul>
+                  {plan.interview_questions.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </>
+        )}
+
+        <h3>Cover letter and tailored resume drafts</h3>
+        <p className="analysis-note" style={{ marginTop: 0 }}>
+          Drafts use your saved profile and this job posting. The configured AI provider receives
+          those details. Review and edit everything; your PDF is not changed and nothing is sent
+          to an employer.
+        </p>
+        {materials ? (
+          <>
+            <section className="draft-field">
+              <div className="draft-field-head">
+                <label htmlFor={`cover-letter-${job.id}`}>Cover letter</label>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => onCopyText?.(materials.cover_letter, "Cover letter")}
+                >
+                  Copy
+                </button>
+              </div>
+              <textarea
+                id={`cover-letter-${job.id}`}
+                rows={12}
+                value={materials.cover_letter}
+                onChange={(event) =>
+                  onUpdateMaterials?.({ cover_letter: event.target.value })
+                }
+              />
+            </section>
+            <section className="draft-field">
+              <div className="draft-field-head">
+                <label htmlFor={`resume-summary-${job.id}`}>Tailored resume summary</label>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => onCopyText?.(materials.resume_summary, "Resume summary")}
+                >
+                  Copy
+                </button>
+              </div>
+              <textarea
+                id={`resume-summary-${job.id}`}
+                rows={4}
+                value={materials.resume_summary}
+                onChange={(event) =>
+                  onUpdateMaterials?.({ resume_summary: event.target.value })
+                }
+              />
+            </section>
+            {materials.skills_to_prioritize.length > 0 && (
+              <>
+                <h4>Relevant profile skills to emphasize</h4>
+                <div className="skill-list">
+                  {materials.skills_to_prioritize.map((skill) => (
+                    <span key={skill} className="matched">{skill}</span>
+                  ))}
+                </div>
+              </>
+            )}
+            {materials.bullet_suggestions.map((suggestion, index) => {
+              const fieldId = `resume-bullet-${job.id}-${index}`;
+              return (
+                <section className="draft-field" key={`${suggestion.section}-${index}`}>
+                  <div className="draft-field-head">
+                    <label htmlFor={fieldId}>Resume bullet · {suggestion.section}</label>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() =>
+                        onCopyText?.(suggestion.tailored_text, "Resume bullet")
+                      }
+                    >
+                      Copy
+                    </button>
+                  </div>
+                  <small>Based on: {suggestion.source_text}</small>
+                  <textarea
+                    id={fieldId}
+                    rows={3}
+                    value={suggestion.tailored_text}
+                    onChange={(event) => {
+                      const bullet_suggestions = materials.bullet_suggestions.map(
+                        (item, itemIndex) =>
+                          itemIndex === index
+                            ? { ...item, tailored_text: event.target.value }
+                            : item,
+                      );
+                      onUpdateMaterials?.({ bullet_suggestions });
+                    }}
+                  />
+                </section>
+              );
+            })}
+            {materials.caveats.length > 0 && (
+              <div className="analysis-note">
+                <strong>Review before using</strong>
+                <ul>
+                  {materials.caveats.map((caveat) => (
+                    <li key={caveat}>{caveat}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            <div className="draft-export-actions">
+              <button
+                type="button"
+                className="primary-button"
+                onClick={() => onDownloadCoverLetter?.()}
+              >
+                <FileText size={15} /> Download cover letter PDF
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => void onCopyText?.(materials.cover_letter, "Cover letter")}
+              >
+                Copy cover letter
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => onDownloadResume?.()}
+              >
+                <FileText size={15} /> Export tailored resume
+              </button>
+              <small>
+                The cover letter downloads as PDF. The tailored resume export is printable HTML;
+                open it in a browser and choose Print → Save as PDF.
+              </small>
+            </div>
+          </>
+        ) : (
+          <p className="analysis-note">
+            Generate a job-specific cover letter and resume wording from your confirmed profile.
+          </p>
+        )}
+
         <div className="analysis-actions">
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => onLoadPlan?.()}
+            disabled={planLoading || busy}
+          >
+            {planLoading ? "Loading plan..." : plan ? "Refresh plan" : "Build application plan"}
+          </button>
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => onGenerateMaterials?.()}
+            disabled={materialsLoading || busy}
+          >
+            {materialsLoading
+              ? "Generating AI drafts..."
+              : materials
+              ? "Regenerate cover letter and resume drafts"
+              : "Generate cover letter and resume drafts"}
+          </button>
           <button className="primary-button" onClick={onTrack} disabled={busy}>
             Track job
           </button>
@@ -421,6 +713,7 @@ type Application = {
 type Profile = {
   id?: string;
   full_name: string;
+  location?: string;
   target_roles: string[];
   skills: string[];
   experience_summary: string;
@@ -812,16 +1105,6 @@ function App() {
   const [minMatch, setMinMatch] = useState(0);
   const [sourceFilter, setSourceFilter] = useState("all");
   const [sortBy, setSortBy] = useState<"best" | "newest" | "company">("best");
-  const [discoveryCountry, setDiscoveryCountry] = useState("gb");
-  const [discoveryWhat, setDiscoveryWhat] = useState("");
-  const [discoveryWhere, setDiscoveryWhere] = useState("");
-  const [discoveryResults, setDiscoveryResults] = useState<DiscoveredJob[]>([]);
-  const [discoveryPage, setDiscoveryPage] = useState(1);
-  const [discoveryHasMore, setDiscoveryHasMore] = useState(false);
-  const [discoveryBusy, setDiscoveryBusy] = useState(false);
-  const [discoveryMessage, setDiscoveryMessage] = useState("");
-  const [savingDiscoveryId, setSavingDiscoveryId] = useState<string | null>(null);
-
   // Application tracker: board (Kanban) or list, remembered between visits.
   const [trackerView, setTrackerView] = useState<"board" | "list">(() =>
     readSetting("cp-tracker-view", "board", ["board", "list"]),
@@ -834,6 +1117,29 @@ function App() {
   const [draggedAppId, setDraggedAppId] = useState<string | null>(null);
   const [dragOverStatus, setDragOverStatus] = useState<string | null>(null);
   const [showJobForm, setShowJobForm] = useState(false);
+  const [jobSource, setJobSource] = useState<"linkedin" | "jobicy">("linkedin");
+  const [linkedinKeywords, setLinkedinKeywords] = useState("software engineer");
+  const [linkedinLocation, setLinkedinLocation] = useState("Bengaluru, India");
+  const [linkedinWorkArrangement, setLinkedinWorkArrangement] = useState("any");
+  const [linkedinEmploymentType, setLinkedinEmploymentType] = useState("Full-time");
+  const [linkedinExperience, setLinkedinExperience] = useState("any");
+  const [linkedinSalaryMin, setLinkedinSalaryMin] = useState("");
+  const [linkedinSalaryMax, setLinkedinSalaryMax] = useState("");
+  const [linkedinSalaryCurrency, setLinkedinSalaryCurrency] = useState("INR");
+  const [linkedinPostedWithin, setLinkedinPostedWithin] = useState("any");
+  const [linkedinSort, setLinkedinSort] = useState("relevance");
+  const [discoveryWhat, setDiscoveryWhat] = useState("software engineer");
+  const [discoveryWhere, setDiscoveryWhere] = useState("Bengaluru, India");
+  const [discoveryGeo, setDiscoveryGeo] = useState("apac");
+  const [discoveryResults, setDiscoveryResults] = useState<DiscoveredJob[]>([]);
+  const [discoveryPage, setDiscoveryPage] = useState(1);
+  const [discoveryNextCursor, setDiscoveryNextCursor] = useState<string | null>(null);
+  const [discoveryHasMore, setDiscoveryHasMore] = useState(false);
+  const [discoveryBusy, setDiscoveryBusy] = useState(false);
+  const [discoveryMessage, setDiscoveryMessage] = useState("");
+  const [discoveryError, setDiscoveryError] = useState(false);
+  const discoveryRequestId = useRef(0);
+  const [savingDiscoveryId, setSavingDiscoveryId] = useState<string | null>(null);
   const [pasteText, setPasteText] = useState("");
   const [pasteOpen, setPasteOpen] = useState(true);
   const [importing, setImporting] = useState(false);
@@ -876,6 +1182,12 @@ function App() {
   const [fillingId, setFillingId] = useState<string | null>(null);
 
   const [analysisJob, setAnalysisJob] = useState<Job | null>(null);
+  const [analysisPlan, setAnalysisPlan] = useState<Record<string, ApplicationPlan>>({});
+  const [analysisPlanLoading, setAnalysisPlanLoading] = useState(false);
+  const [analysisMaterials, setAnalysisMaterials] = useState<
+    Record<string, ApplicationMaterials>
+  >({});
+  const [materialsLoadingId, setMaterialsLoadingId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [chat, setChat] = useState<ChatMessage[]>([
     {
@@ -995,36 +1307,97 @@ function App() {
     }
   }
 
-  async function searchAdzuna(page = 1) {
+  function clearDiscoveryResults() {
+    discoveryRequestId.current += 1;
+    setDiscoveryBusy(false);
+    setDiscoveryResults([]);
+    setDiscoveryPage(1);
+    setDiscoveryNextCursor(null);
+    setDiscoveryHasMore(false);
+    setDiscoveryMessage("");
+    setDiscoveryError(false);
+  }
+
+  async function searchJobicy(cursor: string | null = null, pageNumber = 1) {
+    const requestId = ++discoveryRequestId.current;
     setDiscoveryBusy(true);
     setDiscoveryMessage("");
+    setDiscoveryError(false);
     try {
       const params = new URLSearchParams({
         what: discoveryWhat.trim(),
         where: discoveryWhere.trim(),
-        country: discoveryCountry.trim().toLowerCase(),
-        page: String(page),
+        geo: discoveryGeo,
       });
+      if (cursor) params.set("cursor", cursor);
       const response = await fetch(`${API}/api/jobs/discover?${params}`);
       const data = await response.json().catch(() => null);
       if (!response.ok) {
-        throw new Error(errorText(data, `Adzuna search failed (HTTP ${response.status}).`));
+        throw new Error(errorText(data, `Job search failed (HTTP ${response.status}).`));
       }
-      if (!Array.isArray(data?.results) || typeof data?.page !== "number") {
-        throw new Error("Adzuna returned an invalid search response.");
+      if (
+        !Array.isArray(data?.results) ||
+        typeof data?.has_more !== "boolean" ||
+        typeof data?.geo !== "string"
+      ) {
+        throw new Error("Jobicy returned an invalid search response.");
       }
+      if (requestId !== discoveryRequestId.current) return;
       setDiscoveryResults(data.results);
-      setDiscoveryPage(data.page);
-      setDiscoveryHasMore(Boolean(data.has_more));
+      setDiscoveryPage(pageNumber);
+      setDiscoveryHasMore(data.has_more);
+      setDiscoveryNextCursor(
+        typeof data.next_cursor === "string" ? data.next_cursor : null,
+      );
       if (data.results.length === 0) {
-        setDiscoveryMessage(page > 1 ? "No more listings on this page." : "No listings matched that search.");
+        setDiscoveryMessage(
+          data.has_more
+            ? "No listings on this page match that location. Try the next page or broaden the location."
+            : "No recent listings matched those search criteria.",
+        );
       }
     } catch (e) {
+      if (requestId !== discoveryRequestId.current) return;
       setDiscoveryResults([]);
       setDiscoveryHasMore(false);
-      setDiscoveryMessage(e instanceof Error ? e.message : "Could not search Adzuna.");
+      setDiscoveryNextCursor(null);
+      setDiscoveryError(true);
+      setDiscoveryMessage(e instanceof Error ? e.message : "Could not search Jobicy.");
     } finally {
-      setDiscoveryBusy(false);
+      if (requestId === discoveryRequestId.current) {
+        setDiscoveryBusy(false);
+      }
+    }
+  }
+
+  function useProfileForLinkedInSearch() {
+    const roles = (profile?.target_roles ?? []).map((role) => role.trim()).filter(Boolean);
+    const skills = (profile?.skills ?? []).map((skill) => skill.trim()).filter(Boolean);
+    const suggestedKeywords = roles.length
+      ? roles.slice(0, 3).join(" OR ")
+      : skills.slice(0, 5).join(" ");
+
+    if (suggestedKeywords) setLinkedinKeywords(suggestedKeywords);
+    setLinkedinLocation(
+      preferencesForm.locations.trim() ||
+        profile?.location?.trim() ||
+        "Bengaluru, India",
+    );
+
+    if (preferencesForm.work_arrangements.length === 1) {
+      setLinkedinWorkArrangement(preferencesForm.work_arrangements[0]);
+    }
+
+    if (preferencesForm.experience_level === "intern") {
+      setLinkedinExperience("internship");
+    } else if (preferencesForm.experience_level === "entry") {
+      setLinkedinExperience("entry");
+    }
+
+    setLinkedinSalaryMin(preferencesForm.salary_min);
+    setLinkedinSalaryMax(preferencesForm.salary_max);
+    if (preferencesForm.salary_currency) {
+      setLinkedinSalaryCurrency(preferencesForm.salary_currency);
     }
   }
 
@@ -1039,12 +1412,14 @@ function App() {
           title: job.title,
           company: job.company,
           location: job.location,
-          source: "adzuna",
+          source: "jobicy",
           source_job_id: job.source_job_id,
           url: job.url,
           description: job.description,
           skills: job.skills,
           nice_to_have_skills: job.nice_to_have_skills,
+          employment_types: job.employment_types,
+          published_at: job.published_at,
           work_arrangement: job.work_arrangement,
           experience_level: job.experience_level,
           salary_min: job.salary_min,
@@ -1055,7 +1430,7 @@ function App() {
       });
       const data = await response.json().catch(() => null);
       if (response.status === 409) {
-        setDiscoveryMessage("This Adzuna listing is already saved.");
+        setDiscoveryMessage("This Jobicy listing is already saved.");
         return;
       }
       if (!response.ok) {
@@ -1063,7 +1438,7 @@ function App() {
       }
       setJobs((current) => [data, ...current.filter((saved) => saved.id !== data.id)]);
       setNotice(`Saved ${job.title} and calculated its match score.`);
-      setDiscoveryMessage("Listing saved to Find jobs.");
+      setDiscoveryMessage("Listing saved to Find Jobs.");
     } catch (e) {
       setDiscoveryMessage(e instanceof Error ? e.message : "Could not save this listing.");
     } finally {
@@ -1847,7 +2222,7 @@ function App() {
     jobs: {
       eyebrow: "FIND JOBS",
       title: "Find jobs",
-      sub: "Search your saved jobs and rank them against your profile.",
+      sub: "Discover, match, and save opportunities.",
     },
     applications: {
       eyebrow: "YOUR PIPELINE",
@@ -1882,6 +2257,330 @@ function App() {
 
   const scoreClass = (score: number) =>
     score >= 70 ? "high" : score >= 40 ? "mid" : "low";
+
+  const activeSavedFilterCount = [
+    statusFilter !== "all",
+    minMatch > 0,
+    sourceFilter !== "all",
+    sortBy !== "best",
+  ].filter(Boolean).length;
+
+  async function loadApplicationPlan(job: Job, force = false) {
+    const cached = analysisPlan[job.id];
+    if (!force && cached) return cached;
+
+    setAnalysisPlanLoading(true);
+    try {
+      const response = await fetch(`${API}/api/jobs/${job.id}/application-plan`);
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(errorText(data, "Could not build the application plan."));
+      }
+      const plan = data as ApplicationPlan;
+      setAnalysisPlan((current) => ({ ...current, [job.id]: plan }));
+      return plan;
+    } catch (e) {
+      setNotice(
+        e instanceof Error ? e.message : "Could not build the application plan.",
+      );
+      return null;
+    } finally {
+      setAnalysisPlanLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!analysisJob) return;
+    void loadApplicationPlan(analysisJob);
+  }, [analysisJob?.id]);
+
+  async function generateApplicationMaterials(job: Job) {
+    setMaterialsLoadingId(job.id);
+    setNotice("");
+    try {
+      const response = await fetch(
+        `${API}/api/jobs/${job.id}/application-materials`,
+        { method: "POST" },
+      );
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(errorText(data, "Could not generate application drafts."));
+      }
+      if (
+        typeof data?.cover_letter !== "string" ||
+        typeof data?.resume_summary !== "string" ||
+        !Array.isArray(data?.bullet_suggestions)
+      ) {
+        throw new Error("The API returned an invalid application-draft response.");
+      }
+      setAnalysisMaterials((current) => ({ ...current, [job.id]: data }));
+    } catch (e) {
+      setNotice(
+        e instanceof Error ? e.message : "Could not generate application drafts.",
+      );
+    } finally {
+      setMaterialsLoadingId(null);
+    }
+  }
+
+  function updateApplicationMaterials(
+    jobId: string,
+    updates: Partial<ApplicationMaterials>,
+  ) {
+    setAnalysisMaterials((current) => {
+      const existing = current[jobId];
+      return existing
+        ? { ...current, [jobId]: { ...existing, ...updates } }
+        : current;
+    });
+  }
+
+  async function copyGeneratedText(text: string, label: string) {
+    if (!navigator.clipboard?.writeText) {
+      setNotice("Clipboard access is unavailable. Select the draft text and copy it manually.");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      setNotice(`${label} copied to clipboard.`);
+    } catch {
+      setNotice("Could not access the clipboard. Select the draft text and copy it manually.");
+    }
+  }
+
+  async function downloadCoverLetterPdf(
+    job: Job,
+    materials: ApplicationMaterials,
+  ) {
+    try {
+      const response = await fetch(
+        `${API}/api/jobs/${job.id}/cover-letter.pdf`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cover_letter: materials.cover_letter }),
+        },
+      );
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        throw new Error(errorText(data, "Could not download the cover-letter PDF."));
+      }
+
+      const pdf = await response.blob();
+      if (pdf.type !== "application/pdf") {
+        throw new Error("The API returned an invalid cover-letter document.");
+      }
+      const objectUrl = URL.createObjectURL(pdf);
+      const link = document.createElement("a");
+      const filename = `${job.title} - ${job.company} - cover letter.pdf`
+        .replace(/[<>:"/\\|?*\u0000-\u001F]/g, "-")
+        .slice(0, 150);
+      link.href = objectUrl;
+      link.download = filename || "cover-letter.pdf";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+      setNotice("Cover-letter PDF downloaded.");
+    } catch (e) {
+      setNotice(
+        e instanceof Error ? e.message : "Could not download the cover-letter PDF.",
+      );
+    }
+  }
+
+  async function downloadTailoredResume(
+    job: Job,
+    materials: ApplicationMaterials,
+  ) {
+    try {
+      const response = await fetch(`${API}/api/profile`);
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(errorText(data, "Could not load your saved profile."));
+      }
+
+      const entries = (value: unknown): Record<string, unknown>[] =>
+        Array.isArray(value)
+          ? value.filter(
+              (item): item is Record<string, unknown> =>
+                typeof item === "object" && item !== null,
+            )
+          : [];
+      const profile: ProfileDocument = {
+        full_name: asText(data?.full_name),
+        email: asText(data?.email),
+        phone: asText(data?.phone),
+        location: asText(data?.location),
+        github: asText(data?.github),
+        linkedin: asText(data?.linkedin),
+        portfolio: asText(data?.portfolio),
+        skills: asList(data?.skills),
+        experience_summary: asText(data?.experience_summary),
+        work_experience: entries(data?.work_experience).map((item) => ({
+          title: asText(item.title),
+          company: asText(item.company),
+          duration: asText(item.duration),
+          location: asText(item.location),
+          description: asText(item.description),
+        })),
+        projects: entries(data?.projects).map((item) => ({
+          name: asText(item.name),
+          role: asText(item.role),
+          duration: asText(item.duration),
+          technologies: asInline(item.technologies),
+          description: asText(item.description),
+        })),
+        education: entries(data?.education).map((item) => ({
+          institution: asText(item.institution),
+          degree: asText(item.degree),
+          duration: asText(item.duration),
+          grade: asText(item.grade),
+        })),
+        certifications: entries(data?.certifications).map((item) => ({
+          name: asText(item.name),
+          issuer: asText(item.issuer),
+        })),
+        achievements: asList(data?.achievements),
+      };
+
+      if (!profile.full_name) {
+        throw new Error("Add your name to your saved profile before exporting a resume.");
+      }
+
+      let staleSuggestions = 0;
+      const tailoredDescription = (section: string, original: string) =>
+        materials.bullet_suggestions
+          .filter((suggestion) => suggestion.section === section)
+          .reduce((description, suggestion) => {
+            if (!description.includes(suggestion.source_text)) {
+              staleSuggestions += 1;
+              return description;
+            }
+            return description.replace(
+              suggestion.source_text,
+              suggestion.tailored_text,
+            );
+          }, original);
+
+      const escapeHtml = (value: string) =>
+        value.replace(/[&<>"']/g, (char) => {
+          const entities: Record<string, string> = {
+            "&": "&amp;",
+            "<": "&lt;",
+            ">": "&gt;",
+            '"': "&quot;",
+            "'": "&#39;",
+          };
+          return entities[char];
+        });
+      const lines = (text: string) =>
+        text
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .map((line) => `<li>${escapeHtml(line)}</li>`)
+          .join("");
+      const section = (title: string, body: string) =>
+        body ? `<section><h2>${escapeHtml(title)}</h2>${body}</section>` : "";
+
+      const contacts = [
+        profile.email,
+        profile.phone,
+        profile.location,
+        profile.linkedin,
+        profile.github,
+        profile.portfolio,
+      ]
+        .filter(Boolean)
+        .map(escapeHtml)
+        .join(" <span>·</span> ");
+      const prioritized = new Set(
+        materials.skills_to_prioritize.map((skill) => skill.toLocaleLowerCase()),
+      );
+      const orderedSkills = [
+        ...profile.skills.filter((skill) => prioritized.has(skill.toLocaleLowerCase())),
+        ...profile.skills.filter((skill) => !prioritized.has(skill.toLocaleLowerCase())),
+      ];
+
+      const experience = profile.work_experience
+        .map((item) => {
+          const name = `${item.title} at ${item.company}`;
+          const description = tailoredDescription(name, item.description);
+          return `<article><div class="entry-head"><strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(item.duration)}</span></div><div class="subhead">${escapeHtml(item.company)}${item.location ? ` · ${escapeHtml(item.location)}` : ""}</div>${description ? `<ul>${lines(description)}</ul>` : ""}</article>`;
+        })
+        .join("");
+      const projects = profile.projects
+        .map((item) => {
+          const description = tailoredDescription(
+            `${item.name} project`,
+            item.description,
+          );
+          return `<article><div class="entry-head"><strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(item.duration)}</span></div>${item.role ? `<div class="subhead">${escapeHtml(item.role)}</div>` : ""}${item.technologies ? `<p>${escapeHtml(item.technologies)}</p>` : ""}${description ? `<ul>${lines(description)}</ul>` : ""}</article>`;
+        })
+        .join("");
+      const education = profile.education
+        .map(
+          (item) =>
+            `<article><div class="entry-head"><strong>${escapeHtml(item.degree)}</strong><span>${escapeHtml(item.duration)}</span></div><div class="subhead">${escapeHtml(item.institution)}${item.grade ? ` · ${escapeHtml(item.grade)}` : ""}</div></article>`,
+        )
+        .join("");
+      const certifications = profile.certifications
+        .map(
+          (item) =>
+            `<li>${escapeHtml(item.name)}${item.issuer ? ` — ${escapeHtml(item.issuer)}` : ""}</li>`,
+        )
+        .join("");
+
+      const html = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${escapeHtml(profile.full_name)} - Resume for ${escapeHtml(job.title)}</title>
+<style>
+*{box-sizing:border-box}body{max-width:850px;margin:32px auto;padding:0 40px;color:#1b2430;font:10.5pt/1.45 Arial,sans-serif}
+h1{margin:0;font-size:25pt}header{text-align:center;border-bottom:2px solid #263b55;padding:0 0 14px}
+.target{margin:4px 0;font-size:12pt;color:#344a62}.contact{font-size:9pt;color:#48576a}
+section{margin-top:17px}h2{font-size:11pt;text-transform:uppercase;letter-spacing:.08em;border-bottom:1px solid #b9c3cf;padding-bottom:4px;margin:0 0 8px}
+p{margin:5px 0}article{margin:0 0 10px}.entry-head{display:flex;justify-content:space-between;gap:14px}.entry-head span{white-space:nowrap;color:#526174}.subhead{color:#344a62}
+ul{margin:4px 0 0;padding-left:19px}li{margin:2px 0}.skills{line-height:1.6}
+.print{position:fixed;top:14px;right:14px;padding:9px 13px;border:0;border-radius:6px;background:#283f5b;color:white;cursor:pointer}
+@media print{body{max-width:none;margin:0;padding:0;font-size:10pt}.print{display:none}section{break-inside:avoid}article{break-inside:avoid}}
+@media(max-width:600px){body{margin:20px auto;padding:0 18px}.entry-head{display:block}}
+</style></head>
+<body><button class="print" onclick="window.print()">Print / Save as PDF</button>
+<header><h1>${escapeHtml(profile.full_name)}</h1><p class="target">${escapeHtml(job.title)} · ${escapeHtml(job.company)}</p><p class="contact">${contacts}</p></header>
+${section("Professional Summary", `<p>${escapeHtml(materials.resume_summary)}</p>`)}
+${section("Skills", `<p class="skills">${orderedSkills.map(escapeHtml).join(" · ")}</p>`)}
+${section("Work Experience", experience)}
+${section("Projects", projects)}
+${section("Education", education)}
+${section("Certifications", certifications ? `<ul>${certifications}</ul>` : "")}
+${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.achievements.join("\n"))}</ul>` : "")}
+</body></html>`;
+
+      const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      const filename = `${profile.full_name}-${job.company}-${job.title}`
+        .normalize("NFKD")
+        .replace(/[^a-zA-Z0-9]+/g, "-")
+        .replace(/^-|-$/g, "")
+        .slice(0, 100);
+      link.href = url;
+      link.download = `${filename || "tailored-resume"}.html`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+
+      setNotice(
+        staleSuggestions
+          ? `Tailored resume downloaded. ${staleSuggestions} suggestion(s) were skipped because the saved profile changed; open the HTML file and choose Print / Save as PDF.`
+          : "Tailored resume downloaded. Open the HTML file in a browser and choose Print / Save as PDF.",
+      );
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message : "Could not export the tailored resume.");
+    }
+  }
 
   // ---- Career Copilot: quick answers built from the data already in the app.
   // No AI model is called here; every answer is computed from saved jobs,
@@ -2051,6 +2750,12 @@ function App() {
             )}
             {job.work_arrangement && <span>{job.work_arrangement}</span>}
             {job.experience_level && <span>{job.experience_level}</span>}
+            {(job.employment_types ?? []).map((type) => (
+              <span key={type}>{type}</span>
+            ))}
+            {job.published_at && !Number.isNaN(new Date(job.published_at).getTime()) && (
+              <span>Posted {new Date(job.published_at).toLocaleDateString()}</span>
+            )}
             <span>Source: {job.source}</span>
           </div>
 
@@ -2607,29 +3312,248 @@ function App() {
         )}
 
         {page === "jobs" && (
-          <div className="page-view">
-            <section className="panel search-card">
-              <div className="panel-head">
+          <div className="page-view jobs-page">
+            <section className="job-source-card" aria-label="Job source">
+              <div className="job-source-heading">
+                <span className="job-source-icon">
+                  <BriefcaseBusiness size={18} />
+                </span>
                 <div>
-                  <h2>Search live Adzuna listings</h2>
-                  <p>
-                    Results are fetched live and are not saved until you choose Save job.
-                    Descriptions are provider snippets.
-                  </p>
+                  <h2>Job source</h2>
+                  <p>Choose where you want to search for jobs.</p>
+                </div>
+              </div>
+              <div className="job-source-options" role="group" aria-label="Job source">
+                <button
+                  type="button"
+                  className={`job-source-option ${jobSource === "linkedin" ? "selected" : ""}`}
+                  aria-pressed={jobSource === "linkedin"}
+                  onClick={() => setJobSource("linkedin")}
+                >
+                  <span className="source-option-title">
+                    <span className="source-brand-icon linkedin-brand">in</span>
+                    LinkedIn
+                    {jobSource === "linkedin" && <ArrowUpRight size={14} />}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className={`job-source-option ${jobSource === "jobicy" ? "selected" : ""}`}
+                  aria-pressed={jobSource === "jobicy"}
+                  onClick={() => setJobSource("jobicy")}
+                >
+                  <span className="source-option-title">
+                    <span className="source-brand-icon jobicy-brand">J</span>
+                    Jobicy
+                    {jobSource === "jobicy" && <CheckCircle2 size={14} />}
+                  </span>
+                </button>
+                <div className="more-sources-note" aria-label="Two connected sources">
+                  2 connected sources
+                </div>
+              </div>
+            </section>
+
+            {jobSource === "linkedin" ? (
+            <>
+            <section className="panel search-card linkedin-search-card">
+              <div className="panel-head criteria-panel-head">
+                <div>
+                  <h2>Search criteria</h2>
+                  <p>Set your preferences to find the right jobs.</p>
+                </div>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={useProfileForLinkedInSearch}
+                  disabled={!profile || (!profile.target_roles.length && !profile.skills.length)}
+                >
+                  Use my profile
+                </button>
+              </div>
+
+              <div className="search-criteria-grid linkedin-criteria-grid">
+                <label>
+                  Job title or keywords
+                  <input
+                    value={linkedinKeywords}
+                    onChange={(event) => setLinkedinKeywords(event.target.value)}
+                    placeholder="e.g. Frontend Developer OR React"
+                    maxLength={300}
+                  />
+                </label>
+                <label>
+                  Country and city
+                  <input
+                    value={linkedinLocation}
+                    onChange={(event) => setLinkedinLocation(event.target.value)}
+                    placeholder="e.g. Bengaluru, India"
+                    maxLength={150}
+                  />
+                </label>
+                <label>
+                  Work arrangement
+                  <select
+                    value={linkedinWorkArrangement}
+                    onChange={(event) => setLinkedinWorkArrangement(event.target.value)}
+                  >
+                    <option value="any">Any</option>
+                    <option value="remote">Remote</option>
+                    <option value="hybrid">Hybrid</option>
+                    <option value="onsite">On-site</option>
+                  </select>
+                </label>
+                <label>
+                  Employment type
+                  <select
+                    value={linkedinEmploymentType}
+                    onChange={(event) => setLinkedinEmploymentType(event.target.value)}
+                  >
+                    <option>Any</option>
+                    <option>Full-time</option>
+                    <option>Part-time</option>
+                    <option>Internship</option>
+                    <option>Contract</option>
+                    <option>Temporary</option>
+                  </select>
+                </label>
+                <label>
+                  Experience level
+                  <select
+                    value={linkedinExperience}
+                    onChange={(event) => setLinkedinExperience(event.target.value)}
+                  >
+                    <option value="any">Any</option>
+                    <option value="internship">Internship</option>
+                    <option value="entry">Entry level / fresher</option>
+                    <option value="associate">Associate</option>
+                    <option value="mid-senior">Mid-Senior</option>
+                    <option value="director">Director</option>
+                    <option value="executive">Executive</option>
+                  </select>
+                </label>
+                <label className="salary-range-field">
+                  Salary range
+                  <span className="salary-range-inputs">
+                    <input
+                      type="number"
+                      min="0"
+                      value={linkedinSalaryMin}
+                      onChange={(event) => setLinkedinSalaryMin(event.target.value)}
+                      placeholder="Min"
+                      aria-label="Minimum salary"
+                    />
+                    <span aria-hidden="true">–</span>
+                    <input
+                      type="number"
+                      min="0"
+                      value={linkedinSalaryMax}
+                      onChange={(event) => setLinkedinSalaryMax(event.target.value)}
+                      placeholder="Max"
+                      aria-label="Maximum salary"
+                    />
+                    <input
+                      className="salary-currency-input"
+                      value={linkedinSalaryCurrency}
+                      onChange={(event) =>
+                        setLinkedinSalaryCurrency(event.target.value.toUpperCase())
+                      }
+                      maxLength={3}
+                      aria-label="Salary currency"
+                    />
+                  </span>
+                </label>
+                <label>
+                  Posted within
+                  <select
+                    value={linkedinPostedWithin}
+                    onChange={(event) => setLinkedinPostedWithin(event.target.value)}
+                  >
+                    <option value="any">Any time</option>
+                    <option value="24-hours">Past 24 hours</option>
+                    <option value="week">Past week</option>
+                    <option value="month">Past month</option>
+                  </select>
+                </label>
+                <label>
+                  Sort by
+                  <select
+                    value={linkedinSort}
+                    onChange={(event) => setLinkedinSort(event.target.value)}
+                  >
+                    <option value="relevance">Relevance</option>
+                    <option value="newest">Newest</option>
+                  </select>
+                </label>
+                <div className="criteria-search-action">
+                  <a
+                    className="primary-button"
+                    href={`https://www.linkedin.com/jobs/search/?keywords=${encodeURIComponent(
+                      linkedinKeywords.trim(),
+                    )}&location=${encodeURIComponent(linkedinLocation.trim())}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    Search LinkedIn jobs <ArrowUpRight size={14} />
+                  </a>
+                  <small>
+                    This opens LinkedIn’s search. CareerPilot does not fetch or store LinkedIn listings.
+                  </small>
+                </div>
+              </div>
+
+              {profile && (profile.target_roles.length > 0 || profile.skills.length > 0) ? (
+                <small>
+                  Profile suggestions use only your saved target roles and skills; no
+                  qualifications are generated.
+                </small>
+              ) : (
+                <>
+                  <small>
+                    Add and save your confirmed target roles or skills in My Profile to
+                    use profile-based suggestions. You can still edit the criteria and
+                    search LinkedIn now.
+                  </small>
+                  <div className="row" style={{ marginTop: 8 }}>
+                    <button
+                      className="link-button"
+                      type="button"
+                      onClick={() => openProfile("profile-career")}
+                    >
+                      Review My Profile
+                    </button>
+                  </div>
+                </>
+              )}
+
+              <small className="criteria-disclaimer">
+                LinkedIn receives only your keywords and location. Other filters must be applied on LinkedIn if available; your resume is not sent.
+              </small>
+            </section>
+            </>
+            ) : (
+            <section className="panel search-card jobicy-search-card">
+              <div className="panel-head criteria-panel-head">
+                <div>
+                  <h2>Search criteria</h2>
+                  <p>Search recent public remote listings from Jobicy.</p>
                 </div>
               </div>
               <form
-                className="filter-bar"
+                className="search-criteria-grid jobicy-criteria-grid"
                 onSubmit={(event) => {
                   event.preventDefault();
-                  void searchAdzuna(1);
+                  void searchJobicy();
                 }}
               >
                 <label>
                   Keywords
                   <input
                     value={discoveryWhat}
-                    onChange={(event) => setDiscoveryWhat(event.target.value)}
+                    onChange={(event) => {
+                      setDiscoveryWhat(event.target.value);
+                      clearDiscoveryResults();
+                    }}
                     placeholder="e.g. software engineer"
                     minLength={2}
                     maxLength={100}
@@ -2637,50 +3561,82 @@ function App() {
                   />
                 </label>
                 <label>
-                  Location
+                  Location eligibility
                   <input
                     value={discoveryWhere}
-                    onChange={(event) => setDiscoveryWhere(event.target.value)}
-                    placeholder="Optional, e.g. London"
+                    onChange={(event) => {
+                      setDiscoveryWhere(event.target.value);
+                      clearDiscoveryResults();
+                    }}
+                    placeholder="e.g. Bengaluru, India"
                     maxLength={100}
                   />
                 </label>
                 <label>
-                  Country code
-                  <input
-                    value={discoveryCountry}
-                    onChange={(event) => setDiscoveryCountry(event.target.value)}
-                    pattern="[a-zA-Z]{2}"
-                    maxLength={2}
-                    aria-label="Two-letter Adzuna country code"
-                    title="Enter a two-letter Adzuna country code. The documented example is gb."
-                    required
-                  />
+                  Region
+                  <select
+                    value={discoveryGeo}
+                    onChange={(event) => {
+                      setDiscoveryGeo(event.target.value);
+                      clearDiscoveryResults();
+                    }}
+                  >
+                    <option value="apac">Asia-Pacific</option>
+                    <option value="europe">Europe</option>
+                    <option value="usa">USA</option>
+                    <option value="canada">Canada</option>
+                    <option value="uk">United Kingdom</option>
+                  </select>
                 </label>
                 <button className="primary-button" type="submit" disabled={discoveryBusy}>
-                  {discoveryBusy ? "Searching..." : "Search Adzuna"}
+                  {discoveryBusy ? "Searching..." : "Search Jobicy"}
                 </button>
               </form>
-              <small>
-                The API docs demonstrate <code>gb</code>; India availability and the
-                corresponding country code have not yet been verified.
+              <small className="source-disclaimer">
+                Jobicy supplies remote listings and broad region filters; it does not
+                offer an India- or city-specific filter. Location is matched locally
+                against the eligibility text provided by the source. Results link to
+                Jobicy, as required by its public API terms.
               </small>
+              {discoveryBusy && (
+                <p className="source-loading" role="status" aria-live="polite">
+                  Searching recent Jobicy listings…
+                </p>
+              )}
               {discoveryMessage && (
-                <p className="import-message" role="status">{discoveryMessage}</p>
+                <div className={discoveryError ? "source-feedback error" : "source-feedback"} role={discoveryError ? "alert" : "status"}>
+                  <span>{discoveryMessage}</span>
+                  {discoveryError && (
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => void searchJobicy()}
+                      disabled={discoveryBusy}
+                    >
+                      Try again
+                    </button>
+                  )}
+                </div>
               )}
               {discoveryResults.length > 0 && (
                 <>
-                  <p className="reason">
-                    Page {discoveryPage} · {discoveryResults.length} live listing
-                    {discoveryResults.length === 1 ? "" : "s"}
-                  </p>
-                  <section className="jobs-list">
+                  <div className="source-results-heading">
+                    <h3>Jobicy results</h3>
+                    <span>
+                      Page {discoveryPage} · {discoveryResults.length} listing
+                      {discoveryResults.length === 1 ? "" : "s"}
+                    </span>
+                  </div>
+                  <section className="jobs-list jobicy-results">
                     {discoveryResults.map((job) => {
                       const saved = jobs.some(
                         (existing) =>
-                          existing.source === "adzuna" &&
+                          existing.source === "jobicy" &&
                           existing.source_job_id === job.source_job_id,
                       );
+                      const publishedDate = job.published_at
+                        ? new Date(job.published_at)
+                        : null;
                       return (
                         <article className="job-card" key={job.source_job_id}>
                           <div className="company-logo">
@@ -2690,9 +3646,32 @@ function App() {
                             <h3>{job.title}</h3>
                             <p>
                               {job.company}
-                              {job.location ? ` · ${job.location}` : ""}
+                              {job.location ? ` · Remote eligibility: ${job.location}` : ""}
                             </p>
-                            {job.description && <p>{job.description}</p>}
+                            <div className="job-meta">
+                              <span>Remote</span>
+                              {job.work_arrangement && <span>{job.work_arrangement}</span>}
+                              {job.employment_types.map((type) => (
+                                <span key={type}>{type}</span>
+                              ))}
+                              {job.experience_level && <span>{job.experience_level}</span>}
+                              {(job.salary_min != null || job.salary_max != null) && (
+                                <span>
+                                  Salary: {job.salary_currency ? `${job.salary_currency} ` : ""}
+                                  {job.salary_min != null ? job.salary_min.toLocaleString() : "—"}
+                                  {"–"}
+                                  {job.salary_max != null ? job.salary_max.toLocaleString() : "—"}
+                                  {" / "}
+                                  {job.salary_period}
+                                </span>
+                              )}
+                              {publishedDate && !Number.isNaN(publishedDate.getTime()) && (
+                                <span>Posted {publishedDate.toLocaleDateString()}</span>
+                              )}
+                            </div>
+                            {job.description && (
+                              <p>{job.description.slice(0, 900)}</p>
+                            )}
                             {job.skills.length > 0 && (
                               <div className="skill-list">
                                 {job.skills.slice(0, 6).map((skill) => (
@@ -2700,21 +3679,7 @@ function App() {
                                 ))}
                               </div>
                             )}
-                            <a
-                              href={job.url}
-                              target="_blank"
-                              rel="noreferrer"
-                              style={{
-                                display: "inline-flex",
-                                width: 116,
-                                height: 23,
-                                alignItems: "center",
-                                justifyContent: "center",
-                                fontWeight: 700,
-                              }}
-                            >
-                              Adzuna
-                            </a>
+                            <small className="source-attribution">Source: Jobicy</small>
                           </div>
                           <div className="job-actions">
                             <button
@@ -2735,7 +3700,7 @@ function App() {
                               rel="noreferrer"
                               className="secondary-button"
                             >
-                              Open listing <ArrowUpRight size={14} />
+                              Original posting <ArrowUpRight size={14} />
                             </a>
                           </div>
                         </article>
@@ -2744,29 +3709,35 @@ function App() {
                   </section>
                 </>
               )}
-              {(discoveryResults.length > 0 || discoveryPage > 1) && (
+              {discoveryHasMore && discoveryNextCursor && (
                 <div className="row" style={{ justifyContent: "center", marginTop: 16 }}>
                   <button
                     className="secondary-button"
                     type="button"
-                    disabled={discoveryBusy || discoveryPage <= 1}
-                    onClick={() => void searchAdzuna(discoveryPage - 1)}
+                    disabled={discoveryBusy}
+                    onClick={() =>
+                      void searchJobicy(discoveryNextCursor, discoveryPage + 1)
+                    }
                   >
-                    Previous page
-                  </button>
-                  <button
-                    className="secondary-button"
-                    type="button"
-                    disabled={discoveryBusy || !discoveryHasMore || discoveryPage >= 100}
-                    onClick={() => void searchAdzuna(discoveryPage + 1)}
-                  >
-                    Next page
+                    {discoveryBusy ? "Loading..." : "Next page"}
                   </button>
                 </div>
               )}
             </section>
+            )}
 
-            <section className="panel search-card">
+            <section className="panel search-card saved-matches-card">
+              <div className="job-results-heading">
+                <div>
+                  <h2><Sparkles size={18} /> Job matches</h2>
+                  <p>
+                    {visibleJobs.length} saved job{visibleJobs.length === 1 ? "" : "s"} matching your profile and preferences
+                    {activeSavedFilterCount ? ` · ${activeSavedFilterCount} filter${activeSavedFilterCount === 1 ? "" : "s"} active` : ""}
+                  </p>
+                </div>
+                <span className="match-count-badge">{visibleJobs.length}</span>
+              </div>
+              <div className="saved-job-search-controls">
               <label className="searchbox">
                 <Search size={18} />
                 <input
@@ -2777,55 +3748,63 @@ function App() {
                 />
               </label>
 
-              <div className="filter-bar">
-                <label>
-                  Status
-                  <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-                    <option value="all">All</option>
-                    <option value="none">Not tracked</option>
-                    {Object.entries(STATUS_LABELS).map(([value, label]) => (
-                      <option key={value} value={value}>
-                        {label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+              <details className="advanced-filters saved-job-filters">
+                <summary>
+                  Filters and sorting
+                  {activeSavedFilterCount > 0 && (
+                    <span className="filter-count">{activeSavedFilterCount} active</span>
+                  )}
+                </summary>
+                <div className="filter-bar">
+                  <label>
+                    Status
+                    <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+                      <option value="all">All</option>
+                      <option value="none">Not tracked</option>
+                      {Object.entries(STATUS_LABELS).map(([value, label]) => (
+                        <option key={value} value={value}>
+                          {label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
 
-                <label>
-                  Min match
-                  <select value={minMatch} onChange={(e) => setMinMatch(Number(e.target.value))}>
-                    <option value={0}>Any</option>
-                    <option value={25}>25%+</option>
-                    <option value={50}>50%+</option>
-                    <option value={75}>75%+</option>
-                  </select>
-                </label>
+                  <label>
+                    Min match
+                    <select value={minMatch} onChange={(e) => setMinMatch(Number(e.target.value))}>
+                      <option value={0}>Any</option>
+                      <option value={25}>25%+</option>
+                      <option value={50}>50%+</option>
+                      <option value={75}>75%+</option>
+                    </select>
+                  </label>
 
-                <label>
-                  Source
-                  <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)}>
-                    <option value="all">All</option>
-                    {sources.map((src) => (
-                      <option key={src} value={src}>
-                        {src}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                  <label>
+                    Source
+                    <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)}>
+                      <option value="all">All</option>
+                      {sources.map((src) => (
+                        <option key={src} value={src}>
+                          {src}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
 
-                <label>
-                  Sort by
-                  <select
-                    value={sortBy}
-                    onChange={(e) => setSortBy(e.target.value as "best" | "newest" | "company")}
-                  >
-                    <option value="best">Best match</option>
-                    <option value="newest">Newest</option>
-                    <option value="company">Company</option>
-                  </select>
-                </label>
+                  <label>
+                    Sort by
+                    <select
+                      value={sortBy}
+                      onChange={(e) => setSortBy(e.target.value as "best" | "newest" | "company")}
+                    >
+                      <option value="best">Best match</option>
+                      <option value="newest">Newest</option>
+                      <option value="company">Company</option>
+                    </select>
+                  </label>
+                </div>
+              </details>
               </div>
-            </section>
 
             {jobs.some((j) => !j.match_breakdown?.length) && (
               <div className="rescore-banner">
@@ -2840,16 +3819,7 @@ function App() {
               </div>
             )}
 
-            <section className="section-head" style={{ marginTop: 20 }}>
-              <div>
-                <h2>
-                  {visibleJobs.length} job{visibleJobs.length === 1 ? "" : "s"}
-                </h2>
-                <p>Match scores are calculated from your profile and preferences.</p>
-              </div>
-            </section>
-
-            <section className="jobs-list">
+            <section className="jobs-list saved-job-results-list">
               {visibleJobs.length === 0 ? (
                 <div className="empty-state">
                   <div className="empty-icon">
@@ -2858,7 +3828,7 @@ function App() {
                   <h3>{jobs.length === 0 ? "Your next opportunity starts here" : "No jobs match these filters"}</h3>
                   <p>
                     {jobs.length === 0
-                      ? "Add a job posting to start scoring opportunities against your profile."
+                      ? "Search LinkedIn or Jobicy, or add a posting to start scoring opportunities against your profile."
                       : "Try clearing the search or lowering the minimum match."}
                   </p>
                   {jobs.length === 0 && (
@@ -2866,10 +3836,26 @@ function App() {
                       <Plus size={16} /> Add your first job
                     </button>
                   )}
+                  {jobs.length > 0 && (
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => {
+                        setQuery("");
+                        setStatusFilter("all");
+                        setMinMatch(0);
+                        setSourceFilter("all");
+                        setSortBy("best");
+                      }}
+                    >
+                      Clear search and filters
+                    </button>
+                  )}
                 </div>
               ) : (
                 visibleJobs.map((job) => renderJobCard(job))
               )}
+            </section>
             </section>
 
             {dismissTip && (
@@ -3420,6 +4406,28 @@ function App() {
             const job = analysisJob;
             setAnalysisJob(null);
             void trackJob(job);
+          }}
+          plan={analysisPlan[analysisJob.id] ?? null}
+          planLoading={analysisPlanLoading}
+          onLoadPlan={() => {
+            void loadApplicationPlan(analysisJob, true);
+          }}
+          materials={analysisMaterials[analysisJob.id] ?? null}
+          materialsLoading={materialsLoadingId === analysisJob.id}
+          onGenerateMaterials={() => {
+            void generateApplicationMaterials(analysisJob);
+          }}
+          onUpdateMaterials={(updates) =>
+            updateApplicationMaterials(analysisJob.id, updates)
+          }
+          onCopyText={(text, label) => void copyGeneratedText(text, label)}
+          onDownloadCoverLetter={() => {
+            const materials = analysisMaterials[analysisJob.id];
+            if (materials) void downloadCoverLetterPdf(analysisJob, materials);
+          }}
+          onDownloadResume={() => {
+            const materials = analysisMaterials[analysisJob.id];
+            if (materials) void downloadTailoredResume(analysisJob, materials);
           }}
         />
       )}

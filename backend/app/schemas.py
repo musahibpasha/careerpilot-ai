@@ -2,7 +2,14 @@ import re
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    HttpUrl,
+    field_validator,
+    model_validator,
+)
 
 
 class JobCreate(BaseModel):
@@ -16,6 +23,8 @@ class JobCreate(BaseModel):
     skills: list[str] = []  # must-have skills
     # Optional details that let matching judge more than skills.
     nice_to_have_skills: list[str] = Field(default_factory=list, max_length=50)
+    employment_types: list[str] = Field(default_factory=list, max_length=10)
+    published_at: datetime | None = None
     work_arrangement: Literal["", "remote", "hybrid", "onsite"] = ""
     experience_level: Literal["", "intern", "entry", "mid", "senior", "lead"] = ""
     salary_min: int | None = Field(default=None, ge=0, le=1_000_000_000)
@@ -57,6 +66,8 @@ class JobRead(BaseModel):
     description: str
     skills: list[str]
     nice_to_have_skills: list[str] = Field(default_factory=list)
+    employment_types: list[str] = Field(default_factory=list)
+    published_at: datetime | None = None
     work_arrangement: str = ""
     experience_level: str = ""
     salary_min: int | None = None
@@ -134,6 +145,8 @@ class JobDiscoveryListing(BaseModel):
     description: str = ""
     skills: list[str] = Field(default_factory=list)
     nice_to_have_skills: list[str] = Field(default_factory=list)
+    employment_types: list[str] = Field(default_factory=list)
+    published_at: datetime | None = None
     work_arrangement: str = ""
     experience_level: str = ""
     salary_min: int | None = None
@@ -143,12 +156,56 @@ class JobDiscoveryListing(BaseModel):
 
 
 class JobDiscoveryResponse(BaseModel):
-    source: Literal["adzuna"] = "adzuna"
-    country: str
-    page: int
+    source: Literal["jobicy"] = "jobicy"
+    geo: str
     results: list[JobDiscoveryListing]
     has_more: bool
-    description_is_snippet: bool = True
+    next_cursor: str | None = None
+
+
+class JobApplicationPlan(BaseModel):
+    job_id: str
+    title: str
+    company: str
+    score: float
+    confidence: Literal["low", "medium", "high"]
+    fit_summary: str
+    strengths: list[str] = Field(default_factory=list)
+    gaps: list[str] = Field(default_factory=list)
+    positioning: list[str] = Field(default_factory=list)
+    resume_focus: list[str] = Field(default_factory=list)
+    cover_letter_angle: str = ""
+    interview_questions: list[str] = Field(default_factory=list)
+
+
+class ResumeBulletSuggestion(BaseModel):
+    section: str = Field(min_length=1, max_length=200)
+    source_text: str = Field(min_length=1, max_length=4000)
+    tailored_text: str = Field(min_length=1, max_length=4000)
+
+
+class JobApplicationMaterials(BaseModel):
+    job_id: str
+    title: str
+    company: str
+    cover_letter: str = Field(min_length=1, max_length=8000)
+    resume_summary: str = Field(min_length=1, max_length=2000)
+    skills_to_prioritize: list[str] = Field(default_factory=list, max_length=50)
+    bullet_suggestions: list[ResumeBulletSuggestion] = Field(
+        default_factory=list, max_length=30
+    )
+    caveats: list[str] = Field(default_factory=list, max_length=20)
+
+
+class CoverLetterPdfRequest(BaseModel):
+    cover_letter: str = Field(min_length=1, max_length=8000)
+
+    @field_validator("cover_letter")
+    @classmethod
+    def _require_non_whitespace_letter(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Cover-letter text cannot be blank.")
+        return value
 
 
 class ApplicationCreate(BaseModel):
