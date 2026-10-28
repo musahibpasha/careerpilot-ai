@@ -44,13 +44,14 @@ The long-term goal is to support a human-approved workflow: find relevant opport
 - **Basic duplicate detection** — reject a job when its source ID or link already exists.
 - **Basic skill-overlap match score** — calculate an initial score based on normalized skill overlap.
 - **Job feed filtering and sorting** — filter by status, minimum match score, and source; sort by best match, newest, or company.
-- **Application-status tracking with history** — statuses are Discovered, Saved, Under review, Ready for approval, Approved, Submitted, Interview, Offer, Rejected, and Withdrawn. Every change is recorded with a timestamp and shown in the tracker. Approved and Submitted are locked: the backend refuses them until the approval workflow is built. Applications saved under the older statuses are converted automatically on startup.
+- **Application-status tracking with history** — statuses are Discovered, Saved, Under review, Ready for approval, Approved, Submitted, Interview, Offer, Rejected, and Withdrawn. Every change is recorded with a timestamp and shown in the tracker. The generic status endpoints still refuse direct Approved/Submitted changes; the Application Assistant has the dedicated review and manual-submission-confirmation flow.
 - **Job preferences** — save preferred locations, experience level, work arrangement (remote, hybrid, on-site), and salary expectation (minimum, maximum, currency, per year or month). Everything is optional, and target roles stay in the profile. Preferences feed the match score (see Explainable matching).
 - **Multiple resumes with an active resume** — in your profile, keep up to 5 PDF resumes (5 MB each), view them, rename them, delete them, and choose one as the active resume (shown with an "Active" badge). A new application records the resume that was active when it was created and shows it in the tracker. Choosing a resume as active (or uploading your first one) reads it with the same AI parser as auto-fill and fills your profile form from it. The reading is kept with the resume, so switching back is instant, and "Re-read" reads it again. Nothing is saved to your profile until you review the form and click Save profile; closing the window without saving undoes it. The "Upload resume (PDF) and auto-fill" button at the top of the profile saves the file under My resumes and fills the form from it (when you already have 5 saved resumes it only fills the form and keeps nothing); "Add a resume" saves the file and fills the form only if it becomes your active resume. Uploading never changes your saved profile by itself. Resume files are stored in your local MongoDB, which is fine on your own machine, but login and protected storage are needed before the app is ever put online.
 - **Explainable matching** — each job is scored 0-100 from weighted factors: skills (50, must-have vs nice-to-have), role fit against your target roles (15), location and work style (15), experience level (10) and salary (10). Every factor shows a plain-English reason, missing skills are listed, and a factor that cannot be judged (the job or your preferences do not say enough) is left out instead of counted as a miss. A low/medium/high confidence label shows how much of the picture was judged. Scores update when you save your profile or preferences, or call `POST /api/jobs/rescore`. Salary is only compared when both sides use the same currency. Each job card has a "Why this score?" panel with a bar per factor, the confidence label, missing skills, and the factors that were not counted; the add-job form has an optional "More details" section (nice-to-have skills, work style, level, salary).
 - **Application preparation plan** — Match analysis shows a deterministic fit summary, strengths, gaps, resume focus, positioning guidance, and interview prompts based on the saved job and profile. It is guidance, not AI-generated document text.
 - **AI cover-letter and resume wording drafts** — from a job's Match analysis, choose **Generate cover letter and resume drafts** to request a tailored cover letter, professional-summary rewrite, relevant saved skills to emphasize, and suggestions for rewriting existing experience/project bullets. Drafts use the saved profile and job posting, are editable in the panel, and are not submitted or saved automatically. Contact details are excluded from the AI request. Review all text for accuracy. The reviewed cover letter can be downloaded as a real PDF containing the candidate's saved contact details and the selected job context.
 - **Tailored resume export** — download a printable HTML resume built from your saved profile and the edited AI summary/bullet suggestions. Open the file in a browser and choose Print / Save as PDF. Existing education, work history, projects, and skills are preserved; generated wording is only used where its source still matches the saved profile. The original uploaded PDF and saved profile are not changed.
+- **Application Assistant / Automate** — open from a job card or tracker entry for a persistent, job-specific workflow. It combines grounded answer drafts, AI-tailored cover-letter/resume wording, the active saved PDF resume, and browser-assisted form fill on Greenhouse and Lever only. Jobicy and LinkedIn links remain source listings; the user must open the listing, follow its employer Apply link, and paste the actual Greenhouse or Lever application URL. Glassdoor is not integrated. ATS pages with a same-platform Apply link can be advanced to their application form. LinkedIn is always manual. Resume upload requires explicit consent; form writes stay blocked until the user reviews and explicitly authorizes them. CareerPilot never clicks Submit, logs in, solves CAPTCHAs, or stores filled personal values. The user must click the employer's Submit control and separately record that action in CareerPilot. Top-level redirects to other sites are blocked.
 - **Not interested, with a reason** — dismiss a job from its card and say why (role, skills, location, pay, level, company, other). Dismissed jobs move to a collapsible list with a Restore button, and after two dismissals for the same reason the app points you to the profile or preference setting that controls it. This is only recorded for now; it does not change scores.
 - **Paste-a-job import** — in Add job, paste a whole posting and press Fill the form. Rules (not AI) read the title, company, location, work style, level, salary (LPA, lakh, $ ranges, monthly or yearly) and known skills, splitting must-have from nice-to-have. You review the filled form and save; nothing is saved automatically, and details it cannot find are listed so you can add them.
 - **Job link import** — in Add job, leave the paste box empty, type a public job posting link in *Job posting URL* and press Fill the form. The backend (`app/job_fetch.py`) opens the page, pulls out the readable text (and the page's structured job data when it has some), then hands it to the same rule-based parser as pasted text, so you get the same kind of draft to review and edit before saving. If you paste text as well, the pasted text is used and the link is only kept as the posting URL. Safety rules: only `http`/`https` on ports 80/443; links to localhost, private, link-local, cloud-metadata and other internal addresses are refused (the name is looked up by the app, every answer is checked, and the connection goes to the checked address, so a name cannot be switched to an internal address afterwards); every redirect is re-checked, at most 5; 8-second total limit, 1 MB size limit, only HTML or plain-text pages; hidden page text and invisible characters are dropped, and text that looks like instructions to an AI is flagged and never followed. It does not log in, solve CAPTCHAs or get around blocking: if a site refuses, needs JavaScript or a login, the message tells you to paste the description instead. No new dependency was added.
@@ -64,10 +65,8 @@ The long-term goal is to support a human-approved workflow: find relevant opport
 Features below are planned, not yet implemented unless explicitly listed in the Built section.
 
 - Using the active uploaded resume directly in job matching and importing the exported resume back into the stored resume library.
-- Application-answer drafts, document checklists, and ATS keyword checks.
+- Document checklists and ATS keyword checks.
 - Permitted job-source connectors, scheduled scans, and expired-listing checks.
-- Playwright-assisted form prefill, with pauses for login, CAPTCHA, or uncertainty.
-- A clear application review and approval screen backed by a server-side approval gate.
 - Application activity logs and screenshots where appropriate.
 - Advanced interview preparation tools beyond the basic prompts in the application plan.
 - Dashboard analytics, alerts, and daily digests.
@@ -84,31 +83,30 @@ Work is being delivered incrementally so each stage can be tested before moving 
 | 2 | Profile and application tracking | ✅ Profile, preferences, multiple resumes, status history, and Kanban board built |
 | 3 | Smart, explainable job matching | ✅ Complete |
 | 4 | Job discovery, import, and permitted source connectors | 🟡 Manual entry, posting import, and a Jobicy remote-job connector are available; broader country/city coverage and additional permitted sources remain. |
-| 5 | Application preparation and browser-assisted prefill | 🟡 Rule-based prep plans, editable AI cover-letter/resume wording, cover-letter PDF export, and printable tailored-resume export are available; application answers and safe form prefill remain. |
-| 6 | Explicit approval workflow and server-side safeguards | 🔜 Planned |
+| 5 | Application preparation and browser-assisted prefill | ✅ Application kits, editable grounded answer drafts, permitted browser-assisted fill, and LinkedIn manual workflow are built alongside existing document prep. |
+| 6 | Explicit approval workflow and server-side safeguards | ✅ Review hashes, guarded approval transitions, and user-confirmed manual submission are enforced by the backend. |
 | 7 | Analytics, alerts, interview preparation, authentication, security, and deployment | 🔜 Planned |
 
 ### Current implementation checkpoint
 
-- **Current feature:** Downloading a reviewed, job-specific cover letter as PDF from the saved job's Match analysis panel.
-- **Status:** The PDF is rendered from the current edited draft and selected job, with contact details from the saved profile. AI draft generation requires an OpenRouter API key. Draft edits are currently held in frontend state and are not persisted across a browser reload; the original resume is unchanged and no application is submitted.
+- **Current feature:** The persistent Application Assistant workflow for saved jobs and tracker entries.
+- **Status:** Application-kit edits and generated answers persist on the existing application record. AI answer generation uses the existing OpenRouter integration with fact-grounded template fallback. Review approval is tied to a hash of the job and exact answers; Submitted is recorded only after the user confirms they submitted externally. No external application is submitted by CareerPilot.
 - **LinkedIn Jobs search:** Find Jobs creates an external LinkedIn search link, not retrieved LinkedIn results.
 - **Profile handling:** Suggested keywords come only from saved target roles (or saved skills if no roles exist); location and optional preferences can be seeded from saved profile/preferences. The user can edit every criterion before opening LinkedIn.
 - **LinkedIn access:** The reviewed official Job Posting API is partner-restricted and is for posting jobs, not searching listings. No listing retrieval, scraping, session access, or application automation is implemented.
 - **Preserved integration:** The current workspace has a Jobicy connector, not a Jobify connector. Jobicy remains intact; the existing public job URL importer is unchanged.
-- **Automated checks:** `npm run build` passed; `python -m pytest -q` passed (172 tests; one existing Starlette/httpx deprecation warning).
+- **Automated checks:** Run the backend suite and frontend build after implementation; browser integration tests require Playwright Chromium.
 - **Local browser smoke check:** The profile action populated the criteria from the saved profile and updated the encoded LinkedIn URL. No LinkedIn page was opened and no data was saved.
 - **Manual confirmation:** Not yet confirmed by the user.
-- **Next after user verification:** Complete tailored-resume document downloads beyond printable HTML (PDF/DOCX where feasible), then add persistence/versioning for edited job-specific drafts. Wait for the user to verify this PDF export before starting another feature.
+- **Next after user verification:** Manually test the Application Assistant flow below before starting another feature.
 
 ### Suggested implementation order
 
 1. ~~Stage 2: Kanban board, status history, job preferences, multiple resumes.~~ Done.
 2. ~~Stage 3: explainable matching and skill-gap insights.~~ Done.
 3. Complete search filters and result normalization, including the limits of each source's available data.
-4. Continue Stage 5: application-answer drafts, safe form prefill, and active-resume-aware matching.
-5. Build Stage 6: a complete approval flow enforced by the backend.
-6. Build Stage 7: analytics, notifications, authentication, and production hardening.
+4. Verify Stage 5 and Stage 6 in the Application Assistant, then continue with active-resume-aware matching.
+5. Build Stage 7: analytics, notifications, authentication, and production hardening.
 
 ## 🏗️ Architecture
 
@@ -211,11 +209,14 @@ Install dependencies:
 
 ```bash
 pip install -r requirements.txt
+python -m playwright install chromium
 ```
 
 Create `backend/.env` using the variable names expected by `backend/app/config.py`. Add your own MongoDB connection settings and OpenRouter API key locally.
 
 **Never paste secrets into this README or commit your `.env` file.**
+
+The local fake application form is disabled by default. To enable it for local testing only, set `ASSISTANT_ALLOW_LOCAL_TEST_FORM=true` and keep `APP_ENV=development` (or `test`) in `backend/.env`.
 
 Start the API:
 
@@ -253,8 +254,8 @@ CareerPilot AI is designed around human oversight.
 
 - **No invented qualifications:** generated material should be based on the user's actual profile and resume.
 - **Review before saving:** AI-extracted resume fields should be reviewed by the user before being saved.
-- **No silent applications:** an application must not be submitted without explicit approval for that specific application.
-- **Server-side enforcement matters:** a disabled frontend button alone is not a sufficient approval safeguard; the backend approval gate remains a planned improvement.
+- **No automatic applications:** CareerPilot never clicks Submit. The visible browser blocks form writes until the user confirms the reviewed application and explicitly enables manual form requests; the user must then click the employer's Submit control. Enabling requests may allow the site to react, so only do this after checking the form.
+- **Server-side approval:** `approved` requires confirmation of the exact reviewed job and answers. `submitted` can only be recorded after the user explicitly confirms manual submission. Generic status endpoints continue to reject both statuses.
 - **Respect website controls:** use permitted APIs, feeds, and automation methods. Do not bypass CAPTCHA, login requirements, or anti-bot protections.
 - **Pause when uncertain:** automation should stop and ask the user when a page or form is unclear.
 - **Protect secrets:** keep API keys, credentials, private resumes, and personal data out of source control and logs.
@@ -273,10 +274,24 @@ The test suite (run with `cd backend && python -m pytest -q`) covers key areas s
 - Resume parsing behavior.
 - Application status transitions, timestamped status history, and the migration from the old statuses.
 - The application-approval block: `approved` and `submitted` are refused by the backend.
+- Application Assistant (`tests/test_assistant.py`): fact and draft persistence, tailored-material persistence and review hashing, saved-resume selection and consented upload, grounded AI/template answers, Greenhouse/Lever allowlisting, source-listing versus application-URL separation, LinkedIn/private-host restrictions, safe same-platform ATS Apply-link navigation and redirect checks, sensitive-field handling, browser write blocking and post-review manual authorization, isolated browser-form tests, explicit manual-submission recording, and regressions for the generic status gates. Browser-driven tests require Playwright Chromium.
 - Cover-letter PDF export: checks the PDF response and verifies the reviewed letter and selected job/profile context in extracted PDF text.
 - Job link import (`tests/test_job_fetch.py`, `tests/test_job_import_url.py`): valid public HTML, structured job data, malformed/empty pages, login and CAPTCHA pages, unsupported content types, timeouts, oversized responses, redirect limit, localhost/private/metadata/IPv6 targets, redirects to private addresses, names that resolve to internal addresses, and the pasted-text regression. No test opens a real website.
 
 As features are added, tests should be added for both successful and failure cases. The count may change as the project evolves.
+
+### Manually test the Application Assistant
+
+1. Start MongoDB, the backend, and the frontend. Add a profile with contact details, skills, experience, and projects, then save a job.
+2. Click **Automate** on a job card (or open the assistant from Applications). Confirm that the assistant reuses that job's application record.
+3. In **Job**, choose the saved resume for this application. In **Kit**, check profile facts and source labels; generate and edit answer drafts and tailored materials; save changes and reopen the assistant to confirm persistence.
+4. Open **Fill**. A saved Greenhouse or Lever job page may be prefilled. A Jobicy/LinkedIn link is shown only as the source listing, not as the application URL: open it, follow the employer's Apply link, and paste the actual Greenhouse or Lever URL into **Employer application URL**. CareerPilot rejects other destinations for automation; use the Application Kit manually on those sites. If the ATS job page has a same-platform Apply link, CareerPilot follows it to the form. To attach your active PDF resume, check the upload-consent box first. LinkedIn is always manual, and Glassdoor is not integrated.
+5. Review the open employer form and field results in CareerPilot. Fields CareerPilot cannot confidently match remain for you to answer. In **Review**, confirm the exact answers and tailored materials.
+6. In **Done**, explicitly enable form requests only if you intend to use the open browser, then click the employer's Submit control yourself. CareerPilot never clicks it. If not using that browser, submit manually on the employer site.
+7. After you have actually submitted, check the confirmation in **Done** to record it in CareerPilot. Verify the status history records the review and manual confirmation.
+8. Confirm that trying to set `approved` or `submitted` through the generic application status API still returns a forbidden response.
+
+If assistant browser tests are skipped, check that Playwright Chromium is installed in the backend environment with `python -m playwright install chromium`, then rerun `python -m pytest -q tests/test_assistant.py`.
 
 ## 🐍 Optional GitHub Contribution Snake
 

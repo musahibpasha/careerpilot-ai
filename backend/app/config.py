@@ -15,6 +15,12 @@ class Settings(BaseSettings):
     openrouter_fallback_models: str = "google/gemini-2.5-flash,openrouter/free"
     openrouter_max_retries: int = 2
 
+    # Application Assistant browser support.
+    assistant_browser_headless: bool = False
+    assistant_keep_open_seconds: int = 1800
+    assistant_allow_local_test_form: bool = False
+    assistant_browser_path: str = ""
+
     model_config = SettingsConfigDict(
         env_file=".env",
         extra="ignore",

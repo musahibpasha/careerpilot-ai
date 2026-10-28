@@ -1784,3 +1784,65 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .job-source-option { transition: none; }
 }
+
+/* Application Assistant (reuses the shared design tokens) */
+.aa-overlay { position: fixed; inset: 0; z-index: 60; overflow-y: auto; background: var(--bg); }
+.aa-shell { max-width: 960px; margin: 0 auto; padding: 24px 20px 64px; display: flex; flex-direction: column; gap: 16px; }
+.aa-head { display: flex; align-items: center; gap: 14px; }
+.aa-head h2 { font-size: 20px; font-weight: 700; letter-spacing: -0.2px; }
+.aa-head > div { flex: 1; min-width: 0; }
+.aa-eyebrow { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.6px; }
+.aa-close { padding: 8px; }
+.aa-steps { display: flex; flex-wrap: wrap; gap: 8px; }
+.aa-step { display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--muted); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.aa-step:hover { border-color: var(--line-strong); color: var(--ink); }
+.aa-step:focus-visible, .aa-close:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.aa-step.is-current { background: var(--blue-50); border-color: var(--blue-100); color: var(--blue); }
+.aa-step.is-done .aa-step-dot { background: var(--good-50); color: var(--good); }
+.aa-step-dot { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--surface-2); font-size: 11px; }
+.aa-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 20px; display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px; box-shadow: var(--shadow-sm); }
+.aa-card h3 { font-size: 16px; font-weight: 700; }
+.aa-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.aa-muted { color: var(--muted); font-size: 13px; }
+.aa-hint { color: var(--warn); font-size: 12px; }
+.aa-list { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; font-size: 14px; color: var(--ink-2); }
+.aa-links, .aa-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.aa-actions { justify-content: flex-end; }
+.aa-inline-link { color: var(--blue); font-size: 13px; display: inline-flex; align-items: center; gap: 4px; }
+.aa-inline-btn { align-self: flex-start; display: inline-flex; gap: 6px; align-items: center; }
+.aa-platform { display: inline-flex; width: fit-content; align-items: center; gap: 7px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-2); color: var(--ink-2); font-size: 12px; font-weight: 600; }
+.aa-platform svg { color: var(--blue); }
+.aa-field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; }
+.aa-field input, .aa-field select, .aa-field textarea, .aa-kit-row input, .aa-draft textarea { width: 100%; padding: 10px 12px; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--surface-2); color: var(--ink); font: inherit; font-size: 14px; }
+.aa-field input:focus, .aa-field select:focus, .aa-field textarea:focus, .aa-kit-row input:focus, .aa-draft textarea:focus { outline: 2px solid var(--blue); outline-offset: 1px; border-color: transparent; }
+.aa-kit-row { display: grid; grid-template-columns: 150px minmax(0, 1fr) auto auto; gap: 10px; align-items: center; }
+.aa-kit-row label, .aa-draft label { font-size: 13px; font-weight: 600; }
+.aa-draft { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; border-top: 1px solid var(--line); }
+.aa-draft textarea { resize: vertical; line-height: 1.5; }
+.aa-copy { display: inline-flex; gap: 4px; align-items: center; }
+.aa-chip { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 999px; font-size: 11px; font-weight: 600; white-space: nowrap; background: var(--surface-2); color: var(--muted); border: 1px solid var(--line); }
+.aa-src-profile, .aa-src-derived, .aa-field-filled, .aa-run-prepared { background: var(--good-50); color: var(--good); border-color: transparent; }
+.aa-src-user, .aa-src-user_edited { background: var(--blue-50); color: var(--blue); border-color: transparent; }
+.aa-src-ai, .aa-src-rule_based { background: var(--warn-50); color: var(--warn); border-color: transparent; }
+.aa-src-missing, .aa-field-needs_input, .aa-run-needs_you { background: var(--warn-50); color: var(--warn); border-color: transparent; }
+.aa-field-failed, .aa-run-failed { background: var(--bad-50); color: var(--bad); border-color: transparent; }
+.aa-run-running { background: var(--blue-50); color: var(--blue); border-color: transparent; }
+.aa-banner { display: flex; align-items: flex-start; gap: 8px; padding: 10px 14px; border-radius: var(--r-md); font-size: 13px; line-height: 1.45; }
+.aa-banner svg { flex: none; margin-top: 2px; }
+.aa-good { background: var(--good-50); color: var(--good); }
+.aa-warn { background: var(--warn-50); color: var(--warn); }
+.aa-bad { background: var(--bad-50); color: var(--bad); }
+.aa-run { display: flex; flex-direction: column; gap: 10px; padding-top: 12px; border-top: 1px solid var(--line); }
+.aa-table { width: 100%; border-collapse: collapse; font-size: 13px; display: block; overflow-x: auto; }
+.aa-table th { text-align: left; color: var(--muted); font-weight: 600; padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.aa-table td { padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.aa-value { max-width: 340px; white-space: pre-wrap; word-break: break-word; }
+.aa-check { display: flex; align-items: flex-start; gap: 10px; font-size: 14px; line-height: 1.45; cursor: pointer; }
+.aa-check input { margin-top: 3px; width: 16px; height: 16px; accent-color: var(--blue); }
+.aa-checklist li { line-height: 1.5; }
+.aa-prepare { margin-top: 8px; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.aa-history { margin-top: 4px; }
+@media (max-width: 640px) {
+  .aa-kit-row { grid-template-columns: 1fr; }
+  .aa-shell { padding: 16px 12px 48px; }
+}

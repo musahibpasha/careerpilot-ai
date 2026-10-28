@@ -42,6 +42,7 @@ from app import schemas
 from app.config import settings
 from app.database import ensure_indexes, get_db
 from app.jobicy import ALLOWED_GEOS, JobicyError, search_jobicy_jobs
+from app.job_scan import scan_and_save
 from app.job_fetch import JobFetchError, fetch_job_text, is_search_results_url
 from app.job_import import MIN_IMPORT_CHARS, extract_job
 from app.matching import build_application_plan, score_job
@@ -235,6 +236,25 @@ def health():
         "status": "ok",
         "service": "careerpilot-api",
     }
+
+
+# ---------------------------------------------------------
+# Job scan endpoint (daily automation + on-demand)
+# ---------------------------------------------------------
+
+@app.post("/api/scan")
+def trigger_scan(db: Database = Depends(get_db)):
+    """Scan Jobicy and Greenhouse public boards for new matching jobs.
+
+    Safe to call on a schedule — duplicates are detected and skipped.
+    Returns a count of newly saved and skipped listings.
+    """
+    try:
+        result = scan_and_save(db)
+        return result
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Job scan failed: %s", exc)
+        raise HTTPException(status_code=502, detail="Job scan failed. Check backend logs.") from exc
 
 
 # ---------------------------------------------------------
@@ -1880,3 +1900,8 @@ def delete_resume(
             db.resumes.update_one({"_id": oldest["_id"]}, {"$set": {"is_active": True}})
 
     return Response(status_code=204)
+
+
+from app.assistant_routes import router as assistant_router  # noqa: E402
+
+app.include_router(assistant_router)

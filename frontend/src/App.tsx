@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import ApplicationAssistant, { type AssistantMaterials } from "./ApplicationAssistant";
 import {
   Activity,
   ArrowUpRight,
@@ -1182,6 +1183,7 @@ function App() {
   const [fillingId, setFillingId] = useState<string | null>(null);
 
   const [analysisJob, setAnalysisJob] = useState<Job | null>(null);
+  const [assistantJobId, setAssistantJobId] = useState<string | null>(null);
   const [analysisPlan, setAnalysisPlan] = useState<Record<string, ApplicationPlan>>({});
   const [analysisPlanLoading, setAnalysisPlanLoading] = useState(false);
   const [analysisMaterials, setAnalysisMaterials] = useState<
@@ -2640,8 +2642,8 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
       say({
         role: "assistant",
         text: waiting.length
-          ? "These applications are waiting for your review. Nothing is submitted on your behalf; Approved and Submitted stay locked until the approval workflow is built."
-          : "Nothing is waiting for review. Applications are never submitted without your approval.",
+          ? "These applications are waiting for your review. Nothing is submitted on your behalf; use Automate to prepare and review one."
+          : "Nothing is waiting for review. CareerPilot never submits an application for you.",
         lines: waiting.map(
           (a) => `${a.job_title} at ${a.company} — ${statusLabel(a.status)}`,
         ),
@@ -2727,6 +2729,14 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
           >
             {ring}
           </button>
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => setAssistantJobId(job.id)}
+            aria-label={`Automate application for ${job.title}`}
+          >
+            <Bot size={14} /> Automate
+          </button>
         </article>
       );
     }
@@ -2800,6 +2810,13 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
             onClick={() => setAnalysisJob(job)}
           >
             <Sparkles size={14} /> Match analysis
+          </button>
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => setAssistantJobId(job.id)}
+          >
+            <Bot size={14} /> Automate
           </button>
           <button
             className="primary-button"
@@ -3177,8 +3194,8 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                     <div>
                       <h2>Human approval required</h2>
                       <p style={{ marginTop: 4, fontSize: 13 }}>
-                        CareerPilot never submits an application for you. Approved and Submitted stay
-                        locked until the approval workflow is built.
+                        CareerPilot never submits an application for you. Review and approve it in
+                        the Application Assistant, then submit it yourself on the employer's site.
                       </p>
                     </div>
                   </div>
@@ -3348,10 +3365,13 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                     {jobSource === "jobicy" && <CheckCircle2 size={14} />}
                   </span>
                 </button>
-                <div className="more-sources-note" aria-label="Two connected sources">
-                  2 connected sources
+                <div className="more-sources-note" aria-label="Two job search sources">
+                  2 search sources
                 </div>
               </div>
+              <p className="source-disclaimer">
+                LinkedIn opens a search in your browser and is manual-only. Jobicy supplies remote listings; its saved URL is the source listing, not the employer application form. Automated form filling is currently limited to Greenhouse and Lever application pages.
+              </p>
             </section>
 
             {jobSource === "linkedin" ? (
@@ -4154,7 +4174,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                       <Lock
                         size={12}
                         className="kanban-lock"
-                        aria-label="Locked until the approval workflow is built"
+                        aria-label="Only the Application Assistant can set this status"
                       />
                     )}
                     <span className="kanban-count">{columnApps.length}</span>
@@ -4168,7 +4188,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                           : isGatedDrop
                             ? "Locked"
                             : isLocked
-                              ? "Locked until approval workflow"
+                              ? "Use the Application Assistant"
                               : "Nothing here"}
                       </div>
                     )}
@@ -4274,6 +4294,15 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                             )}
                           </div>
 
+                          <button
+                            type="button"
+                            className="secondary-button aa-prepare"
+                            draggable={false}
+                            onClick={() => setAssistantJobId(application.job_id)}
+                          >
+                            <Bot size={13} /> Automate
+                          </button>
+
                           <details className="status-history">
                             <summary>History ({historyCount})</summary>
                             <ol>
@@ -4359,10 +4388,18 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
 
                   {(application.gated_next ?? []).length > 0 && (
                     <p className="locked-note">
-                      Approval and submission are locked until the approval
-                      workflow is built.
+                      Approval and submission are only available through the
+                      Application Assistant.
                     </p>
                   )}
+
+                  <button
+                    type="button"
+                    className="secondary-button aa-prepare"
+                    onClick={() => setAssistantJobId(application.job_id)}
+                  >
+                    <Bot size={13} /> Automate
+                  </button>
 
                   <details className="status-history">
                     <summary>
@@ -4396,6 +4433,32 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
           CAREERPILOT AI <span>·</span> Thoughtful automation, human decisions.
         </footer>
       </main>
+
+      {assistantJobId && (
+        <ApplicationAssistant
+          jobId={assistantJobId}
+          onClose={() => setAssistantJobId(null)}
+          onChanged={() => void load()}
+          onExportMaterials={(jobId, materials: AssistantMaterials, kind) => {
+            const job = jobs.find((candidate) => candidate.id === jobId);
+            if (!job) {
+              setNotice("Could not find this job in the saved job list to export its materials.");
+              return;
+            }
+            const exportMaterials: ApplicationMaterials = {
+              job_id: jobId,
+              title: job.title,
+              company: job.company,
+              ...materials,
+            };
+            if (kind === "cover_letter") {
+              void downloadCoverLetterPdf(job, exportMaterials);
+            } else {
+              void downloadTailoredResume(job, exportMaterials);
+            }
+          }}
+        />
+      )}
 
       {analysisJob && (
         <MatchAnalysis
