@@ -514,6 +514,20 @@ def test_fill_route_accepts_and_preserves_glassdoor_listing(db, monkeypatch):
     assert saved["application_url"] == url
 
 
+def test_fill_route_is_disabled_on_vercel(db, monkeypatch):
+    monkeypatch.setattr(assistant_routes.settings, "vercel", True)
+    state = open_assistant(db)
+
+    response = client.post(
+        base(state) + "/fill",
+        json={"url": "https://boards.greenhouse.io/acme/jobs/1"},
+    )
+
+    assert response.status_code == 503
+    assert "unavailable on Vercel" in response.json()["detail"]
+    assert db.applications.find_one({}).get("assistant", {}).get("runs", []) == []
+
+
 def test_jobicy_listing_is_not_prefilled_as_an_application_url(db):
     state = open_assistant(
         db,

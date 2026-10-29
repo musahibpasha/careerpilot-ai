@@ -634,6 +634,14 @@ def _run_in_thread(
 
 @router.post("/api/applications/{application_id}/assistant/fill", status_code=202)
 def start_fill(application_id: str, payload: FillRequest, db: Database = Depends(get_db)):
+    if settings.vercel:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Browser-assisted autofill is unavailable on Vercel serverless functions. "
+                "Use the Application Kit to review and copy answers into the employer form."
+            ),
+        )
     app_doc, job = _load(db, application_id)
     allow_local_form = (
         settings.assistant_allow_local_test_form

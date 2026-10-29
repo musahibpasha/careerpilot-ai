@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     assistant_allow_local_test_form: bool = False
     assistant_browser_path: str = ""
     assistant_glassdoor_profile_dir: str = ""
+    vercel: bool = False
 
     model_config = SettingsConfigDict(
         env_file=".env",

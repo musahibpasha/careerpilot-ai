@@ -30,7 +30,7 @@ import {
   X,
 } from "lucide-react";
 
-const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+const API = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? "http://127.0.0.1:8000" : "");
 
 // Order and names shown to the user. The server is the source of truth for
 // which moves are allowed; this is only for display.

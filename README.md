@@ -176,6 +176,35 @@ The exact structure may grow as new features are implemented.
 
 ## ⚙️ Getting Started
 
+### Deploying on Vercel
+
+The frontend and API are deployed as separate Vercel projects from this
+repository. Create the frontend project with `frontend` as its root directory
+and the backend project with `backend` as its root directory. The backend's
+`api/[...path].py` exports the FastAPI application for Vercel's Python runtime;
+the existing `backend/requirements.txt` is used for its dependencies.
+
+Set these backend environment variables in the Vercel project:
+
+- `MONGODB_URL` — MongoDB Atlas connection string.
+- `MONGODB_DB` — database name, for example `careerpilot`.
+- `CORS_ORIGINS` — exact deployed frontend origin, such as `https://your-site.vercel.app`.
+- `APP_ENV=production`.
+- `OPENROUTER_API_KEY` — optional; required for AI-generated drafts.
+
+Set `VITE_API_URL` in the frontend project to the backend's deployed origin
+(for example `https://your-api.vercel.app`) and redeploy the frontend. Never
+put database credentials or the OpenRouter key in a `VITE_` variable. The
+frontend falls back to localhost only in development; a production build with
+no API URL uses same-origin `/api` requests.
+
+Vercel serverless functions cannot keep an interactive browser open. The
+browser-assisted **Fill** endpoint returns `503` on Vercel; use the Application
+Kit to review and copy answers. This app does not yet provide user
+authentication, so deploy only for controlled testing with non-sensitive data.
+Resume uploads may also exceed serverless request-size limits; if that occurs,
+use direct object-storage uploads rather than raising the function limit.
+
 ### Prerequisites
 
 Install the following before running the project:
