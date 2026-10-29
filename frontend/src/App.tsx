@@ -847,10 +847,9 @@ function isBlankEntry(entry: Record<string, string>): boolean {
   return Object.values(entry).every((v) => !v.trim());
 }
 
-// Builds the form from API data (profile or AI-extracted resume).
-// When `prev` is given, empty incoming values keep what the user already had.
-function profileToForm(data: any, prev?: ProfileForm): ProfileForm {
-  const base = prev ?? emptyProfileForm();
+// Builds a fresh form from profile data or one resume extraction.
+function profileToForm(data: any): ProfileForm {
+  const base = emptyProfileForm();
   const text = (key: keyof ProfileForm, incoming: string) =>
     incoming || (base[key] as string);
 
@@ -887,7 +886,7 @@ function profileToForm(data: any, prev?: ProfileForm): ProfileForm {
     projects: entries(data?.projects, EMPTY_ENTRY.projects, base.projects, ["technologies"]),
     education: entries(data?.education, EMPTY_ENTRY.education, base.education),
     certifications: entries(data?.certifications, EMPTY_ENTRY.certifications, base.certifications),
-    achievements: achievements || base.achievements,
+    achievements,
   };
 }
 
@@ -1817,7 +1816,7 @@ function App() {
         throw new Error(errorText(data, "Could not read this resume."));
       }
 
-      setProfileForm((prev) => profileToForm(data?.extracted ?? {}, prev));
+      setProfileForm(profileToForm(data?.extracted ?? {}));
       setProfileErrors({});
       setParseMessage(
         "Resume read. Review every section below, fill anything marked *, then click Save profile.",
@@ -2016,7 +2015,7 @@ function App() {
       }
 
       const found = data?.extracted ?? {};
-      setProfileForm((prev) => profileToForm(found, prev));
+      setProfileForm(profileToForm(found));
       setProfileErrors({});
       setFormError("");
 
