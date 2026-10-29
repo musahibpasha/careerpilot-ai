@@ -7,7 +7,7 @@ Rules:
   * Only http/https, no credentials in the URL.
   * LinkedIn (and every subdomain, plus its lnkd.in short links) is always
     blocked: LinkedIn jobs get a manual-fill checklist instead.
-  * Automated form filling is limited to Greenhouse and Lever pages.
+  * Automated form filling supports Greenhouse, Lever, and Glassdoor pages.
   * The local test form is available only through the opt-in development flag.
 """
 
@@ -127,12 +127,19 @@ def check_fill_url(raw: str, allow_local_form: bool = True) -> FillTarget:
 
     adapter = adapter_for_host(host)
     if adapter:
+        if adapter == "glassdoor" and not any(
+            segment in parts.path.lower() for segment in ("/job-listing/", "/job/")
+        ):
+            raise UrlRejected(
+                "unsupported_host",
+                "For Glassdoor, enter a job listing URL.",
+            )
         return FillTarget(url=raw, host=host, adapter=adapter)
 
     raise UrlRejected(
         "unsupported_host",
-        "Automatic form filling currently supports Greenhouse and Lever application pages. "
-        "Open the saved listing and paste its employer's Greenhouse or Lever application URL.",
+        "Automatic form filling currently supports Greenhouse, Lever, and Glassdoor pages. "
+        "For other sites, use the Application Kit to fill the form manually.",
     )
 
 

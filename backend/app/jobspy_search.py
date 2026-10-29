@@ -8,6 +8,8 @@ from urllib.parse import urlparse
 
 from jobspy import scrape_jobs
 
+from app.assistant_urls import UrlRejected, check_fill_url
+
 logger = logging.getLogger(__name__)
 
 SUPPORTED_SITES = {
@@ -129,6 +131,17 @@ def _job_url(value, site: str) -> str | None:
     return url
 
 
+def _supported_application_url(value) -> str | None:
+    raw = _value_text(value, 2000)
+    if not raw:
+        return None
+    try:
+        target = check_fill_url(raw, allow_local_form=False)
+    except UrlRejected:
+        return None
+    return target.url if target.adapter in {"greenhouse", "lever"} else None
+
+
 def _string_list(value) -> list[str]:
     if isinstance(value, (list, tuple, set)):
         return [text for item in value if (text := _value_text(item, 100))]
@@ -199,6 +212,7 @@ def search_jobspy_jobs(
             "company": company,
             "location": _value_text(row.get("location"), 250) or None,
             "url": url,
+            "application_url": _supported_application_url(row.get("job_url_direct")),
             "description": _value_text(row.get("description")),
             "skills": [],
             "nice_to_have_skills": [],

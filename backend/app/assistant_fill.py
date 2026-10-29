@@ -1,27 +1,32 @@
 """Browser-assisted form filling (Playwright).
 
-What this module does:   open an allowed application page in a fresh browser
-                         profile, find the form fields, fill the ones that match
-                         a confirmed Application Kit value, report every field.
-What it never does:      click anything, press Enter, tick consent boxes,
-                         solve CAPTCHAs, log in, or submit. Resume upload is
-                         available only after explicit user consent. The
-                         browser never clicks Submit. Non-read requests are
-                         blocked until a separate post-review authorization.
+What this module does:   open an allowed application page, find form fields,
+                         fill those matching confirmed Application Kit values,
+                         and report every field. Glassdoor uses a dedicated
+                         persistent local profile for user-driven sign-in.
+What it never does:      enter credentials, click Submit, tick consent boxes,
+                         or solve CAPTCHAs. Resume upload is available only
+                         after explicit user consent. Non-read requests are
+                         blocked except while a Glassdoor sign-in form is
+                         detected or after separate post-review authorization.
 
 Field outcomes: filled | skipped | needs_input | failed.
 Run outcomes:   prepared | needs_you | failed  (never "submitted").
 """
 
 import logging
+import os
 import re
+import threading
 import time
+from pathlib import Path
 from typing import Callable
 from urllib.parse import urlsplit
 
 from app.assistant_kit import ANSWER_LABELS, DRAFT_LABELS, FACT_LABELS
 from app.assistant_urls import (
     FillTarget,
+    UrlRejected,
     adapter_for_host,
     check_public_host,
     is_blocked_host,
@@ -29,6 +34,7 @@ from app.assistant_urls import (
 )
 
 logger = logging.getLogger(__name__)
+GLASSDOOR_PROFILE_LOCK = threading.Lock()
 
 FILLED, SKIPPED, NEEDS_INPUT, FAILED = "filled", "skipped", "needs_input", "failed"
 PREPARED, NEEDS_YOU, RUN_FAILED = "prepared", "needs_you", "failed"
@@ -182,9 +188,10 @@ def summarise(fields: list[dict], page_flags: dict) -> tuple[str, str]:
 # ---------------- browser side ----------------
 
 COLLECT_JS = """
-() => {
+(options) => {
   const out = [];
   let n = 0;
+  const glassdoor = !!(options && options.glassdoor);
   const vis = (el) => {
     const s = getComputedStyle(el), r = el.getBoundingClientRect();
     return s.visibility !== 'hidden' && s.display !== 'none' && (r.width > 0 || r.height > 0);
@@ -202,6 +209,7 @@ COLLECT_JS = """
     return bits.join(' ').trim();
   };
   document.querySelectorAll('input, textarea, select').forEach(el => {
+    if (glassdoor && !el.closest('[data-cp-glassdoor-application-form="true"]')) return;
     const type = (el.getAttribute('type') || (el.tagName === 'SELECT' ? 'select' : 'text')).toLowerCase();
     if (['hidden','submit','button','image','reset'].includes(type)) return;
     if (!vis(el)) return;
@@ -293,8 +301,9 @@ def _route_guard(
     counter: dict,
     target: FillTarget | None = None,
     submission_authorized=None,
+    glassdoor_login_authorized=None,
 ):
-    """Block writes for the whole browser session and reject unsafe navigation."""
+    """Block writes except user sign-in requests and explicitly authorized submits."""
     def handler(route):
         req = route.request
         parts = urlsplit(req.url)
@@ -323,18 +332,35 @@ def _route_guard(
             route.abort()
             return
         if req.method not in ("GET", "HEAD", "OPTIONS"):
-            allowed_manual_write = bool(
-                submission_authorized
-                and submission_authorized.is_set()
+            glassdoor_login_write = bool(
+                glassdoor_login_authorized
+                and glassdoor_login_authorized.is_set()
                 and target
-                and target.adapter != "local_test"
-                and host == target.host
+                and target.adapter == "glassdoor"
+                and adapter_for_host(host) == "glassdoor"
                 and parts.scheme.lower() == "https"
                 and parts.port in (None, 443)
                 and not parts.username
                 and not parts.password
             )
-            if allowed_manual_write:
+            allowed_manual_write = bool(
+                submission_authorized
+                and submission_authorized.is_set()
+                and target
+                and target.adapter != "local_test"
+                and (
+                    host == target.host
+                    or (
+                        target.adapter == "glassdoor"
+                        and adapter_for_host(host) == "glassdoor"
+                    )
+                )
+                and parts.scheme.lower() == "https"
+                and parts.port in (None, 443)
+                and not parts.username
+                and not parts.password
+            )
+            if glassdoor_login_write or allowed_manual_write:
                 try:
                     check_public_host(host)
                     route.continue_()
@@ -378,13 +404,87 @@ def _route_guard(
     return handler
 
 
+GLASSDOOR_FORM_JS = """
+() => {
+  const bodyText = document.body ? document.body.innerText : '';
+  const blocked = /humans only|advanced security systems|security protections may mistakenly block|cloudflare ray id/i.test(bodyText);
+  if (blocked) return {login: false, application: false, blocked: true};
+  const visible = (el) => {
+    const r = el.getBoundingClientRect(), s = getComputedStyle(el);
+    return s.display !== 'none' && s.visibility !== 'hidden' && (r.width > 0 || r.height > 0);
+  };
+  const loginPath = /\\/(log-?in|sign-?in|sso|auth)(\\/|$|\\?)/i.test(location.pathname);
+  const password = Array.from(document.querySelectorAll('input[type=password]')).some(visible);
+  let login = loginPath || password;
+  const forms = Array.from(document.querySelectorAll('form, [role="form"]')).filter(visible);
+  let application = false;
+  for (const form of forms) {
+    const text = (form.innerText || '').toLowerCase();
+    const fields = Array.from(form.querySelectorAll('input, textarea, select')).filter(visible);
+    const fieldText = fields.map(el => [
+      el.getAttribute('type'), el.getAttribute('name'), el.id,
+      el.getAttribute('placeholder'), el.getAttribute('aria-label')
+    ].join(' ')).join(' ').toLowerCase();
+    if (/sign in|log in|create account/.test(text) && /email|password/.test(fieldText)) {
+      login = true;
+    }
+    const hasContactField = fields.some(el =>
+      /^(email|tel|file)$/i.test(el.getAttribute('type') || '') ||
+      /first.?name|last.?name|full.?name|resume|phone|email/i.test(
+        [el.getAttribute('name'), el.id, el.getAttribute('placeholder'), el.getAttribute('aria-label')].join(' ')
+      )
+    );
+    if (!login && fields.length >= 2 && hasContactField &&
+        /apply|application|resume|work experience|candidate/i.test(text)) {
+      form.setAttribute('data-cp-glassdoor-application-form', 'true');
+      application = true;
+    } else {
+      form.removeAttribute('data-cp-glassdoor-application-form');
+    }
+  }
+  if (login) {
+    application = false;
+    forms.forEach(form => form.removeAttribute('data-cp-glassdoor-application-form'));
+  }
+  return {login, application, blocked};
+}
+"""
+
+def _glassdoor_profile_path(configured_path: str | None = None) -> str:
+    """Resolve the dedicated local browser profile outside the repository."""
+    if configured_path:
+        profile = Path(configured_path).expanduser().resolve()
+    else:
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        base = Path(local_app_data) if local_app_data else Path.home() / ".careerpilot"
+        profile = base / "CareerPilot AI" / "GlassdoorChromeProfile"
+    repository = Path(__file__).resolve().parents[2]
+    try:
+        profile.relative_to(repository)
+    except ValueError:
+        pass
+    else:
+        raise ValueError("The Glassdoor browser profile must be outside the repository.")
+    profile.mkdir(parents=True, exist_ok=True)
+    return str(profile)
+
+
+def _launch_glassdoor_context(chromium, profile_dir: str, launch: dict):
+    """Use installed Chrome unless an explicit browser executable was configured."""
+    options = dict(launch)
+    if "executable_path" not in options:
+        options["channel"] = "chrome"
+    return chromium.launch_persistent_context(user_data_dir=profile_dir, **options)
+
+
 def _fill_frame(
     frame,
     values: dict[str, dict],
     resume_file: tuple[bytes, str] | None = None,
+    glassdoor: bool = False,
 ) -> list[dict]:
     fields: list[dict] = []
-    for desc in frame.evaluate(COLLECT_JS):
+    for desc in frame.evaluate(COLLECT_JS, {"glassdoor": glassdoor}):
         result = match_field(desc, values)
         if (
             desc.get("type") == "file"
@@ -438,6 +538,7 @@ def run_assistance(
     keep_open_seconds: int = 0,
     on_result: Callable[[dict], None] | None = None,
     browser_path: str | None = None,
+    glassdoor_profile_dir: str | None = None,
     resume_file: tuple[bytes, str] | None = None,
     submission_authorized=None,
 ) -> dict:
@@ -452,6 +553,9 @@ def run_assistance(
         "blocked_navigations": 0,
         "blocked_top_level_navigations": 0,
     }
+    glassdoor_login_authorized = threading.Event()
+    glassdoor_deadline = time.time() + max(0, keep_open_seconds)
+    glassdoor_lock_acquired = False
     result = {"status": RUN_FAILED, "pause_reason": "", "fields": [], "host": target.host}
 
     try:
@@ -463,13 +567,36 @@ def run_assistance(
             launch = {"headless": headless}
             if browser_path:
                 launch["executable_path"] = browser_path
-            browser = pw.chromium.launch(**launch)
-            context = browser.new_context()  # fresh profile: no cookies in, none persisted out
+            persistent_glassdoor = target.adapter == "glassdoor"
+            if persistent_glassdoor:
+                glassdoor_lock_acquired = GLASSDOOR_PROFILE_LOCK.acquire(blocking=False)
+                if not glassdoor_lock_acquired:
+                    result.update(
+                        status=NEEDS_YOU,
+                        pause_reason="glassdoor_profile_in_use",
+                        error_category="glassdoor_profile_in_use",
+                    )
+                    if on_result:
+                        on_result(result)
+                    return result
+                context = _launch_glassdoor_context(
+                    pw.chromium,
+                    _glassdoor_profile_path(glassdoor_profile_dir),
+                    launch,
+                )
+            else:
+                browser = pw.chromium.launch(**launch)
+                context = browser.new_context()
             context.route(
                 "**/*",
-                _route_guard(counter, target, submission_authorized),
+                _route_guard(
+                    counter,
+                    target,
+                    submission_authorized,
+                    glassdoor_login_authorized,
+                ),
             )
-            page = context.new_page()
+            page = context.pages[0] if persistent_glassdoor and context.pages else context.new_page()
             try:
                 page.goto(target.url, wait_until="domcontentloaded", timeout=30000)
                 try:
@@ -486,7 +613,65 @@ def run_assistance(
                 }
 
                 fields: list[dict] = []
-                if not flags["login"]:
+                glassdoor_form = False
+                glassdoor_site_blocked = False
+                if persistent_glassdoor and not headless and keep_open_seconds > 0:
+                    while time.time() < glassdoor_deadline:
+                        glassdoor_form = False
+                        login_detected = False
+                        for candidate in context.pages:
+                            if candidate.is_closed():
+                                continue
+                            for frame in candidate.frames:
+                                if adapter_for_host(urlsplit(frame.url).hostname or "") != "glassdoor":
+                                    continue
+                                try:
+                                    page_flags = frame.evaluate(GLASSDOOR_FORM_JS)
+                                    login_detected = login_detected or bool(page_flags["login"])
+                                    glassdoor_site_blocked = (
+                                        glassdoor_site_blocked or bool(page_flags["blocked"])
+                                    )
+                                    if page_flags["application"]:
+                                        page = candidate
+                                        glassdoor_form = True
+                                except Exception:  # noqa: BLE001 - a frame may be navigating
+                                    continue
+                        if glassdoor_site_blocked:
+                            glassdoor_login_authorized.clear()
+                            result.update(
+                                status=NEEDS_YOU,
+                                pause_reason="glassdoor_site_blocked",
+                                fields=[],
+                            )
+                            break
+                        if glassdoor_form:
+                            glassdoor_login_authorized.clear()
+                            flags = {"login": False, "captcha": False}
+                            flags_raw = page.evaluate(FLAGS_JS)
+                            flags["captcha"] = bool(flags_raw.get("captcha"))
+                            break
+                        if counter["blocked_top_level_navigations"]:
+                            raise RuntimeError("Unsupported top-level redirect blocked.")
+                        if login_detected:
+                            glassdoor_login_authorized.set()
+                        else:
+                            glassdoor_login_authorized.clear()
+                        page.wait_for_timeout(500)
+                    if not glassdoor_form and not glassdoor_site_blocked:
+                        glassdoor_login_authorized.clear()
+                        result.update(
+                            status=NEEDS_YOU,
+                            pause_reason="glassdoor_wait_timeout",
+                            fields=[],
+                        )
+                elif persistent_glassdoor:
+                    result.update(
+                        status=NEEDS_YOU,
+                        pause_reason="glassdoor_interactive_required",
+                        fields=[],
+                    )
+
+                if not persistent_glassdoor and not flags["login"]:
                     visible_fields = any(
                         frame.evaluate(COLLECT_JS) for frame in page.frames
                     )
@@ -511,11 +696,27 @@ def run_assistance(
                             _fill_frame(fr, values, resume_file) for fr in page.frames
                         ]
                         fields = max(per_frame, key=len, default=[])
+                elif persistent_glassdoor and glassdoor_form and not flags["captcha"]:
+                    per_frame = []
+                    for frame in page.frames:
+                        try:
+                            if frame.evaluate(
+                                "!!document.querySelector('[data-cp-glassdoor-application-form=\"true\"]')"
+                            ):
+                                per_frame.append(
+                                    _fill_frame(frame, values, resume_file, glassdoor=True)
+                                )
+                        except Exception:  # noqa: BLE001 - frames can detach during navigation
+                            continue
+                    fields = max(per_frame, key=len, default=[])
 
-                status, pause = summarise(fields, flags)
-                result.update(status=status, pause_reason=pause, fields=fields)
-                if pause == "unsupported_form":
-                    result["error_category"] = "unsupported_form"
+                if persistent_glassdoor and not glassdoor_form:
+                    pass
+                else:
+                    status, pause = summarise(fields, flags)
+                    result.update(status=status, pause_reason=pause, fields=fields)
+                    if pause == "unsupported_form":
+                        result["error_category"] = "unsupported_form"
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Assistance run failed category=%s", type(exc).__name__)
                 if counter["blocked_top_level_navigations"]:
@@ -534,7 +735,7 @@ def run_assistance(
                 result["browser_open"] = True
                 if on_result:
                     on_result(result)
-                deadline = time.time() + keep_open_seconds
+                deadline = glassdoor_deadline if persistent_glassdoor else time.time() + keep_open_seconds
                 while time.time() < deadline and not page.is_closed():
                     try:
                         page.wait_for_timeout(1000)
@@ -544,7 +745,9 @@ def run_assistance(
                 result["browser_open"] = False
             elif on_result:
                 on_result(result)
-            browser.close()
+            context.close()
+            if not persistent_glassdoor:
+                browser.close()
     except UrlRejected as exc:
         logger.warning("Application destination rejected code=%s", exc.code)
         result.update(
@@ -556,14 +759,23 @@ def run_assistance(
         if on_result:
             on_result(result)
     except Exception as exc:  # noqa: BLE001
-        category = "playwright_unavailable" if isinstance(exc, ImportError) else "browser_launch_failed"
+        if isinstance(exc, ImportError):
+            category = "playwright_unavailable"
+        elif target.adapter == "glassdoor":
+            category = "chrome_unavailable"
+        else:
+            category = "browser_launch_failed"
+        pause_reason = "chrome_unavailable" if category == "chrome_unavailable" else "browser_unavailable"
         logger.warning("Browser could not start category=%s", type(exc).__name__)
         result.update(
             status=RUN_FAILED,
-            pause_reason="browser_unavailable",
+            pause_reason=pause_reason,
             error_category=category,
             fields=[],
         )
         if on_result:
             on_result(result)
+    finally:
+        if glassdoor_lock_acquired:
+            GLASSDOOR_PROFILE_LOCK.release()
     return result

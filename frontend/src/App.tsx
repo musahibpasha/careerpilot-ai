@@ -199,6 +199,7 @@ type DiscoveredJob = {
   company: string;
   location: string | null;
   url: string;
+  application_url?: string | null;
   description: string;
   skills: string[];
   nice_to_have_skills: string[];
@@ -1516,6 +1517,7 @@ function App() {
           source: job.source,
           source_job_id: job.source_job_id,
           url: job.url,
+          application_url: job.application_url,
           description: job.description,
           skills: job.skills,
           nice_to_have_skills: job.nice_to_have_skills,

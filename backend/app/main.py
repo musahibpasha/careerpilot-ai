@@ -41,6 +41,7 @@ from xml.sax.saxutils import escape
 from app import schemas
 from app.config import settings
 from app.database import ensure_indexes, get_db
+from app.assistant_urls import UrlRejected, check_fill_url
 from app.jobicy import ALLOWED_GEOS, JobicyError, search_jobicy_jobs
 from app.job_scan import scan_and_save
 from app.job_fetch import JobFetchError, fetch_job_text, is_search_results_url
@@ -164,6 +165,7 @@ def job_out(d: dict) -> dict:
         "source": d.get("source", "manual"),
         "source_job_id": d.get("source_job_id"),
         "url": d.get("url"),
+        "application_url": d.get("application_url"),
         "description": d.get("description", ""),
         "skills": d.get("skills", []),
         "nice_to_have_skills": d.get("nice_to_have_skills", []),
@@ -1385,6 +1387,24 @@ def create_job(
     db: Database = Depends(get_db),
 ):
     url = str(payload.url) if payload.url else None
+    application_url = str(payload.application_url) if payload.application_url else None
+    if application_url:
+        try:
+            target = check_fill_url(application_url, allow_local_form=False)
+        except UrlRejected as error:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": error.code,
+                    "message": "A direct application URL must be a supported Greenhouse or Lever page.",
+                },
+            ) from None
+        if target.adapter not in {"greenhouse", "lever"}:
+            raise HTTPException(
+                status_code=422,
+                detail="A direct application URL must be a supported Greenhouse or Lever page.",
+            )
+        application_url = target.url
 
     if payload.source_job_id and db.jobs.find_one({
         "source": payload.source,
@@ -1414,6 +1434,7 @@ def create_job(
         "source": payload.source,
         "source_job_id": payload.source_job_id,
         "url": url,
+        "application_url": application_url,
         "description": payload.description,
         "skills": skills,
         "nice_to_have_skills": [x.strip() for x in payload.nice_to_have_skills if x.strip()],

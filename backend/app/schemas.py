@@ -19,6 +19,7 @@ class JobCreate(BaseModel):
     source: str = "manual"
     source_job_id: str | None = None
     url: HttpUrl | None = None
+    application_url: HttpUrl | None = None
     description: str = ""
     skills: list[str] = []  # must-have skills
     # Optional details that let matching judge more than skills.
@@ -63,6 +64,7 @@ class JobRead(BaseModel):
     source: str
     source_job_id: str | None
     url: str | None
+    application_url: str | None = None
     description: str
     skills: list[str]
     nice_to_have_skills: list[str] = Field(default_factory=list)
@@ -142,6 +144,7 @@ class JobDiscoveryListing(BaseModel):
     company: str
     location: str | None = None
     url: HttpUrl
+    application_url: HttpUrl | None = None
     description: str = ""
     skills: list[str] = Field(default_factory=list)
     nice_to_have_skills: list[str] = Field(default_factory=list)

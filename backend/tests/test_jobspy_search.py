@@ -77,6 +77,28 @@ def test_search_normalizes_listings_and_uses_bounded_jobspy_query(monkeypatch):
     }]
 
 
+def test_search_keeps_only_supported_employer_application_links(monkeypatch):
+    def fake_scrape_jobs(**_kwargs):
+        return FakeFrame([
+            _job(job_url_direct="https://job-boards.greenhouse.io/acme/jobs/123"),
+            _job(
+                id="indeed-2",
+                job_url="https://www.linkedin.com/jobs/view/456",
+                job_url_direct="https://careers.example.com/apply/456",
+            ),
+        ])
+
+    monkeypatch.setattr(jobspy_search, "scrape_jobs", fake_scrape_jobs)
+    result = jobspy_search.search_jobspy_jobs(
+        site="linkedin",
+        what="engineer",
+        where="",
+    )
+
+    assert result["results"][0]["application_url"] == "https://job-boards.greenhouse.io/acme/jobs/123"
+    assert result["results"][1]["application_url"] is None
+
+
 def test_search_fails_explicitly_when_jobspy_fails(monkeypatch):
     def fail(**_kwargs):
         raise TimeoutError("provider timed out")

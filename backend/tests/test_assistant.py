@@ -335,6 +335,14 @@ def test_supported_hosts_accepted():
     assert check_fill_url("https://boards.greenhouse.io/acme/jobs/1").adapter == "greenhouse"
     assert check_fill_url("https://job-boards.greenhouse.io/acme/jobs/1").adapter == "greenhouse"
     assert check_fill_url("https://jobs.lever.co/acme/abc").adapter == "lever"
+    glassdoor = check_fill_url(
+        "https://www.glassdoor.co.in/job-listing/j?jl=1009971641600&countryRedirect=true"
+    )
+    assert glassdoor.adapter == "glassdoor"
+    assert glassdoor.host == "www.glassdoor.co.in"
+    with pytest.raises(UrlRejected) as e:
+        check_fill_url("https://www.glassdoor.co.in/profile")
+    assert e.value.code == "unsupported_host"
     assert check_fill_url("http://127.0.0.1:8000/assistant-test-form").adapter == "local_test"
     with pytest.raises(UrlRejected):
         check_fill_url("http://127.0.0.1:8000/assistant-test-form", allow_local_form=False)
@@ -349,6 +357,103 @@ def test_public_host_check_rejects_private_dns_answers(monkeypatch):
     with pytest.raises(UrlRejected) as e:
         assistant_urls.check_public_host("careers.example.com")
     assert e.value.code == "non_public_host"
+
+
+def test_glassdoor_login_writes_are_scoped_to_detected_sign_in(monkeypatch):
+    class Request:
+        method = "POST"
+
+        def __init__(self, url):
+            self.url = url
+
+        def is_navigation_request(self):
+            return False
+
+    class Route:
+        def __init__(self, url):
+            self.request = Request(url)
+            self.continued = False
+            self.aborted = False
+
+        def continue_(self):
+            self.continued = True
+
+        def abort(self):
+            self.aborted = True
+
+    monkeypatch.setattr(assistant_fill, "check_public_host", lambda _host: None)
+    target = check_fill_url(
+        "https://www.glassdoor.co.in/job-listing/j?jl=1009971641600"
+    )
+    login_detected = threading.Event()
+    counter = {"blocked_writes": 0, "blocked_navigations": 0}
+    guard = assistant_fill._route_guard(
+        counter,
+        target,
+        glassdoor_login_authorized=login_detected,
+    )
+
+    blocked = Route("https://www.glassdoor.co.in/graphql")
+    guard(blocked)
+    assert blocked.aborted and not blocked.continued
+
+    login_detected.set()
+    allowed = Route("https://accounts.glassdoor.co.in/graphql")
+    guard(allowed)
+    assert allowed.continued and not allowed.aborted
+
+    third_party = Route("https://accounts.example.com/login")
+    guard(third_party)
+    assert third_party.aborted and not third_party.continued
+
+    approved_submit = threading.Event()
+    approved_guard = assistant_fill._route_guard(
+        counter,
+        target,
+        submission_authorized=approved_submit,
+    )
+    still_blocked = Route("https://www.glassdoor.co.in/application/submit")
+    approved_guard(still_blocked)
+    assert still_blocked.aborted
+    approved_submit.set()
+    manually_enabled = Route("https://api.glassdoor.co.in/application/submit")
+    approved_guard(manually_enabled)
+    assert manually_enabled.continued and not manually_enabled.aborted
+
+
+def test_glassdoor_profile_uses_local_path_outside_repository(tmp_path):
+    configured = tmp_path / "glassdoor-profile"
+    profile = pathlib.Path(assistant_fill._glassdoor_profile_path(str(configured)))
+    assert profile == configured.resolve()
+    assert profile.is_dir()
+    with pytest.raises(ValueError):
+        assistant_fill._glassdoor_profile_path(str(pathlib.Path(__file__).resolve().parents[2] / "profile"))
+
+
+def test_glassdoor_launch_uses_installed_chrome_unless_executable_is_configured():
+    calls = []
+
+    class Chromium:
+        def launch_persistent_context(self, **kwargs):
+            calls.append(kwargs)
+            return object()
+
+    chromium = Chromium()
+    assistant_fill._launch_glassdoor_context(chromium, "C:\\profile", {"headless": False})
+    assistant_fill._launch_glassdoor_context(
+        chromium,
+        "C:\\custom-profile",
+        {"headless": False, "executable_path": "C:\\Chrome\\chrome.exe"},
+    )
+
+    assert calls == [
+        {"user_data_dir": "C:\\profile", "headless": False, "channel": "chrome"},
+        {
+            "user_data_dir": "C:\\custom-profile",
+            "headless": False,
+            "executable_path": "C:\\Chrome\\chrome.exe",
+        },
+    ]
 
 
 def test_fill_route_only_accepts_supported_ats_and_preserves_listing_url(db, monkeypatch):
@@ -386,6 +491,29 @@ def test_fill_route_only_accepts_supported_ats_and_preserves_listing_url(db, mon
     assert stored["application_url"] == "https://job-boards.greenhouse.io/acme/jobs/1"
 
 
+def test_fill_route_accepts_and_preserves_glassdoor_listing(db, monkeypatch):
+    seen = []
+
+    def fake_run(target, values, **kwargs):
+        seen.append((target.adapter, target.url))
+        result = {"status": "needs_you", "pause_reason": "", "fields": [], "blocked_writes": 0}
+        kwargs["on_result"](result)
+        return result
+
+    monkeypatch.setattr(assistant_routes, "run_assistance", fake_run)
+    url = "https://www.glassdoor.co.in/job-listing/j?jl=1009971641600&countryRedirect=true"
+    state = open_assistant(db, source="glassdoor", url=url)
+    response = client.post(base(state) + "/fill", json={"url": url})
+    assert response.status_code == 202
+    for _ in range(50):
+        if db.applications.find_one({})["assistant"]["runs"][0].get("finished_at"):
+            break
+        time.sleep(0.02)
+    saved = client.get(base(state)).json()
+    assert seen == [("glassdoor", url)]
+    assert saved["application_url"] == url
+
+
 def test_jobicy_listing_is_not_prefilled_as_an_application_url(db):
     state = open_assistant(
         db,
@@ -395,6 +523,34 @@ def test_jobicy_listing_is_not_prefilled_as_an_application_url(db):
     assert state["job"]["url"] == "https://jobicy.com/jobs/example"
     assert state["job"]["source"] == "jobicy"
     assert state["application_url"] == ""
+
+
+def test_verified_direct_application_url_is_available_when_assistant_opens(db):
+    direct_url = "https://job-boards.greenhouse.io/acme/jobs/123"
+    state = open_assistant(
+        db,
+        source="indeed",
+        url="https://www.indeed.com/viewjob?jk=123",
+        application_url=direct_url,
+    )
+
+    assert state["application_url"] == direct_url
+    app_doc = db.applications.find_one({})
+    assert app_doc["assistant"]["application_url"] == direct_url
+
+
+def test_job_creation_rejects_unverified_direct_application_urls(db):
+    response = client.post(
+        "/api/jobs",
+        json={
+            "title": "Engineer",
+            "company": "Example",
+            "url": "https://www.indeed.com/viewjob?jk=123",
+            "application_url": "https://careers.example.com/apply/123",
+        },
+    )
+
+    assert response.status_code == 422
 
 
 def test_linkedin_job_gets_manual_checklist_not_automation(db):
@@ -555,6 +711,38 @@ def server():
 def run_on(url, values=VALUES):
     target = check_fill_url(url)
     return assistant_fill.run_assistance(target, values, headless=True)
+
+
+@needs_browser
+def test_glassdoor_form_detection_only_marks_application_fields():
+    from playwright.sync_api import sync_playwright
+
+    html = """
+      <form id="search"><input type="email" name="query" placeholder="Search jobs"></form>
+      <form id="application">
+        <h2>Job application</h2>
+        <label>First name <input name="first_name"></label>
+        <label>Email <input type="email" name="email"></label>
+      </form>
+    """
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.set_content(html)
+        flags = page.evaluate(assistant_fill.GLASSDOOR_FORM_JS)
+        fields = page.evaluate(assistant_fill.COLLECT_JS, {"glassdoor": True})
+        browser.close()
+
+    assert flags == {"login": False, "application": True, "blocked": False}
+    assert [field["name"] for field in fields] == ["first_name", "email"]
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.set_content("<h1>Humans only</h1><p>Cloudflare Ray ID: example</p>")
+        flags = page.evaluate(assistant_fill.GLASSDOOR_FORM_JS)
+        browser.close()
+    assert flags == {"login": False, "application": False, "blocked": True}
 
 
 @needs_browser

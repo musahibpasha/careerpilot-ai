@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     assistant_keep_open_seconds: int = 1800
     assistant_allow_local_test_form: bool = False
     assistant_browser_path: str = ""
+    assistant_glassdoor_profile_dir: str = ""
 
     model_config = SettingsConfigDict(
         env_file=".env",

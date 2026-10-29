@@ -206,7 +206,11 @@ def _state(db: Database, app_doc: dict, job: dict, generation: dict | None = Non
         "resume": resume,
         "available_resumes": available_resumes,
         "materials": stored.get("materials"),
-        "application_url": stored.get("application_url", ""),
+        "application_url": (
+            stored.get("application_url")
+            if stored.get("application_url") is not None
+            else job.get("application_url")
+        ) or "",
         "linkedin_job": linkedin_job,
         "manual_checklist": [
             "Open the LinkedIn posting yourself in your own browser.",
@@ -334,6 +338,13 @@ def open_assistant_for_job(job_id: str, db: Database = Depends(get_db)):
     if existing is None:
         m.create_application(m.schemas.ApplicationCreate(job_id=job_id, status="saved"), db)
         existing = db.applications.find_one({"job_id": job["_id"]}, sort=[("updated_at", -1)])
+    stored = _stored(existing)
+    if "application_url" not in stored and job.get("application_url"):
+        db.applications.update_one(
+            {"_id": existing["_id"]},
+            {"$set": {"assistant.application_url": job["application_url"]}},
+        )
+        existing, job = _load(db, str(existing["_id"]))
     return _state(db, existing, job)
 
 
@@ -602,6 +613,7 @@ def _run_in_thread(
             keep_open_seconds=settings.assistant_keep_open_seconds,
             on_result=lambda r: save(r, finished=False),
             browser_path=settings.assistant_browser_path or None,
+            glassdoor_profile_dir=settings.assistant_glassdoor_profile_dir or None,
             resume_file=resume_file,
             submission_authorized=submission_authorized,
         )

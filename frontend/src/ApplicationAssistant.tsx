@@ -129,15 +129,21 @@ const STATUS_TEXT: Record<string, string> = {
 };
 const PAUSE_TEXT: Record<string, string> = {
   login_required: "The page asks you to log in. Log in yourself, then start again.",
+  glassdoor_interactive_required: "Glassdoor autofill needs a visible browser window and an interactive wait period. Set the assistant browser to visible and allow it to stay open, then try again.",
+  glassdoor_wait_timeout: "The Glassdoor browser timed out before an application form appeared. Your local sign-in session is kept; start the run again when ready.",
+  glassdoor_profile_in_use: "Another Glassdoor browser run is already open. Finish or close that run before starting a second one.",
+  glassdoor_site_blocked: "Glassdoor's security page blocked this browser session. CareerPilot won't bypass it. Open the listing in Chrome yourself and use the Application Kit to review or copy answers.",
   captcha: "A CAPTCHA is on the page. Complete it yourself; CareerPilot does not solve or bypass it.",
   unsupported_form: "No fillable form was found here. This page's structure is not supported; use the kit manually.",
   required_fields_need_input: "Some required fields need your input before this form is complete.",
   field_failed: "At least one field could not be filled. Check the list below.",
   navigation_timeout: "The employer page took too long to open. Check the URL and try again.",
   navigation_failed: "The page could not be opened. Check the address and your connection.",
-  unsafe_redirect: "The page tried to redirect outside Greenhouse or Lever. CareerPilot blocked that navigation.",
+  unsafe_redirect: "The page tried to redirect outside its supported employer site. CareerPilot blocked that navigation.",
   browser_unavailable:
     "The browser could not start. Run `python -m playwright install chromium` in the backend environment (see the README).",
+  chrome_unavailable:
+    "Google Chrome could not start. Install Chrome Stable, then restart CareerPilot. The Glassdoor session uses a separate local Chrome profile.",
   unsafe_destination: "The application page resolves to a private or internal address and was blocked.",
   unexpected_error: "The browser run stopped unexpectedly. The form was not submitted. Try opening the employer page directly; if this happens again, check the backend log for the run's error category.",
 };
@@ -150,6 +156,10 @@ function platformFor(host: string) {
   }
   if (normalised === "lever.co" || normalised.endsWith(".lever.co")) {
     return { label: "Lever", icon: PanelsTopLeft };
+  }
+  if (normalised === "glassdoor.com" || normalised.endsWith(".glassdoor.com") ||
+      normalised === "glassdoor.co.in" || normalised.endsWith(".glassdoor.co.in")) {
+    return { label: "Glassdoor", icon: Globe2 };
   }
   return { label: "Employer site", icon: Globe2 };
 }
@@ -167,6 +177,10 @@ function supportedPlatformForUrl(raw: string) {
     if (host === "lever.co" || host.endsWith(".lever.co")) {
       return { label: "Lever", icon: PanelsTopLeft };
     }
+    if (host === "glassdoor.com" || host.endsWith(".glassdoor.com") ||
+        host === "glassdoor.co.in" || host.endsWith(".glassdoor.co.in")) {
+      return { label: "Glassdoor", icon: Globe2 };
+    }
   } catch {
     return null;
   }
@@ -174,9 +188,18 @@ function supportedPlatformForUrl(raw: string) {
 }
 
 function sourceLabel(source: string) {
-  if (source === "jobicy") return "Jobicy listing";
-  if (source === "linkedin") return "LinkedIn listing";
-  return "Saved job link";
+  const labels: Record<string, string> = {
+    jobicy: "Jobicy listing",
+    linkedin: "LinkedIn listing",
+    indeed: "Indeed listing",
+    glassdoor: "Glassdoor listing",
+    zip_recruiter: "ZipRecruiter listing",
+    bayt: "Bayt listing",
+    naukri: "Naukri listing",
+    bdjobs: "BDJobs listing",
+    hellowork: "HelloWork listing",
+  };
+  return labels[source] ?? "Saved job link";
 }
 
 const ANSWER_HELP: Record<string, string> = {
@@ -263,6 +286,8 @@ export default function ApplicationAssistant({
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState("");
+  const [autoFillUrl, setAutoFillUrl] = useState<string | null>(null);
+  const autoFillStartedForJob = useRef<string | null>(null);
   const [edits, setEdits] = useState<Record<string, string>>({}); // "fact:phone" | "answer:x" | "draft:y"
   const [applyUrl, setApplyUrl] = useState("");
   const [reviewed, setReviewed] = useState(false);
@@ -300,6 +325,17 @@ export default function ApplicationAssistant({
         adopt(data);
         setStep(data.steps.current === "job" ? "fill" : data.steps.current);
         onChanged(); // the tracker may have gained the application
+        if (
+          !data.linkedin_job &&
+          data.runs.length === 0 &&
+          !["submitted", "interview", "offer", "rejected", "withdrawn"].includes(data.status)
+        ) {
+          setAutoFillUrl(
+            [data.application_url, data.job.url].find((url) =>
+              supportedPlatformForUrl(url),
+            ) ?? null,
+          );
+        }
       })
       .catch((e: Error) => alive && setLoadError(e.message));
     return () => {
@@ -307,6 +343,44 @@ export default function ApplicationAssistant({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobId]);
+
+  useEffect(() => {
+    if (
+      !s ||
+      !autoFillUrl ||
+      s.job.id !== jobId ||
+      autoFillStartedForJob.current === jobId
+    ) {
+      return;
+    }
+
+    autoFillStartedForJob.current = jobId;
+    setBusy("auto-fill");
+    setError("");
+    let alive = true;
+    void (async () => {
+      try {
+        await api(`/api/applications/${s.application_id}/assistant/fill`, {
+          method: "POST",
+          body: JSON.stringify({ url: autoFillUrl, upload_resume: false }),
+        });
+        const next = await api<AssistantState>(
+          `/api/applications/${s.application_id}/assistant`,
+        );
+        if (alive) {
+          adopt(next);
+          setStep("fill");
+        }
+      } catch (e) {
+        if (alive) setError((e as Error).message);
+      } finally {
+        if (alive) setBusy("");
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [s, autoFillUrl, jobId, adopt]);
 
   useEffect(() => {
     closeRef.current?.focus();
@@ -448,7 +522,7 @@ export default function ApplicationAssistant({
   const latestRun = s?.runs[s.runs.length - 1];
   const platform = latestRun
     ? platformFor(latestRun.host)
-    : supportedPlatformForUrl(applyUrl) ?? { label: "Greenhouse or Lever", icon: Globe2 };
+    : supportedPlatformForUrl(applyUrl) ?? { label: "Greenhouse, Lever, or Glassdoor", icon: Globe2 };
   const applyUrlSupported = !!supportedPlatformForUrl(applyUrl);
   const reviewBlocked = s?.status === "submitted" || ["interview", "offer", "rejected", "withdrawn"].includes(s?.status ?? "");
 
@@ -538,7 +612,7 @@ export default function ApplicationAssistant({
               <input
                 type="url"
                 value={applyUrl}
-                placeholder="https://job-boards.greenhouse.io/company/jobs/..."
+                placeholder="Greenhouse, Lever, or Glassdoor job URL"
                 onChange={(e) => setApplyUrl(e.target.value)}
                 onBlur={() => {
                   const value = applyUrl.trim();
@@ -557,8 +631,8 @@ export default function ApplicationAssistant({
             )}
             {s.job.url && !supportedPlatformForUrl(s.job.url) && !supportedPlatformForUrl(s.application_url) && (
               <p className="aa-hint">
-                The saved link is a {sourceLabel(s.job.source).toLowerCase()}, not a verified application form.
-                Open it, follow the employer's Apply link, then paste the Greenhouse or Lever application URL above.
+                No supported application URL was included with this {sourceLabel(s.job.source).toLowerCase()}.
+                Open the listing and follow its Apply link. Greenhouse, Lever, and Glassdoor are supported; use the Application Kit manually on other sites.
               </p>
             )}
 
@@ -803,16 +877,23 @@ export default function ApplicationAssistant({
               <>
                 <h3>Prepare the employer application</h3>
                 <p className="aa-muted">
-                  CareerPilot can fill supported Greenhouse and Lever application pages. It will not automate Jobicy, LinkedIn, Glassdoor, or other listing pages. You review every field and submit on the employer's site yourself.
+                  Greenhouse and Lever forms, and Glassdoor job listings, can start autofill automatically. For Glassdoor, sign in yourself in its dedicated local browser and open the application form; only matching fields are filled. You review every field and submit on the employer's site yourself.
                 </p>
+                {busy === "auto-fill" && (
+                  <div className="aa-banner aa-run-running" role="status">
+                    {latestRun?.adapter === "glassdoor"
+                      ? "Glassdoor is open in its dedicated local browser. Sign in yourself, then open the job's application form; CareerPilot will fill matching fields and stop for your review."
+                      : "Opening the verified employer application and filling confirmed fields…"}
+                  </div>
+                )}
                 <div className="aa-platform"><platform.icon size={16} /> {platform.label}</div>
                 <label className="aa-field">
                   <span>Employer application URL</span>
-                  <input type="url" value={applyUrl} placeholder="Paste a Greenhouse or Lever application URL" onChange={(e) => setApplyUrl(e.target.value)} />
+                  <input type="url" value={applyUrl} placeholder="Paste a Greenhouse, Lever, or Glassdoor job URL" onChange={(e) => setApplyUrl(e.target.value)} />
                 </label>
                 {applyUrl && !applyUrlSupported && (
                   <div className="aa-banner aa-warn">
-                    This is not a supported Greenhouse or Lever URL. Open the saved listing below, follow its employer Apply link, then paste that application URL here. You can still use the Application Kit to fill other sites manually.
+                    This is not a supported Greenhouse, Lever, or Glassdoor URL. Open the saved listing below, follow its employer Apply link, then paste the application URL here. You can still use the Application Kit to fill other sites manually.
                   </div>
                 )}
                 {s.job.url && (
@@ -827,6 +908,16 @@ export default function ApplicationAssistant({
                   </label>
                 )}
                 <div className="aa-actions">
+                  {s.job.url && (
+                    <a
+                      href={s.job.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="secondary-button"
+                    >
+                      Open job listing <ArrowUpRight size={14} />
+                    </a>
+                  )}
                   <button
                     type="button"
                     className="primary-button"
@@ -854,7 +945,13 @@ export default function ApplicationAssistant({
                     {{ running: "Running", prepared: "Prepared", needs_you: "Needs you", failed: "Failed" }[latestRun.status]}
                   </span>
                 </div>
-                {latestRun.status === "running" && <p className="aa-muted">Filling in the browser window... this updates automatically.</p>}
+                {latestRun.status === "running" && (
+                  <p className="aa-muted">
+                    {latestRun.adapter === "glassdoor"
+                      ? "The local Glassdoor browser is waiting for you to sign in and open the application form. Your session stays in that local profile; CareerPilot does not collect credentials or click Submit."
+                      : "Filling in the browser window... this updates automatically."}
+                  </p>
+                )}
                 {latestRun.pause_reason && (
                   <div className="aa-banner aa-warn">
                     {PAUSE_TEXT[latestRun.pause_reason] ?? latestRun.pause_reason}
