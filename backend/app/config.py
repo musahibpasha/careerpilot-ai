@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     assistant_browser_path: str = ""
     assistant_glassdoor_profile_dir: str = ""
     vercel: bool = False
+    firebase_project_id: str = ""
+    firebase_service_account_json: str = ""
 
     model_config = SettingsConfigDict(
         env_file=".env",

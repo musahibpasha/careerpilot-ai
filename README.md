@@ -46,7 +46,7 @@ The long-term goal is to support a human-approved workflow: find relevant opport
 - **Job feed filtering and sorting** — filter by status, minimum match score, and source; sort by best match, newest, or company.
 - **Application-status tracking with history** — statuses are Discovered, Saved, Under review, Ready for approval, Approved, Submitted, Interview, Offer, Rejected, and Withdrawn. Every change is recorded with a timestamp and shown in the tracker. The generic status endpoints still refuse direct Approved/Submitted changes; the Application Assistant has the dedicated review and manual-submission-confirmation flow.
 - **Job preferences** — save preferred locations, experience level, work arrangement (remote, hybrid, on-site), and salary expectation (minimum, maximum, currency, per year or month). Everything is optional, and target roles stay in the profile. Preferences feed the match score (see Explainable matching).
-- **Multiple resumes with an active resume** — in your profile, keep up to 5 PDF resumes (5 MB each), view them, rename them, delete them, and choose one as the active resume (shown with an "Active" badge). A new application records the resume that was active when it was created and shows it in the tracker. Choosing a resume as active (or uploading your first one) reads it with the same AI parser as auto-fill and fills your profile form from it. The reading is kept with the resume, so switching back is instant, and "Re-read" reads it again. Nothing is saved to your profile until you review the form and click Save profile; closing the window without saving undoes it. The "Upload resume (PDF) and auto-fill" button at the top of the profile saves the file under My resumes and fills the form from it (when you already have 5 saved resumes it only fills the form and keeps nothing); "Add a resume" saves the file and fills the form only if it becomes your active resume. Uploading never changes your saved profile by itself. Resume files are stored in your local MongoDB, which is fine on your own machine, but login and protected storage are needed before the app is ever put online.
+- **Multiple resumes with an active resume** — in your profile, keep up to 5 PDF resumes (5 MB each), view them, rename them, delete them, and choose one as the active resume (shown with an "Active" badge). A new application records the resume that was active when it was created and shows it in the tracker. Choosing a resume as active (or uploading your first one) reads it with the same AI parser as auto-fill and fills your profile form from it. The reading is kept with the resume, so switching back is instant, and "Re-read" reads it again. Nothing is saved to your profile until you review the form and click Save profile; closing the window without saving undoes it. The "Upload resume (PDF) and auto-fill" button at the top of the profile saves the file under My resumes and fills the form from it (when you already have 5 saved resumes it only fills the form and keeps nothing); "Add a resume" saves the file and fills the form only if it becomes your active resume. Uploading never changes your saved profile by itself. Resume records are scoped to the signed-in Firebase UID.
 - **Explainable matching** — each job is scored 0-100 from weighted factors: skills (50, must-have vs nice-to-have), role fit against your target roles (15), location and work style (15), experience level (10) and salary (10). Every factor shows a plain-English reason, missing skills are listed, and a factor that cannot be judged (the job or your preferences do not say enough) is left out instead of counted as a miss. A low/medium/high confidence label shows how much of the picture was judged. Scores update when you save your profile or preferences, or call `POST /api/jobs/rescore`. Salary is only compared when both sides use the same currency. Each job card has a "Why this score?" panel with a bar per factor, the confidence label, missing skills, and the factors that were not counted; the add-job form has an optional "More details" section (nice-to-have skills, work style, level, salary).
 - **Application preparation plan** — Match analysis shows a deterministic fit summary, strengths, gaps, resume focus, positioning guidance, and interview prompts based on the saved job and profile. It is guidance, not AI-generated document text.
 - **AI cover-letter and resume wording drafts** — from a job's Match analysis, choose **Generate cover letter and resume drafts** to request a tailored cover letter, professional-summary rewrite, relevant saved skills to emphasize, and suggestions for rewriting existing experience/project bullets. Drafts use the saved profile and job posting, are editable in the panel, and are not submitted or saved automatically. Contact details are excluded from the AI request. Review all text for accuracy. The reviewed cover letter can be downloaded as a real PDF containing the candidate's saved contact details and the selected job context.
@@ -85,7 +85,7 @@ Work is being delivered incrementally so each stage can be tested before moving 
 | 4 | Job discovery, import, and permitted source connectors | ✅ Manual entry, posting import, Jobicy remote listings, and JobSpy-powered job-board searches are available. |
 | 5 | Application preparation and browser-assisted prefill | ✅ Application kits, editable grounded answer drafts, permitted browser-assisted fill, and LinkedIn manual workflow are built alongside existing document prep. |
 | 6 | Explicit approval workflow and server-side safeguards | ✅ Review hashes, guarded approval transitions, and user-confirmed manual submission are enforced by the backend. |
-| 7 | Analytics, alerts, interview preparation, authentication, security, and deployment | 🔜 Planned |
+| 7 | Analytics, alerts, interview preparation, authentication, security, and deployment | 🔄 Firebase auth and per-user isolation implemented; Firebase setup and approved data migration pending |
 
 ### Current implementation checkpoint
 
@@ -106,7 +106,7 @@ Work is being delivered incrementally so each stage can be tested before moving 
 2. ~~Stage 3: explainable matching and skill-gap insights.~~ Done.
 3. Complete search filters and result normalization, including the limits of each source's available data.
 4. Verify Stage 5 and Stage 6 in the Application Assistant, then continue with active-resume-aware matching.
-5. Build Stage 7: analytics, notifications, authentication, and production hardening.
+5. Continue Stage 7: analytics, notifications, and production hardening.
 
 ## 🏗️ Architecture
 
@@ -191,6 +191,8 @@ Set these backend environment variables in the Vercel project:
 - `CORS_ORIGINS` — exact deployed frontend origin, such as `https://your-site.vercel.app`.
 - `APP_ENV=production`.
 - `OPENROUTER_API_KEY` — optional; required for AI-generated drafts.
+- `FIREBASE_PROJECT_ID` — Firebase project ID used by the Admin SDK.
+- `FIREBASE_SERVICE_ACCOUNT_JSON` — private service-account JSON, stored as a backend-only secret.
 
 Set `VITE_API_URL` in the frontend project to the backend's deployed origin
 (for example `https://your-api.vercel.app`) and redeploy the frontend. Never
@@ -198,10 +200,66 @@ put database credentials or the OpenRouter key in a `VITE_` variable. The
 frontend falls back to localhost only in development; a production build with
 no API URL uses same-origin `/api` requests.
 
+Set these frontend values in `frontend/.env.local` for local development and
+in the frontend Vercel project for production:
+
+- `VITE_FIREBASE_API_KEY`
+- `VITE_FIREBASE_AUTH_DOMAIN`
+- `VITE_FIREBASE_PROJECT_ID`
+- `VITE_FIREBASE_APP_ID`
+
+These are Firebase Web App configuration values, not server credentials.
+Enable Email/Password and Google under **Firebase Console → Authentication →
+Sign-in method**, and add `localhost` and the deployed frontend host under
+**Authentication → Settings → Authorized domains**. The app requires verified
+email addresses before accessing workspace APIs.
+
+The backend verifies Firebase ID tokens with the Firebase Admin SDK. It does
+not trust an email, UID, or owner field from request data. Each request is
+scoped to the UID from its verified token; profile, preferences, jobs,
+applications, resumes, and assistant operations all use that scope. Public
+health, transient job-board search, and non-persisting job-import preview
+remain unauthenticated.
+
+#### Existing workspace data reconciliation
+
+Legacy records remain hidden from the authenticated API until their ownership
+is reconciled. The earlier ownership-only utility is not the import tool for
+reconciling local backups with Atlas. Use the separate
+`scripts/reconcile_legacy_workspace.py` tool only after preparing all five
+Extended JSON collection exports (`jobs.json`, `applications.json`,
+`profiles.json`, `preferences.json`, and `resumes.json`).
+
+The script defaults to read-only dry-run mode. It requires the explicit
+`CAREERPILOT_MIGRATION_ATLAS_URL` variable and `--atlas-db careerpilot`; it
+never falls back to the backend's `MONGODB_URL`. It also prompts for a current
+Firebase ID token with hidden input, verifies the token through Firebase
+Admin, and derives the UID from verified claims. Do not pass an email or UID
+as identity proof. Example:
+
+```powershell
+cd backend
+$env:CAREERPILOT_MIGRATION_ATLAS_URL = "<Atlas URI supplied through your secret manager>"
+python scripts/reconcile_legacy_workspace.py --dry-run --backup-dir ".\migration-backups" --atlas-db careerpilot --expected-email "your-verified-account@example.com"
+```
+
+The tool does not overwrite existing documents or alter indexes. It plans
+ownership-only updates for matching records, preserves Atlas-only records,
+and handles profile conflicts and UID-tagged local-only records separately.
+An apply run is additionally gated by a reviewed manifest hash, exact target
+confirmation, independently verified backups of both databases, successful
+isolated restore and staging reconciliation attestations, and a final typed
+target confirmation. The readiness file must identify hashed local and Atlas
+database backup archives, the hash of the five JSON source exports, and who
+verified successful restore and staging checks. JSON parse counts alone are
+not evidence that a database backup can be restored. Do not use the older
+`assign_legacy_workspace.py` utility for this reconciliation. Never put the
+service-account JSON in the frontend, README, or Git.
+
 Vercel serverless functions cannot keep an interactive browser open. The
 browser-assisted **Fill** endpoint returns `503` on Vercel; use the Application
-Kit to review and copy answers. This app does not yet provide user
-authentication, so deploy only for controlled testing with non-sensitive data.
+Kit to review and copy answers. Firebase authentication does not make an
+interactive browser available inside Vercel.
 Resume uploads may also exceed serverless request-size limits; if that occurs,
 use direct object-storage uploads rather than raising the function limit.
 
@@ -292,7 +350,7 @@ CareerPilot AI is designed around human oversight.
 - **Respect website controls:** use permitted APIs, feeds, and automation methods. Do not bypass CAPTCHA, login requirements, or anti-bot protections.
 - **Pause when uncertain:** automation should stop and ask the user when a page or form is unclear.
 - **Protect secrets:** keep API keys, credentials, private resumes, and personal data out of source control and logs.
-- **Secure before deployment:** authentication and private per-user storage are planned before broader online use.
+- **Secure deployment:** workspace data APIs require a verified Firebase account and enforce per-user ownership.
 
 The current match score is a basic skill-overlap indicator, not a guarantee of job suitability or hiring outcomes.
 
@@ -308,6 +366,7 @@ The test suite (run with `cd backend && python -m pytest -q`) covers key areas s
 - Application status transitions, timestamped status history, and the migration from the old statuses.
 - The application-approval block: `approved` and `submitted` are refused by the backend.
 - Application Assistant (`tests/test_assistant.py`): fact and draft persistence, tailored-material persistence and review hashing, saved-resume selection and consented upload, grounded AI/template answers, Greenhouse/Lever/Glassdoor URL policy, source-listing versus application-URL separation, LinkedIn/private-host restrictions, safe same-platform navigation and redirect checks, Glassdoor login-write scoping and application-form detection, sensitive-field handling, browser write blocking and post-review manual authorization, isolated browser-form tests, explicit manual-submission recording, and regressions for the generic status gates. Browser-driven tests require Playwright Chromium.
+- Authentication and data scoping (`tests/test_auth.py`): bearer-token rejection, verified-email enforcement, owner assignment on inserts, cross-user ID read/update/delete isolation, and protection against attempts to spoof an owner UID.
 - Cover-letter PDF export: checks the PDF response and verifies the reviewed letter and selected job/profile context in extracted PDF text.
 - Job link import (`tests/test_job_fetch.py`, `tests/test_job_import_url.py`): valid public HTML, structured job data, malformed/empty pages, login and CAPTCHA pages, unsupported content types, timeouts, oversized responses, redirect limit, localhost/private/metadata/IPv6 targets, redirects to private addresses, names that resolve to internal addresses, and the pasted-text regression. No test opens a real website.
 
@@ -338,7 +397,7 @@ If the image does not appear, check that the workflow ran successfully, that the
 
 ## 🛣️ Project Status
 
-CareerPilot AI is an active work in progress. The profile editor, PDF resume parsing and review, explainable matching, job discovery/import, application tracking, editable AI cover-letter and resume-wording drafts, and printable tailored-resume export are implemented. Application answers, browser-assisted workflows, the complete approval gate, analytics, authentication, and production deployment remain on the roadmap.
+CareerPilot AI is an active work in progress. The profile editor, PDF resume parsing and review, explainable matching, job discovery/import, application tracking, editable AI cover-letter and resume-wording drafts, printable tailored-resume export, Firebase authentication, and per-user workspace isolation are implemented. Browser-assisted workflows, analytics, and further production hardening remain in progress.
 
 ## 🤝 Contributing
 

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import ApplicationAssistant, { type AssistantMaterials } from "./ApplicationAssistant";
+import { apiFetch as fetch } from "./api";
 import {
   Activity,
   ArrowUpRight,
@@ -2084,6 +2085,29 @@ function App() {
     }
   }
 
+  async function openResumeFile(resume: ResumeFile) {
+    const preview = window.open("about:blank", "_blank");
+    if (!preview) {
+      setNotice("Allow pop-ups to view this resume.");
+      return;
+    }
+
+    try {
+      const response = await fetch(`${API}/api/resumes/${resume.id}/file`);
+      if (!response.ok) {
+        const detail = await response.text();
+        throw new Error(detail || "Could not load this resume.");
+      }
+      const objectUrl = URL.createObjectURL(await response.blob());
+      preview.opener = null;
+      preview.location.href = objectUrl;
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+    } catch (reason) {
+      preview.close();
+      setNotice(reason instanceof Error ? reason.message : "Could not load this resume.");
+    }
+  }
+
   function toggleArrangement(value: string) {
     setPreferencesForm((prev) => ({
       ...prev,
@@ -2334,7 +2358,7 @@ function App() {
     },
     copilot: {
       eyebrow: "AI COPILOT",
-      title: "Career Copilot",
+      title: "ThoughtbotLabs Copilot",
       sub: "Quick answers about your matches, gaps and approvals.",
     },
   };
@@ -2744,7 +2768,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
         role: "assistant",
         text: waiting.length
           ? "These applications are waiting for your review. Nothing is submitted on your behalf; use Automate to prepare and review one."
-          : "Nothing is waiting for review. CareerPilot never submits an application for you.",
+          : "Nothing is waiting for review. ThoughtLabs Pilot never submits an application for you.",
         lines: waiting.map(
           (a) => `${a.job_title} at ${a.company} — ${statusLabel(a.status)}`,
         ),
@@ -3017,7 +3041,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
             <Sparkles size={20} />
           </div>
           <div>
-            <strong>CareerPilot</strong>
+            <strong>ThoughtLabs</strong>
             <span>AI job-search copilot</span>
           </div>
         </div>
@@ -3295,7 +3319,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                     <div>
                       <h2>Human approval required</h2>
                       <p style={{ marginTop: 4, fontSize: 13 }}>
-                        CareerPilot never submits an application for you. Review and approve it in
+                        ThoughtLabs Pilot never submits an application for you. Review and approve it in
                         the Application Assistant, then submit it yourself on the employer's site.
                       </p>
                     </div>
@@ -4107,7 +4131,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                   <Bot size={20} />
                 </span>
                 <div>
-                  <strong>Career Copilot</strong>
+                  <strong>Thoughtlabs Copilot</strong>
                   <small>Answers come from your saved jobs, profile and applications</small>
                 </div>
               </div>
@@ -4608,7 +4632,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
         )}
 
         <footer>
-          CAREERPILOT AI <span>·</span> Thoughtful automation, human decisions.
+          ThoughtLabs AI <span>·</span> ThoughtLabs automation, human decisions.
         </footer>
       </main>
 
@@ -4984,14 +5008,13 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                   {formatSize(resume.size)}
                 </small>
                 <div className="resume-actions">
-                  <a
+                  <button
+                    type="button"
                     className="secondary-button"
-                    href={`${API}/api/resumes/${resume.id}/file`}
-                    target="_blank"
-                    rel="noreferrer"
+                    onClick={() => void openResumeFile(resume)}
                   >
                     View
-                  </a>
+                  </button>
                   {!resume.is_active && (
                     <button
                       type="button"

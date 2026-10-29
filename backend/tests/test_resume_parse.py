@@ -13,9 +13,17 @@ from pypdf.generic import (
 )
 
 from app import main
+from app.auth import get_current_user_id
 
 
 client = TestClient(main.app)
+
+
+@pytest.fixture(autouse=True)
+def mock_authenticated_user():
+    main.app.dependency_overrides[get_current_user_id] = lambda: "resume-parse-test-user"
+    yield
+    main.app.dependency_overrides.pop(get_current_user_id, None)
 
 
 def pdf_with_text() -> bytes:

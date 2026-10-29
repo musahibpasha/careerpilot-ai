@@ -39,8 +39,9 @@ from starlette.datastructures import Headers
 from xml.sax.saxutils import escape
 
 from app import schemas
+from app.auth import get_current_user_id
 from app.config import settings
-from app.database import ensure_indexes, get_db
+from app.database import ensure_indexes, get_base_db, get_db
 from app.assistant_urls import UrlRejected, check_fill_url
 from app.jobicy import ALLOWED_GEOS, JobicyError, search_jobicy_jobs
 from app.job_scan import scan_and_save
@@ -65,7 +66,6 @@ from app.workflow import (
     allowed_next,
     gated_next,
     history_entry,
-    migrate_statuses,
 )
 
 logger = logging.getLogger(__name__)
@@ -115,11 +115,7 @@ def _sanitize_openrouter_diagnostic(value, resume_text, redact_resume=False):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    db = get_db()
-    ensure_indexes(db)
-    result = migrate_statuses(db, now())
-    if result["migrated"] or result["history_started"] or result["unknown"]:
-        logger.info("Application status migration: %s", result)
+    ensure_indexes(get_base_db())
     yield
 
 
@@ -375,7 +371,10 @@ async def _post_with_retry_and_fallback(client, messages):
 
 
 @app.post("/api/resume/parse")
-async def parse_resume(file: UploadFile = File(...)):
+async def parse_resume(
+    file: UploadFile = File(...),
+    _user_id: str = Depends(get_current_user_id),
+):
     """
     Extract information from a PDF resume for the user to review.
 
