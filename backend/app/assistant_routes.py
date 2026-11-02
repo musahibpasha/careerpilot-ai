@@ -12,13 +12,20 @@ main.py is imported lazily inside functions to avoid a circular import.
 import asyncio
 import hashlib
 import logging
+import os
+import re
+import shutil
+import subprocess
 import threading
+import time
 import uuid
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from urllib.parse import urlsplit
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 from pymongo.database import Database
 
@@ -31,7 +38,12 @@ from app.approval import (
     withdraw_approval,
 )
 from app.assistant_fill import run_assistance
-from app.assistant_urls import UrlRejected, check_fill_url, is_blocked_host
+from app.assistant_urls import (
+    UrlRejected,
+    check_fill_url,
+    check_job_listing_url,
+    is_blocked_host,
+)
 from app.config import settings
 from app.database import get_db
 from app.resumes import MAX_RESUME_BYTES, safe_filename
@@ -43,6 +55,185 @@ STEPS = ("job", "kit", "fill", "review", "done")
 ACTIVE_RUNS: dict[str, tuple[str, threading.Event]] = {}
 ACTIVE_RUNS_LOCK = threading.Lock()
 MAX_ACTIVE_RUNS = 3
+
+
+# ---------------- diagnostic artifact helpers ----------------
+
+def _artifact_base_dir() -> Path:
+    """Resolve the root directory for all diagnostic artifacts.
+
+    Defaults to  <backend_package_parent>/diagnostics  so it lives outside
+    the app package itself.  Override with the ASSISTANT_TRACE_DIR env var /
+    settings key for production deployments.
+    """
+    configured = (settings.assistant_trace_dir or "").strip()
+    if configured:
+        return Path(configured).expanduser().resolve()
+    # backend/app/__file__ -> backend/app -> backend -> diagnostics sibling
+    return (Path(__file__).resolve().parents[1] / "diagnostics").resolve()
+
+
+def _owner_component(owner_uid: str) -> str:
+    if not isinstance(owner_uid, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", owner_uid):
+        raise ValueError("Invalid artifact owner.")
+    return owner_uid
+
+
+def _is_link(path: Path) -> bool:
+    return path.is_symlink() or bool(getattr(path, "is_junction", lambda: False)())
+
+
+def _secure_artifact_directory(path: Path) -> None:
+    if os.name == "nt":
+        executable = shutil.which("icacls")
+        username = os.environ.get("USERNAME")
+        domain = os.environ.get("USERDOMAIN")
+        if not executable or not username:
+            raise OSError("Could not establish a private artifact directory.")
+        account = f"{domain}\\{username}" if domain else username
+        completed = subprocess.run(
+            [
+                executable,
+                str(path),
+                "/inheritance:r",
+                "/grant:r",
+                f"{account}:(OI)(CI)F",
+            ],
+            capture_output=True,
+            check=False,
+            timeout=10,
+        )
+        if completed.returncode:
+            raise OSError("Could not establish a private artifact directory.")
+        return
+    path.chmod(0o700)
+
+
+def _artifact_file_for_run(owner_uid: str, run_id: str, filename: str) -> Path:
+    if not re.fullmatch(r"[a-fA-F0-9]{32}", run_id or ""):
+        raise ValueError("Invalid artifact run identifier.")
+    if filename not in ("trace.zip", "screenshot.png"):
+        raise ValueError("Invalid artifact filename.")
+    base = _artifact_base_dir().resolve()
+    user_dir = base / _owner_component(owner_uid)
+    run_dir = user_dir / run_id
+    if _is_link(run_dir) or _is_link(user_dir):
+        raise ValueError("Artifact path contains a symbolic link.")
+    resolved_dir = run_dir.resolve()
+    resolved_dir.relative_to(user_dir.resolve())
+    artifact = resolved_dir / filename
+    if _is_link(artifact):
+        raise ValueError("Artifact path contains a symbolic link.")
+    artifact.resolve().relative_to(resolved_dir)
+    return artifact
+
+
+def _artifact_is_available(db: Database, run: dict, run_id: str, filename: str) -> bool:
+    owner_uid = getattr(db, "_user_id", None)
+    path_key = "trace_path" if filename == "trace.zip" else "screenshot_path"
+    stored_path = run.get(path_key)
+    if not isinstance(owner_uid, str) or not stored_path:
+        return False
+    try:
+        expected = _artifact_file_for_run(owner_uid, run_id, filename)
+        return Path(stored_path).resolve() == expected.resolve() and expected.is_file()
+    except (OSError, ValueError):
+        return False
+
+
+def _download_artifact_path(
+    db: Database,
+    run: dict,
+    run_id: str,
+    filename: str,
+    label: str,
+) -> Path:
+    owner_uid = getattr(db, "_user_id", None)
+    path_key = "trace_path" if filename == "trace.zip" else "screenshot_path"
+    stored_path = run.get(path_key)
+    if not stored_path:
+        raise HTTPException(status_code=404, detail=f"No {label} was recorded for this run.")
+    try:
+        if not isinstance(owner_uid, str):
+            raise ValueError("Missing authenticated owner.")
+        expected = _artifact_file_for_run(owner_uid, run_id, filename)
+        stored = Path(stored_path).resolve()
+        stored.relative_to(_artifact_base_dir().resolve())
+        if stored != expected.resolve():
+            raise ValueError("Artifact does not match the authenticated run.")
+    except (OSError, ValueError):
+        logger.warning("Diagnostic artifact path rejected kind=%s", label)
+        raise HTTPException(status_code=403, detail=f"{label.capitalize()} file location is invalid.") from None
+    if not expected.is_file():
+        raise HTTPException(status_code=404, detail=f"{label.capitalize()} file not found.")
+    return expected
+
+
+def _artifact_dir_for_run(owner_uid: str, run_id: str) -> Path:
+    """Return the per-run artifact directory (not yet created)."""
+    if not re.fullmatch(r"[a-fA-F0-9]{32}", run_id or ""):
+        raise ValueError("Invalid artifact run identifier.")
+    return _artifact_base_dir() / _owner_component(owner_uid) / run_id
+
+
+def _make_artifact_dir(owner_uid: str, run_id: str) -> str | None:
+    """Create the artifact directory for a run and return its path.
+
+    Returns None if the directory cannot be created (non-fatal).
+    """
+    if not isinstance(owner_uid, str) or not owner_uid:
+        return None
+    try:
+        base = _artifact_base_dir()
+        base.mkdir(parents=True, exist_ok=True)
+        _secure_artifact_directory(base)
+        d = _artifact_dir_for_run(owner_uid, run_id)
+        d.parent.mkdir(parents=True, exist_ok=True)
+        if _is_link(d.parent):
+            raise ValueError("Artifact owner directory cannot be a symbolic link.")
+        d.parent.resolve().relative_to(base.resolve())
+        _secure_artifact_directory(d.parent)
+        d.mkdir(parents=True, exist_ok=True)
+        if _is_link(d):
+            raise ValueError("Artifact run directory cannot be a symbolic link.")
+        d.resolve().relative_to(d.parent.resolve())
+        _secure_artifact_directory(d)
+        return str(d)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not create private artifact directory category=%s", type(exc).__name__)
+        return None
+
+
+def _cleanup_old_artifacts(owner_uid: str) -> None:
+    """Delete artifact directories older than the configured retention period.
+
+    Only the calling user's subdirectory is ever touched.  This is called
+    asynchronously before starting a new run; errors are logged and ignored.
+    """
+    retention = settings.assistant_artifact_retention_days
+    if retention <= 0:
+        return
+    try:
+        user_dir = _artifact_base_dir() / _owner_component(owner_uid)
+        if _is_link(user_dir):
+            raise ValueError("Artifact owner directory cannot be a symbolic link.")
+        user_dir.resolve().relative_to(_artifact_base_dir().resolve())
+        if not user_dir.is_dir():
+            return
+        cutoff = datetime.now(timezone.utc) - timedelta(days=retention)
+        for run_dir in user_dir.iterdir():
+            if _is_link(run_dir) or not run_dir.is_dir():
+                continue
+            try:
+                mtime = datetime.fromtimestamp(run_dir.stat().st_mtime, tz=timezone.utc)
+                if mtime < cutoff:
+                    run_dir.resolve().relative_to(user_dir.resolve())
+                    shutil.rmtree(run_dir)
+                    logger.debug("Removed expired diagnostic artifacts.")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Artifact cleanup failed category=%s", type(exc).__name__)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Artifact cleanup error: %s", exc)
 
 
 # ---------------- small helpers ----------------
@@ -226,9 +417,14 @@ def _state(db: Database, app_doc: dict, job: dict, generation: dict | None = Non
         },
         "steps": {"current": stored.get("current_step", "job"), "done": done, "order": list(STEPS)},
         "runs": [
-            {k: r.get(k) for k in ("id", "host", "adapter", "status", "pause_reason", "fields",
-                                    "started_at", "finished_at", "blocked_writes",
-                                    "browser_open", "submission_enabled", "error_category")}
+            {
+                **{k: r.get(k) for k in ("id", "host", "adapter", "status", "pause_reason",
+                                         "fields", "started_at", "finished_at", "blocked_writes",
+                                         "browser_open", "submission_enabled", "error_category")},
+                # Surface artifact availability without exposing filesystem paths.
+                "has_trace": _artifact_is_available(db, r, r.get("id", ""), "trace.zip"),
+                "has_screenshot": _artifact_is_available(db, r, r.get("id", ""), "screenshot.png"),
+            }
             for r in (stored.get("runs") or [])[-5:]
         ],
         "submitted_at": stored.get("submitted_at"),
@@ -587,6 +783,7 @@ def _run_in_thread(
     values: dict,
     submission_authorized: threading.Event,
     resume_file: tuple[bytes, str] | None,
+    owner_uid: str | None,
 ) -> None:
     m = _main()
 
@@ -594,42 +791,164 @@ def _run_in_thread(
         sets = {
             "assistant.runs.$.status": result["status"],
             "assistant.runs.$.pause_reason": result.get("pause_reason", ""),
+            "assistant.runs.$.error_category": result.get("error_category", ""),
             "assistant.runs.$.fields": result.get("fields", []),
             "assistant.runs.$.blocked_writes": result.get("blocked_writes", 0),
             "assistant.runs.$.browser_open": result.get("browser_open", False),
         }
-        if result.get("error_category"):
-            sets["assistant.runs.$.error_category"] = result["error_category"]
         if result.get("submission_enabled"):
             sets["assistant.runs.$.submission_enabled"] = True
+        # Persist artifact paths so the download endpoints can locate the files.
+        if result.get("trace_path"):
+            sets["assistant.runs.$.trace_path"] = result["trace_path"]
+        if result.get("screenshot_path"):
+            sets["assistant.runs.$.screenshot_path"] = result["screenshot_path"]
         if finished:
             sets["assistant.runs.$.finished_at"] = m.now()
         db.applications.update_one({"_id": app_id, "assistant.runs.id": run_id}, {"$set": sets})
 
     try:
+        # Create the artifact directory and clean up old ones before launching.
+        artifact_dir = _make_artifact_dir(owner_uid, run_id) if owner_uid else None
+        if owner_uid:
+            _cleanup_old_artifacts(owner_uid)
         final = run_assistance(
             target, values,
             headless=settings.assistant_browser_headless,
             keep_open_seconds=settings.assistant_keep_open_seconds,
+            browser_cdp_endpoint=(
+                settings.assistant_browser_cdp_endpoint
+                if target.adapter.endswith("_listing")
+                else None
+            ),
             on_result=lambda r: save(r, finished=False),
-            browser_path=settings.assistant_browser_path or None,
-            glassdoor_profile_dir=settings.assistant_glassdoor_profile_dir or None,
+            automation_profile_dir=(
+                settings.assistant_browser_profile_dir
+                or settings.assistant_glassdoor_profile_dir
+                or None
+            ),
             resume_file=resume_file,
             submission_authorized=submission_authorized,
+            artifact_dir=artifact_dir,
         )
         save(final, finished=True)
     except Exception as exc:  # noqa: BLE001 - never leave a run stuck on 'running'
-        error_category = type(exc).__name__
-        logger.warning("Assistant run crashed category=%s", error_category)
+        logger.warning("Assistant run crashed category=unexpected_error")
         save({
             "status": "failed",
             "pause_reason": "unexpected_error",
-            "error_category": error_category,
+            "error_category": "unexpected_error",
+            "fields": [],
+        }, finished=True)
+    except BaseException:  # noqa: BLE001 - persist cancellation before releasing the run
+        logger.warning("Assistant run stopped category=run_cancelled")
+        save({
+            "status": "failed",
+            "pause_reason": "run_cancelled",
+            "error_category": "run_cancelled",
             "fields": [],
         }, finished=True)
     finally:
         with ACTIVE_RUNS_LOCK:
             ACTIVE_RUNS.pop(run_id, None)
+
+
+def _start_browser_run(
+    db: Database,
+    app_doc: dict,
+    target,
+    values: dict,
+    *,
+    resume_file: tuple[bytes, str] | None = None,
+    persist_application_url: bool = True,
+) -> dict:
+    run_id = uuid.uuid4().hex
+    now = _main().now()
+    submission_authorized = threading.Event()
+    owner_uid = getattr(db, "_user_id", None)
+    if not isinstance(owner_uid, str) or not owner_uid:
+        owner_uid = None
+
+    with ACTIVE_RUNS_LOCK:
+        if len(ACTIVE_RUNS) >= MAX_ACTIVE_RUNS:
+            raise HTTPException(status_code=429, detail="Too many browser runs are active. Wait for one to finish.")
+        if any(active_application_id == str(app_doc["_id"]) for active_application_id, _ in ACTIVE_RUNS.values()):
+            raise HTTPException(status_code=409, detail="A browser assistance run is already in progress.")
+        ACTIVE_RUNS[run_id] = (str(app_doc["_id"]), submission_authorized)
+
+    run = {
+        "id": run_id,
+        "host": target.host,
+        "adapter": target.adapter,
+        "status": "running",
+        "pause_reason": "",
+        "fields": [],
+        "started_at": now,
+        "finished_at": None,
+        "blocked_writes": 0,
+        "browser_open": False,
+        "submission_enabled": False,
+    }
+    update = {
+        "$push": {"assistant.runs": run},
+        "$addToSet": {"assistant.visited": "fill"},
+        "$set": {"assistant.current_step": "fill"},
+    }
+    if persist_application_url:
+        update["$set"]["assistant.application_url"] = target.url
+    try:
+        db.applications.update_one({"_id": app_doc["_id"]}, update)
+    except Exception:
+        with ACTIVE_RUNS_LOCK:
+            ACTIVE_RUNS.pop(run_id, None)
+        raise
+
+    threading.Thread(
+        target=_run_in_thread,
+        args=(
+            db,
+            app_doc["_id"],
+            run_id,
+            target,
+            values,
+            submission_authorized,
+            resume_file,
+            owner_uid,
+        ),
+        daemon=True,
+    ).start()
+    logger.info("Assistant run started host=%s adapter=%s", target.host, target.adapter)
+    return {"run_id": run_id, "status": "running", "host": target.host}
+
+
+@router.post("/api/applications/{application_id}/assistant/open-listing", status_code=202)
+def open_saved_job_listing(application_id: str, db: Database = Depends(get_db)):
+    """Open this application's saved job URL in the shared persistent browser."""
+    if settings.vercel:
+        raise HTTPException(
+            status_code=503,
+            detail="The CareerPilot persistent browser is available only from the local backend.",
+        )
+    app_doc, job = _load(db, application_id)
+    if app_doc["status"] in ("submitted", "interview", "offer", "rejected", "withdrawn"):
+        raise HTTPException(status_code=409, detail="This application is already past the preparation stage.")
+    if any(r.get("status") == "running" for r in _stored(app_doc).get("runs", [])):
+        raise HTTPException(status_code=409, detail="A browser assistance run is already in progress.")
+    try:
+        target = check_job_listing_url(job.get("url", ""), job.get("source", ""))
+    except UrlRejected as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": exc.code, "message": exc.message},
+        ) from None
+
+    return _start_browser_run(
+        db,
+        app_doc,
+        target,
+        {},
+        persist_application_url=False,
+    )
 
 
 @router.post("/api/applications/{application_id}/assistant/fill", status_code=202)
@@ -677,46 +996,13 @@ def start_fill(application_id: str, payload: FillRequest, db: Database = Depends
             raise HTTPException(status_code=422, detail="The selected saved resume is not a valid PDF.")
         resume_file = (data, safe_filename(resume_doc["filename"]))
 
-    run_id = uuid.uuid4().hex
-    now = _main().now()
-    submission_authorized = threading.Event()
-    values = _fill_values(db, app_doc)
-    with ACTIVE_RUNS_LOCK:
-        if len(ACTIVE_RUNS) >= MAX_ACTIVE_RUNS:
-            raise HTTPException(status_code=429, detail="Too many browser runs are active. Wait for one to finish.")
-        if any(active_application_id == str(app_doc["_id"]) for active_application_id, _ in ACTIVE_RUNS.values()):
-            raise HTTPException(status_code=409, detail="A browser assistance run is already in progress.")
-        ACTIVE_RUNS[run_id] = (str(app_doc["_id"]), submission_authorized)
-
-    run = {"id": run_id, "host": target.host, "adapter": target.adapter, "status": "running",
-           "pause_reason": "", "fields": [], "started_at": now, "finished_at": None,
-           "blocked_writes": 0, "browser_open": False, "submission_enabled": False}
-    try:
-        db.applications.update_one(
-            {"_id": app_doc["_id"]},
-            {"$push": {"assistant.runs": run},
-             "$set": {"assistant.application_url": target.url, "assistant.current_step": "fill"},
-             "$addToSet": {"assistant.visited": "fill"}},
-        )
-    except Exception:
-        with ACTIVE_RUNS_LOCK:
-            ACTIVE_RUNS.pop(run_id, None)
-        raise
-    threading.Thread(
-        target=_run_in_thread,
-        args=(
-            db,
-            app_doc["_id"],
-            run_id,
-            target,
-            values,
-            submission_authorized,
-            resume_file,
-        ),
-        daemon=True,
-    ).start()
-    logger.info("Assistant run started host=%s adapter=%s", target.host, target.adapter)
-    return {"run_id": run_id, "status": "running", "host": target.host}
+    return _start_browser_run(
+        db,
+        app_doc,
+        target,
+        _fill_values(db, app_doc),
+        resume_file=resume_file,
+    )
 
 
 @router.get("/api/applications/{application_id}/assistant/runs/{run_id}")
@@ -724,10 +1010,54 @@ def get_run(application_id: str, run_id: str, db: Database = Depends(get_db)):
     app_doc, _ = _load(db, application_id)
     for r in _stored(app_doc).get("runs", []):
         if r.get("id") == run_id:
-            return {k: r.get(k) for k in ("id", "host", "adapter", "status", "pause_reason", "fields",
-                                           "started_at", "finished_at", "blocked_writes",
-                                               "browser_open", "submission_enabled", "error_category")}
+            out = {k: r.get(k) for k in ("id", "host", "adapter", "status", "pause_reason",
+                                          "fields", "started_at", "finished_at", "blocked_writes",
+                                          "browser_open", "submission_enabled", "error_category")}
+            out["has_trace"] = _artifact_is_available(db, r, run_id, "trace.zip")
+            out["has_screenshot"] = _artifact_is_available(db, r, run_id, "screenshot.png")
+            return out
     raise HTTPException(status_code=404, detail="Run not found.")
+
+
+@router.get("/api/applications/{application_id}/assistant/runs/{run_id}/trace")
+def download_run_trace(application_id: str, run_id: str, db: Database = Depends(get_db)):
+    """Download the Playwright trace archive for a completed run.
+
+    Ownership is enforced by the UserScopedDatabase dependency (get_db):
+    the query only finds documents belonging to the authenticated Firebase user.
+    The filesystem path is read from the database record and validated to be
+    inside the configured artifact base directory before it is served.
+    """
+    from fastapi.responses import FileResponse as _FR
+    app_doc, _ = _load(db, application_id)
+    run = next((r for r in _stored(app_doc).get("runs", []) if r.get("id") == run_id), None)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found.")
+    p = _download_artifact_path(db, run, run_id, "trace.zip", "trace")
+    return _FR(
+        path=str(p),
+        filename=f"trace-{run_id[:8]}.zip",
+        media_type="application/zip",
+    )
+
+
+@router.get("/api/applications/{application_id}/assistant/runs/{run_id}/screenshot")
+def download_run_screenshot(application_id: str, run_id: str, db: Database = Depends(get_db)):
+    """Download the post-fill screenshot for a completed run.
+
+    Same ownership enforcement as the trace endpoint.
+    """
+    from fastapi.responses import FileResponse as _FR
+    app_doc, _ = _load(db, application_id)
+    run = next((r for r in _stored(app_doc).get("runs", []) if r.get("id") == run_id), None)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found.")
+    p = _download_artifact_path(db, run, run_id, "screenshot.png", "screenshot")
+    return _FR(
+        path=str(p),
+        filename=f"screenshot-{run_id[:8]}.png",
+        media_type="image/png",
+    )
 
 
 @router.post("/api/applications/{application_id}/assistant/runs/{run_id}/authorize-submit")

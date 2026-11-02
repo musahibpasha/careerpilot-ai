@@ -8,15 +8,17 @@ import pathlib
 import socket
 import threading
 import time
+from types import SimpleNamespace
 
 import mongomock
 import pytest
 import uvicorn
+from bson import ObjectId
 from fastapi.testclient import TestClient
 
 from app import assistant_fill, assistant_kit as kit
 from app import assistant_routes, assistant_test_form, assistant_urls, schemas
-from app.assistant_urls import UrlRejected, check_fill_url
+from app.assistant_urls import UrlRejected, check_fill_url, check_job_listing_url
 from app.database import get_db
 from app.main import app
 
@@ -350,6 +352,161 @@ def test_supported_hosts_accepted():
         check_fill_url("http://127.0.0.1:8000/assistant-test-form-evil")
 
 
+@pytest.mark.parametrize(
+    ("source", "url", "adapter"),
+    (
+        ("linkedin", "https://www.linkedin.com/jobs/view/123", "linkedin_listing"),
+        ("naukri", "https://www.naukri.com/job-listings-backend-dev", "naukri_listing"),
+        ("indeed", "https://in.indeed.com/viewjob?jk=abc123", "indeed_listing"),
+        ("glassdoor", "https://www.glassdoor.co.in/job-listing/backend-dev", "glassdoor_listing"),
+    ),
+)
+def test_job_listing_urls_are_restricted_to_their_platform(source, url, adapter):
+    target = check_job_listing_url(url, source)
+    assert target.adapter == adapter
+    assert target.url == url
+
+
+@pytest.mark.parametrize(
+    ("url", "source", "code"),
+    (
+        ("", "linkedin", "invalid_url"),
+        ("http://www.linkedin.com/jobs/view/123", "linkedin", "invalid_url"),
+        ("https://linkedin.com.evil.example/jobs/view/123", "linkedin", "unsupported_host"),
+        ("https://example.com/jobs/view/123", "indeed", "unsupported_host"),
+        ("https://www.indeed.com/viewjob?jk=123", "linkedin", "platform_mismatch"),
+        ("https://user:password@www.linkedin.com/jobs/view/123", "linkedin", "invalid_url"),
+        ("https://www.linkedin.com:8443/jobs/view/123", "linkedin", "invalid_url"),
+        ("https://www.linkedin.com/", "linkedin", "invalid_url"),
+    ),
+)
+def test_job_listing_url_policy_rejects_invalid_or_mismatched_urls(url, source, code):
+    with pytest.raises(UrlRejected) as exc:
+        check_job_listing_url(url, source)
+    assert exc.value.code == code
+
+
+@pytest.mark.parametrize(
+    ("source", "url", "adapter"),
+    (
+        ("linkedin", "https://www.linkedin.com/jobs/view/123", "linkedin_listing"),
+        ("naukri", "https://www.naukri.com/job-listings-backend-dev", "naukri_listing"),
+        ("indeed", "https://in.indeed.com/viewjob?jk=abc123", "indeed_listing"),
+        ("glassdoor", "https://www.glassdoor.co.in/job-listing/backend-dev", "glassdoor_listing"),
+    ),
+)
+def test_open_listing_uses_saved_job_url_without_overwriting_application_url(
+    db, monkeypatch, source, url, adapter
+):
+    started = []
+    monkeypatch.setattr(
+        assistant_routes.settings,
+        "assistant_browser_cdp_endpoint",
+        "http://127.0.0.1:9222",
+    )
+
+    def fake_run(target, values, **kwargs):
+        started.append((
+            target.adapter,
+            target.url,
+            values,
+            kwargs["browser_cdp_endpoint"],
+        ))
+        result = {
+            "status": "needs_you",
+            "pause_reason": "listing_opened",
+            "fields": [],
+            "blocked_writes": 0,
+            "browser_open": False,
+        }
+        kwargs["on_result"](result)
+        return result
+
+    monkeypatch.setattr(assistant_routes, "run_assistance", fake_run)
+    employer_url = "https://boards.greenhouse.io/acme/jobs/1"
+    state = open_assistant(
+        db,
+        source=source,
+        url=url,
+        application_url=employer_url,
+    )
+    response = client.post(
+        base(state) + "/open-listing",
+        json={"url": "https://example.com/not-the-saved-job"},
+    )
+    assert response.status_code == 202
+
+    for _ in range(50):
+        app_doc = db.applications.find_one({})
+        if app_doc["assistant"]["runs"][0].get("finished_at"):
+            break
+        time.sleep(0.02)
+
+    saved = client.get(base(state)).json()
+    assert started == [(adapter, url, {}, "http://127.0.0.1:9222")]
+    assert saved["runs"][-1]["adapter"] == adapter
+    assert saved["runs"][-1]["pause_reason"] == "listing_opened"
+    assert db.applications.find_one({})["assistant"]["application_url"] == employer_url
+
+
+def test_open_listing_rejects_invalid_saved_url_and_platform_mismatch(db, monkeypatch):
+    started = []
+    monkeypatch.setattr(assistant_routes, "run_assistance", lambda *args, **kwargs: started.append(args[0]))
+
+    missing = open_assistant(db, url="https://www.linkedin.com/jobs/view/123")
+    db.jobs.update_one(
+        {"_id": ObjectId(missing["job"]["id"])},
+        {"$set": {"url": ""}},
+    )
+    response = client.post(base(missing) + "/open-listing")
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "invalid_url"
+
+    mismatch = open_assistant(
+        db,
+        source="linkedin",
+        url="https://www.indeed.com/viewjob?jk=abc123",
+    )
+    response = client.post(base(mismatch) + "/open-listing")
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "platform_mismatch"
+    assert started == []
+
+
+def test_open_listing_does_not_require_browser_launch_or_keep_open_duration(db, monkeypatch):
+    monkeypatch.setattr(
+        assistant_routes.settings,
+        "assistant_keep_open_seconds",
+        0,
+    )
+    started = []
+
+    def fake_run(target, values, **kwargs):
+        started.append((target.url, kwargs["browser_cdp_endpoint"]))
+        result = {
+            "status": "failed",
+            "pause_reason": "browser_attachment_unavailable",
+            "error_category": "browser_attachment_unavailable",
+            "fields": [],
+            "browser_open": False,
+        }
+        kwargs["on_result"](result)
+        return result
+
+    monkeypatch.setattr(assistant_routes, "run_assistance", fake_run)
+    state = open_assistant(
+        db,
+        source="naukri",
+        url="https://www.naukri.com/job-listings-backend-dev",
+    )
+    response = client.post(base(state) + "/open-listing")
+
+    assert response.status_code == 202
+    assert started == [
+        ("https://www.naukri.com/job-listings-backend-dev", "")
+    ]
+
+
 def test_public_host_check_rejects_private_dns_answers(monkeypatch):
     monkeypatch.setattr(assistant_urls, "resolve_host", lambda host, port: ["8.8.8.8"])
     assistant_urls.check_public_host("careers.example.com")
@@ -361,17 +518,16 @@ def test_public_host_check_rejects_private_dns_answers(monkeypatch):
 
 def test_glassdoor_login_writes_are_scoped_to_detected_sign_in(monkeypatch):
     class Request:
-        method = "POST"
-
-        def __init__(self, url):
+        def __init__(self, url, method):
             self.url = url
+            self.method = method
 
         def is_navigation_request(self):
             return False
 
     class Route:
-        def __init__(self, url):
-            self.request = Request(url)
+        def __init__(self, url, method="POST"):
+            self.request = Request(url, method)
             self.continued = False
             self.aborted = False
 
@@ -390,7 +546,7 @@ def test_glassdoor_login_writes_are_scoped_to_detected_sign_in(monkeypatch):
     guard = assistant_fill._route_guard(
         counter,
         target,
-        glassdoor_login_authorized=login_detected,
+        manual_login_authorized=login_detected,
     )
 
     blocked = Route("https://www.glassdoor.co.in/graphql")
@@ -421,6 +577,75 @@ def test_glassdoor_login_writes_are_scoped_to_detected_sign_in(monkeypatch):
     assert manually_enabled.continued and not manually_enabled.aborted
 
 
+def test_listing_navigation_and_manual_login_are_platform_scoped(monkeypatch):
+    class Request:
+        def __init__(self, url, method, navigation):
+            self.url = url
+            self.method = method
+            self.navigation = navigation
+
+        def is_navigation_request(self):
+            return self.navigation
+
+        @property
+        def frame(self):
+            return type("Frame", (), {"parent_frame": None})()
+
+    class Route:
+        def __init__(self, url, method="POST", navigation=True):
+            self.request = Request(url, method, navigation)
+            self.continued = False
+            self.aborted = False
+
+        def continue_(self):
+            self.continued = True
+
+        def abort(self):
+            self.aborted = True
+
+    monkeypatch.setattr(assistant_fill, "check_public_host", lambda _host: None)
+    target = check_job_listing_url(
+        "https://www.linkedin.com/jobs/view/123",
+        "linkedin",
+    )
+    counter = {"blocked_writes": 0, "blocked_navigations": 0}
+    login_detected = threading.Event()
+    guard = assistant_fill._route_guard(
+        counter,
+        target,
+        manual_login_authorized=login_detected,
+    )
+
+    selected_job = Route(target.url, method="GET")
+    guard(selected_job)
+    assert selected_job.continued
+
+    linkedin_asset = Route(
+        "https://static.licdn.com/images/logo.png",
+        method="GET",
+        navigation=False,
+    )
+    guard(linkedin_asset)
+    assert linkedin_asset.continued
+
+    external_redirect = Route("https://www.indeed.com/viewjob?jk=other", method="GET")
+    guard(external_redirect)
+    assert external_redirect.aborted
+
+    login_request = Route("https://auth.linkedin.com/session")
+    guard(login_request)
+    assert login_request.aborted
+
+    login_detected.set()
+    allowed_login_request = Route("https://auth.linkedin.com/session")
+    guard(allowed_login_request)
+    assert allowed_login_request.continued
+
+    unrelated_write = Route("https://example.com/submit")
+    guard(unrelated_write)
+    assert unrelated_write.aborted
+
+
 def test_glassdoor_profile_uses_local_path_outside_repository(tmp_path):
     configured = tmp_path / "glassdoor-profile"
     profile = pathlib.Path(assistant_fill._glassdoor_profile_path(str(configured)))
@@ -430,7 +655,7 @@ def test_glassdoor_profile_uses_local_path_outside_repository(tmp_path):
         assistant_fill._glassdoor_profile_path(str(pathlib.Path(__file__).resolve().parents[2] / "profile"))
 
 
-def test_glassdoor_launch_uses_installed_chrome_unless_executable_is_configured():
+def test_persistent_launch_always_uses_headed_branded_chrome(monkeypatch, tmp_path):
     calls = []
 
     class Chromium:
@@ -438,12 +663,17 @@ def test_glassdoor_launch_uses_installed_chrome_unless_executable_is_configured(
             calls.append(kwargs)
             return object()
 
+    monkeypatch.setattr(
+        assistant_fill,
+        "_installed_chrome_executable",
+        lambda: tmp_path / "chrome.exe",
+    )
     chromium = Chromium()
     assistant_fill._launch_glassdoor_context(chromium, "C:\\profile", {"headless": False})
     assistant_fill._launch_glassdoor_context(
         chromium,
         "C:\\custom-profile",
-        {"headless": False, "executable_path": "C:\\Chrome\\chrome.exe"},
+        {"headless": True, "executable_path": "C:\\not-google-chrome\\chromium.exe"},
     )
 
     assert calls == [
@@ -451,7 +681,7 @@ def test_glassdoor_launch_uses_installed_chrome_unless_executable_is_configured(
         {
             "user_data_dir": "C:\\custom-profile",
             "headless": False,
-            "executable_path": "C:\\Chrome\\chrome.exe",
+            "channel": "chrome",
         },
     ]
 
@@ -672,6 +902,82 @@ def test_top_level_redirects_must_stay_on_the_supported_ats():
     assert assistant_fill._is_safe_main_frame_navigation(
         "https://jobs.lever.co/acme/abc", lever
     )
+
+
+def test_linkedin_google_sign_in_navigation_is_narrowly_allowed():
+    linkedin = check_job_listing_url(
+        "https://www.linkedin.com/jobs/view/123",
+        "linkedin",
+    )
+    indeed = check_job_listing_url(
+        "https://in.indeed.com/viewjob?jk=123",
+        "indeed",
+    )
+
+    assert assistant_fill._is_safe_main_frame_navigation(
+        "https://accounts.google.com/gsi/select?client_id=example.apps.googleusercontent.com",
+        linkedin,
+    )
+    assert assistant_fill._is_safe_main_frame_navigation(
+        "https://accounts.google.com/v3/signin/identifier",
+        linkedin,
+    )
+    assert not assistant_fill._is_safe_main_frame_navigation(
+        "https://accounts.google.com/evil-redirect",
+        linkedin,
+    )
+    assert not assistant_fill._is_safe_main_frame_navigation(
+        "https://accounts.google.com/gsi/select",
+        indeed,
+    )
+    assert not assistant_fill._is_safe_main_frame_navigation(
+        "https://accounts.google.com.evil.example/gsi/select",
+        linkedin,
+    )
+
+
+def test_linkedin_oauth_posts_are_allowed_only_to_google_accounts_host(monkeypatch):
+    class Request:
+        def __init__(self, url, method):
+            self.url = url
+            self.method = method
+            self.frame = SimpleNamespace(parent_frame=None)
+
+        def is_navigation_request(self):
+            return self.method == "GET"
+
+    class Route:
+        def __init__(self, url, method="POST"):
+            self.request = Request(url, method)
+            self.continued = False
+            self.aborted = False
+
+        def continue_(self):
+            self.continued = True
+
+        def abort(self):
+            self.aborted = True
+
+    monkeypatch.setattr(assistant_fill, "check_public_host", lambda _host: None)
+    target = check_job_listing_url("https://www.linkedin.com/jobs/view/123", "linkedin")
+    manual_login = threading.Event()
+    guard = assistant_fill._route_guard(
+        {"blocked_writes": 0, "blocked_navigations": 0},
+        target,
+        manual_login_authorized=manual_login,
+    )
+
+    oauth_navigation = Route("https://accounts.google.com/gsi/select", "GET")
+    guard(oauth_navigation)
+    assert oauth_navigation.continued and manual_login.is_set()
+
+    oauth_post = Route("https://accounts.google.com/gsi/select")
+    guard(oauth_post)
+    assert oauth_post.continued and not oauth_post.aborted
+
+    other_provider_post = Route("https://accounts.example.com/signin")
+    guard(other_provider_post)
+    assert other_provider_post.aborted and not other_provider_post.continued
 
 
 def test_automation_code_never_clicks_or_presses_keys():

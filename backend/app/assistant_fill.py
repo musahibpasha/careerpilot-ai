@@ -2,23 +2,31 @@
 
 What this module does:   open an allowed application page, find form fields,
                          fill those matching confirmed Application Kit values,
-                         and report every field. Glassdoor uses a dedicated
-                         persistent local profile for user-driven sign-in.
+                         and report every field. Supported browser runs share
+                         one dedicated persistent local profile.
 What it never does:      enter credentials, click Submit, tick consent boxes,
                          or solve CAPTCHAs. Resume upload is available only
                          after explicit user consent. Non-read requests are
-                         blocked except while a Glassdoor sign-in form is
+                         blocked except while a supported sign-in form is
                          detected or after separate post-review authorization.
 
 Field outcomes: filled | skipped | needs_input | failed.
 Run outcomes:   prepared | needs_you | failed  (never "submitted").
+
+Diagnostic artifacts (traces, screenshots) may contain sensitive page content.
+The caller stores them in a private per-user directory and serves them only to
+the authenticated owner. This module never logs field values or credentials.
 """
 
 import logging
+import errno
 import os
 import re
+import shutil
+import subprocess
 import threading
 import time
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Callable
 from urllib.parse import urlsplit
@@ -31,10 +39,13 @@ from app.assistant_urls import (
     check_public_host,
     is_blocked_host,
     is_non_public_host,
+    platform_for_host,
 )
 
 logger = logging.getLogger(__name__)
-GLASSDOOR_PROFILE_LOCK = threading.Lock()
+_PROFILE_LOCKS_GUARD = threading.Lock()
+_PROFILE_THREAD_LOCKS: dict[str, threading.Lock] = {}
+_CDP_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1"})
 
 FILLED, SKIPPED, NEEDS_INPUT, FAILED = "filled", "skipped", "needs_input", "failed"
 PREPARED, NEEDS_YOU, RUN_FAILED = "prepared", "needs_you", "failed"
@@ -233,10 +244,25 @@ COLLECT_JS = """
 FLAGS_JS = """
 () => {
   const q = (s) => !!document.querySelector(s);
-  const pw = Array.from(document.querySelectorAll('input[type=password]')).some(e => e.offsetParent !== null);
+  const visible = (el) => {
+    const r = el.getBoundingClientRect(), s = getComputedStyle(el);
+    return s.display !== 'none' && s.visibility !== 'hidden' && (r.width > 0 || r.height > 0);
+  };
+  const fields = Array.from(document.querySelectorAll('input, textarea')).filter(visible);
+  const pw = fields.some(e => (e.getAttribute('type') || '').toLowerCase() === 'password');
+  const loginPath = /\\/(log-?in|sign-?in|sso|auth)(\\/|$|\\?)/i.test(location.pathname);
+  const text = document.body ? document.body.innerText : '';
+  const loginText = /sign in|log in|welcome back/i.test(text);
+  const hasIdentity = fields.some(e =>
+    /email|user.?name|login/i.test([
+      e.getAttribute('type'), e.getAttribute('name'), e.id,
+      e.getAttribute('placeholder'), e.getAttribute('aria-label')
+    ].join(' '))
+  );
+  const login = loginPath || pw || (loginText && hasIdentity);
   const captcha = q('iframe[src*="recaptcha"], iframe[src*="hcaptcha"], iframe[src*="turnstile"], .g-recaptcha, .h-captcha, .cf-turnstile, [data-sitekey]')
-    || /verify (that )?you are (a )?human|i'm not a robot/i.test(document.body ? document.body.innerText : '');
-  return {password: pw, captcha: captcha};
+    || /verify (that )?you are (a )?human|i'm not a robot|captcha|cloudflare|checking your browser|unusual activity|account (is )?restricted|access denied/i.test(text);
+  return {password: pw, login: login, captcha: captcha};
 }
 """
 
@@ -256,6 +282,11 @@ APPLY_LINK_JS = """
 """
 
 _LOGIN_URL_RE = re.compile(r"/(log-?in|sign-?in|sso|auth)(/|$|\?)", re.I)
+_LINKEDIN_GOOGLE_AUTH_HOST = "accounts.google.com"
+_GOOGLE_AUTH_PATH_RE = re.compile(
+    r"^/(?:gsi/|o/oauth2/|signin/|v\d+/signin/|ServiceLogin|AccountChooser)",
+    re.I,
+)
 
 
 def _same_origin_application_link(href: str, target: FillTarget) -> bool:
@@ -280,8 +311,17 @@ def _is_safe_main_frame_navigation(url: str, target: FillTarget) -> bool:
     except ValueError:
         return False
     host = (parts.hostname or "").lower().rstrip(".")
-    if parts.username or parts.password or is_blocked_host(host):
+    listing_platform = _listing_platform(target)
+    if parts.username or parts.password or (is_blocked_host(host) and platform_for_host(host) != listing_platform):
         return False
+    if (
+        listing_platform == "linkedin"
+        and host == _LINKEDIN_GOOGLE_AUTH_HOST
+        and parts.scheme.lower() == "https"
+        and port in (None, 443)
+        and _GOOGLE_AUTH_PATH_RE.match(parts.path)
+    ):
+        return True
     if target.adapter == "local_test":
         target_parts = urlsplit(target.url)
         return (
@@ -293,7 +333,25 @@ def _is_safe_main_frame_navigation(url: str, target: FillTarget) -> bool:
     return (
         parts.scheme.lower() == "https"
         and port in (None, 443)
-        and adapter_for_host(host) == target.adapter
+        and (
+            platform_for_host(host) == listing_platform
+            if listing_platform
+            else adapter_for_host(host) == target.adapter
+        )
+    )
+
+
+def _listing_platform(target: FillTarget | None) -> str | None:
+    if target is None or not target.adapter.endswith("_listing"):
+        return None
+    return target.adapter.removesuffix("_listing")
+
+
+def _is_listing_platform_request_host(host: str, platform: str) -> bool:
+    if platform_for_host(host) == platform:
+        return True
+    return platform == "linkedin" and (
+        host == "licdn.com" or host.endswith(".licdn.com")
     )
 
 
@@ -301,13 +359,18 @@ def _route_guard(
     counter: dict,
     target: FillTarget | None = None,
     submission_authorized=None,
-    glassdoor_login_authorized=None,
+    manual_login_authorized=None,
 ):
-    """Block writes except user sign-in requests and explicitly authorized submits."""
+    """Block writes except detected user sign-in and explicitly authorized submits."""
     def handler(route):
         req = route.request
         parts = urlsplit(req.url)
         host = (parts.hostname or "").lower().rstrip(".")
+        listing_platform = _listing_platform(target)
+        is_linkedin_google_auth = (
+            listing_platform == "linkedin"
+            and host == _LINKEDIN_GOOGLE_AUTH_HOST
+        )
         local_target = target is not None and target.adapter == "local_test"
         target_parts = urlsplit(target.url) if local_target else None
         is_target_local_origin = bool(
@@ -331,13 +394,22 @@ def _route_guard(
             )
             route.abort()
             return
+        if is_top_level_navigation and is_linkedin_google_auth and manual_login_authorized:
+            manual_login_authorized.set()
         if req.method not in ("GET", "HEAD", "OPTIONS"):
-            glassdoor_login_write = bool(
-                glassdoor_login_authorized
-                and glassdoor_login_authorized.is_set()
+            manual_login_write = bool(
+                manual_login_authorized
+                and manual_login_authorized.is_set()
                 and target
-                and target.adapter == "glassdoor"
-                and adapter_for_host(host) == "glassdoor"
+                and target.adapter != "local_test"
+                and (
+                    adapter_for_host(host) == target.adapter
+                    or (
+                        listing_platform is not None
+                        and _is_listing_platform_request_host(host, listing_platform)
+                    )
+                    or is_linkedin_google_auth
+                )
                 and parts.scheme.lower() == "https"
                 and parts.port in (None, 443)
                 and not parts.username
@@ -348,19 +420,17 @@ def _route_guard(
                 and submission_authorized.is_set()
                 and target
                 and target.adapter != "local_test"
+                and listing_platform is None
                 and (
                     host == target.host
-                    or (
-                        target.adapter == "glassdoor"
-                        and adapter_for_host(host) == "glassdoor"
-                    )
+                    or adapter_for_host(host) == target.adapter
                 )
                 and parts.scheme.lower() == "https"
                 and parts.port in (None, 443)
                 and not parts.username
                 and not parts.password
             )
-            if glassdoor_login_write or allowed_manual_write:
+            if manual_login_write or allowed_manual_write:
                 try:
                     check_public_host(host)
                     route.continue_()
@@ -378,7 +448,13 @@ def _route_guard(
         elif not local_target and parts.port not in (None, 80, 443):
             counter["blocked_navigations"] += 1
             route.abort()
-        elif parts.username or parts.password or is_blocked_host(host) or (
+        elif parts.username or parts.password or (
+            is_blocked_host(host)
+            and not (
+                listing_platform
+                and _is_listing_platform_request_host(host, listing_platform)
+            )
+        ) or (
             is_non_public_host(host) and not is_target_local_origin
         ):
             counter["blocked_navigations"] += 1
@@ -450,31 +526,326 @@ GLASSDOOR_FORM_JS = """
 }
 """
 
-def _glassdoor_profile_path(configured_path: str | None = None) -> str:
-    """Resolve the dedicated local browser profile outside the repository."""
+def _secure_profile_directory(path: Path) -> None:
+    if os.name == "nt":
+        executable = shutil.which("icacls")
+        username = os.environ.get("USERNAME")
+        domain = os.environ.get("USERDOMAIN")
+        if not executable or not username:
+            raise OSError("Could not establish a private browser profile directory.")
+        account = f"{domain}\\{username}" if domain else username
+        completed = subprocess.run(
+            [
+                executable,
+                str(path),
+                "/inheritance:r",
+                "/grant:r",
+                f"{account}:(OI)(CI)F",
+            ],
+            capture_output=True,
+            check=False,
+            timeout=10,
+        )
+        if completed.returncode:
+            raise OSError("Could not establish a private browser profile directory.")
+        return
+    path.chmod(0o700)
+
+
+def _automation_profile_path(configured_path: str | None = None) -> str:
+    """Resolve a private, dedicated CareerPilot profile outside the repository."""
     if configured_path:
-        profile = Path(configured_path).expanduser().resolve()
+        configured = Path(configured_path).expanduser()
+        if configured.is_symlink() or bool(getattr(configured, "is_junction", lambda: False)()):
+            raise ValueError("The automation browser profile cannot be a symbolic link.")
+        profile = configured.resolve()
     else:
         local_app_data = os.environ.get("LOCALAPPDATA")
         base = Path(local_app_data) if local_app_data else Path.home() / ".careerpilot"
-        profile = base / "CareerPilot AI" / "GlassdoorChromeProfile"
+        profile = (base / "CareerPilot AI" / "AutomationChromeProfile").resolve()
     repository = Path(__file__).resolve().parents[2]
     try:
         profile.relative_to(repository)
     except ValueError:
         pass
     else:
-        raise ValueError("The Glassdoor browser profile must be outside the repository.")
+        raise ValueError("The automation browser profile must be outside the repository.")
+    app_data = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")).expanduser()
+    normal_chrome_profiles = (
+        app_data / "Google" / "Chrome" / "User Data",
+        app_data / "Microsoft" / "Edge" / "User Data",
+    )
+    for normal_profile in normal_chrome_profiles:
+        try:
+            profile.relative_to(normal_profile.resolve())
+        except ValueError:
+            continue
+        raise ValueError("Use a separate CareerPilot profile, not a regular browser profile.")
     profile.mkdir(parents=True, exist_ok=True)
+    if profile.is_symlink() or bool(getattr(profile, "is_junction", lambda: False)()):
+        raise ValueError("The automation browser profile cannot be a symbolic link.")
+    _secure_profile_directory(profile)
     return str(profile)
 
 
-def _launch_glassdoor_context(chromium, profile_dir: str, launch: dict):
-    """Use installed Chrome unless an explicit browser executable was configured."""
-    options = dict(launch)
-    if "executable_path" not in options:
-        options["channel"] = "chrome"
+def _installed_chrome_executable() -> Path:
+    """Find an installed Google Chrome binary without using Playwright Chromium."""
+    candidates: list[Path] = []
+    if os.name == "nt":
+        for root in (
+            os.environ.get("PROGRAMFILES"),
+            os.environ.get("PROGRAMFILES(X86)"),
+            os.environ.get("LOCALAPPDATA"),
+        ):
+            if root:
+                candidates.append(
+                    Path(root) / "Google" / "Chrome" / "Application" / "chrome.exe"
+                )
+        try:
+            import winreg
+
+            for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+                try:
+                    with winreg.OpenKey(
+                        hive,
+                        r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe",
+                    ) as key:
+                        value, _ = winreg.QueryValueEx(key, None)
+                        candidates.append(Path(value))
+                except OSError:
+                    continue
+        except ImportError:
+            pass
+        candidates.extend(
+            Path(path)
+            for path in (
+                shutil.which("chrome.exe"),
+                shutil.which("chrome"),
+            )
+            if path
+        )
+    else:
+        candidates.extend(
+            Path(path)
+            for name in ("google-chrome-stable", "google-chrome", "chrome")
+            if (path := shutil.which(name))
+        )
+        candidates.append(
+            Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+        )
+
+    for candidate in candidates:
+        try:
+            resolved = candidate.expanduser().resolve(strict=True)
+        except (OSError, RuntimeError):
+            continue
+        if resolved.is_file():
+            return resolved
+    raise FileNotFoundError(
+        "Google Chrome Stable was not found. Install Google Chrome to use browser automation."
+    )
+
+
+def _glassdoor_profile_path(configured_path: str | None = None) -> str:
+    """Backward-compatible alias for the shared automation profile resolver."""
+    return _automation_profile_path(configured_path)
+
+
+class AutomationProfileLock:
+    """Non-blocking thread and OS file lock for one persistent browser profile."""
+
+    def __init__(self, profile_dir: str):
+        profile = Path(profile_dir).resolve()
+        self.lock_path = profile / ".careerpilot-profile.lock"
+        self.key = os.path.normcase(str(profile))
+        with _PROFILE_LOCKS_GUARD:
+            self.thread_lock = _PROFILE_THREAD_LOCKS.setdefault(self.key, threading.Lock())
+        self.handle = None
+        self._file_locked = False
+        self._thread_locked = False
+
+    def acquire(self) -> bool:
+        if not self.thread_lock.acquire(blocking=False):
+            return False
+        self._thread_locked = True
+        try:
+            if self.lock_path.is_symlink() or bool(
+                getattr(self.lock_path, "is_junction", lambda: False)()
+            ):
+                raise OSError("The browser profile lock path is not a regular file.")
+            self.handle = self.lock_path.open("a+b")
+            self.handle.seek(0, os.SEEK_END)
+            if self.handle.tell() == 0:
+                self.handle.write(b"\0")
+                self.handle.flush()
+            self.handle.seek(0)
+        except Exception:
+            self._release()
+            raise
+
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(self.handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self._file_locked = True
+            if os.name != "nt":
+                os.chmod(self.lock_path, 0o600)
+            return True
+        except (BlockingIOError, OSError) as exc:
+            self._release()
+            if (
+                isinstance(exc, BlockingIOError)
+                or getattr(exc, "errno", None) in (errno.EAGAIN, errno.EACCES, errno.EDEADLK)
+                or getattr(exc, "winerror", None) in (33, 36)
+            ):
+                return False
+            raise
+        except Exception:
+            self._release()
+            raise
+
+    def _release(self) -> None:
+        try:
+            if self.handle is not None:
+                try:
+                    if self._file_locked:
+                        if os.name == "nt":
+                            import msvcrt
+
+                            self.handle.seek(0)
+                            msvcrt.locking(self.handle.fileno(), msvcrt.LK_UNLCK, 1)
+                        else:
+                            import fcntl
+
+                            fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
+                finally:
+                    self.handle.close()
+                    self.handle = None
+                    self._file_locked = False
+        except OSError as exc:
+            logger.warning("Browser profile lock cleanup failed category=%s", type(exc).__name__)
+        finally:
+            if self._thread_locked:
+                self.thread_lock.release()
+                self._thread_locked = False
+
+    def release(self) -> None:
+        self._release()
+
+
+class BrowserAttachmentUnavailable(RuntimeError):
+    """No explicitly configured local Chrome DevTools endpoint is available."""
+
+
+class BrowserProfileMismatch(BrowserAttachmentUnavailable):
+    """The connected Chrome does not expose the dedicated CareerPilot profile."""
+
+
+def _validate_cdp_endpoint(endpoint: str | None) -> str:
+    value = (endpoint or "").strip()
+    if not value:
+        raise BrowserAttachmentUnavailable(
+            "No CareerPilot Chrome debugging endpoint is configured."
+        )
+    try:
+        parts = urlsplit(value)
+        port = parts.port
+    except ValueError:
+        raise BrowserAttachmentUnavailable(
+            "The CareerPilot Chrome debugging endpoint is invalid."
+        ) from None
+    if (
+        parts.scheme.lower() != "http"
+        or (parts.hostname or "").lower().rstrip(".") not in _CDP_LOOPBACK_HOSTS
+        or port is None
+        or parts.username
+        or parts.password
+        or parts.path not in ("", "/")
+        or parts.query
+        or parts.fragment
+    ):
+        raise BrowserAttachmentUnavailable(
+            "The Chrome debugging endpoint must be a local HTTP endpoint such as http://127.0.0.1:9222."
+        )
+    return f"http://{(parts.hostname or '').lower().rstrip('.')}:{port}"
+
+
+def _verify_dedicated_chrome(context, page, expected_profile: str) -> None:
+    """Fail closed unless CDP identifies Google Chrome using our dedicated profile."""
+    session = context.new_cdp_session(page)
+    try:
+        try:
+            product = session.send("Browser.getVersion").get("product", "")
+            arguments = session.send("Browser.getBrowserCommandLine").get("arguments", [])
+        except Exception as exc:
+            raise BrowserAttachmentUnavailable(
+                "Could not verify the connected Chrome profile. Start Chrome with "
+                "--enable-automation and the dedicated CareerPilot --user-data-dir."
+            ) from exc
+    finally:
+        try:
+            session.detach()
+        except Exception as exc:
+            logger.warning("Chrome CDP inspection cleanup failed category=%s", type(exc).__name__)
+
+    if not isinstance(product, str) or not product.startswith("Chrome/"):
+        raise BrowserProfileMismatch(
+            "The local debugging endpoint is not connected to Google Chrome."
+        )
+
+    user_data_dir = None
+    for index, argument in enumerate(arguments if isinstance(arguments, list) else []):
+        if not isinstance(argument, str):
+            continue
+        if argument.startswith("--user-data-dir="):
+            user_data_dir = argument.partition("=")[2].strip('"')
+            break
+        if (
+            argument == "--user-data-dir"
+            and index + 1 < len(arguments)
+            and isinstance(arguments[index + 1], str)
+        ):
+            user_data_dir = arguments[index + 1].strip('"')
+            break
+    if not user_data_dir:
+        raise BrowserProfileMismatch(
+            "Chrome did not identify a dedicated user-data directory."
+        )
+    try:
+        actual_profile = os.path.normcase(
+            str(Path(os.path.expandvars(user_data_dir)).expanduser().resolve())
+        )
+        required_profile = os.path.normcase(str(Path(expected_profile).resolve()))
+    except (OSError, RuntimeError, ValueError):
+        raise BrowserProfileMismatch(
+            "Chrome's user-data directory could not be verified."
+        ) from None
+    if actual_profile != required_profile:
+        raise BrowserProfileMismatch(
+            "The connected Chrome is not using CareerPilot's dedicated profile."
+        )
+
+
+def _launch_automation_context(chromium, profile_dir: str, launch: dict):
+    """Launch headed, branded Google Chrome with the dedicated persistent profile."""
+    _installed_chrome_executable()
+    options = {
+        key: value
+        for key, value in launch.items()
+        if key not in {"channel", "executable_path", "headless"}
+    }
+    options.update(headless=False, channel="chrome")
     return chromium.launch_persistent_context(user_data_dir=profile_dir, **options)
+
+
+def _launch_glassdoor_context(chromium, profile_dir: str, launch: dict):
+    """Backward-compatible alias for the shared persistent-context launcher."""
+    return _launch_automation_context(chromium, profile_dir, launch)
 
 
 def _fill_frame(
@@ -507,12 +878,14 @@ def _fill_frame(
                 )
             except Exception:
                 result.update(state=FAILED, reason="Could not attach the selected resume.")
+        if desc.get("type") == "file":
+            result.pop("value", None)
+            fields.append(result)
+            continue
         if result["state"] == FILLED:
             loc = frame.locator(f'[data-cp-idx="{desc["idx"]}"]')
             try:
-                if desc.get("type") == "file":
-                    pass
-                elif desc["kind"] == "select":
+                if desc["kind"] == "select":
                     loc.select_option(result["value"], timeout=4000)
                     ok = loc.input_value(timeout=2000) == result["value"]
                 else:
@@ -523,6 +896,11 @@ def _fill_frame(
                     result.update(state=FAILED, reason="The page did not keep the value.")
                 elif not valid:
                     result.update(state=FAILED, reason="The page reports this value as invalid.")
+                else:
+                    result.update(
+                        state=FILLED,
+                        reason="Filled from a confirmed Application Kit value.",
+                    )
             except Exception:  # noqa: BLE001 - report, never crash the run
                 result.update(state=FAILED, reason="Could not fill this field.")
         result.pop("value", None)  # never keep personal values in results
@@ -537,66 +915,189 @@ def run_assistance(
     headless: bool = False,
     keep_open_seconds: int = 0,
     on_result: Callable[[dict], None] | None = None,
-    browser_path: str | None = None,
+    browser_cdp_endpoint: str | None = None,
+    automation_profile_dir: str | None = None,
     glassdoor_profile_dir: str | None = None,
     resume_file: tuple[bytes, str] | None = None,
     submission_authorized=None,
+    artifact_dir: str | None = None,
 ) -> dict:
     """Open the page, fill matched fields, report. Blocking: run it in a thread.
 
     `on_result` is called as soon as filling finishes, before the optional
     keep-open wait, so the UI can show results while the user's browser is open.
+
+    `artifact_dir` is an optional private directory for this run's trace and
+    screenshot. Both may contain sensitive page content, so the caller must
+    restrict filesystem access and authenticated downloads. They are never
+    logged.
     """
     started = time.time()
+    persistent_profile = target.adapter != "local_test"
+    persistent_glassdoor = target.adapter == "glassdoor"
+    listing_platform = _listing_platform(target)
+    attach_existing_browser = listing_platform is not None
     counter = {
         "blocked_writes": 0,
         "blocked_navigations": 0,
         "blocked_top_level_navigations": 0,
     }
-    glassdoor_login_authorized = threading.Event()
-    glassdoor_deadline = time.time() + max(0, keep_open_seconds)
-    glassdoor_lock_acquired = False
+    manual_login_authorized = threading.Event()
+    keep_open_deadline = time.time() + max(0, keep_open_seconds)
     result = {"status": RUN_FAILED, "pause_reason": "", "fields": [], "host": target.host}
+    profile_lock: AutomationProfileLock | None = None
+    profile_lock_acquired = False
+    browser = None
+    context = None
+    page = None
+    attached_browser = False
+    tracing_started = False
+    screenshot_finalized = False
+    glassdoor_form = False
+    safe_to_capture = False
+    phase = "profile"
+
+    # Resolve artifact paths (None when no artifact_dir is given).
+    _trace_path: str | None = None
+    _screenshot_path: str | None = None
+    if artifact_dir:
+        _trace_path = str(Path(artifact_dir) / "trace.zip")
+        _screenshot_path = str(Path(artifact_dir) / "screenshot.png")
+
+    def finish_diagnostics() -> None:
+        nonlocal tracing_started, screenshot_finalized
+        if (
+            _screenshot_path
+            and page is not None
+            and not screenshot_finalized
+            and safe_to_capture
+        ):
+            screenshot_finalized = True
+            try:
+                if not page.is_closed():
+                    page.screenshot(path=_screenshot_path, full_page=False, timeout=5000)
+                    if Path(_screenshot_path).is_file():
+                        if os.name != "nt":
+                            os.chmod(_screenshot_path, 0o600)
+                        result["screenshot_path"] = _screenshot_path
+            except Exception as exc:  # noqa: BLE001 - artifacts never block run cleanup
+                logger.warning("Screenshot capture failed category=%s", type(exc).__name__)
+        if tracing_started:
+            tracing_started = False
+            try:
+                context.tracing.stop(path=_trace_path)
+                if _trace_path and Path(_trace_path).is_file():
+                    if os.name != "nt":
+                        os.chmod(_trace_path, 0o600)
+                    result["trace_path"] = _trace_path
+            except Exception as exc:  # noqa: BLE001 - always continue to close browser resources
+                logger.warning("Playwright trace finalization failed category=%s", type(exc).__name__)
+
+    def start_tracing() -> None:
+        nonlocal tracing_started
+        if not _trace_path or tracing_started:
+            return
+        try:
+            context.tracing.start(screenshots=True, snapshots=True)
+            tracing_started = True
+        except Exception as exc:  # noqa: BLE001 - tracing is optional
+            logger.warning("Playwright tracing could not start category=%s", type(exc).__name__)
+
+    def close_browser_resources() -> None:
+        finish_diagnostics()
+        if attached_browser:
+            if browser is not None:
+                try:
+                    browser.close()
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Chrome CDP disconnect failed category=%s", type(exc).__name__)
+            return
+        if context is not None:
+            try:
+                context.close()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Browser context cleanup failed category=%s", type(exc).__name__)
+        if browser is not None:
+            try:
+                browser.close()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Browser cleanup failed category=%s", type(exc).__name__)
 
     try:
         from playwright.sync_api import sync_playwright  # imported lazily: optional dependency
 
         if target.adapter != "local_test":
             check_public_host(target.host)
-        with sync_playwright() as pw:
+        if persistent_profile:
+            profile_path = _automation_profile_path(
+                automation_profile_dir or glassdoor_profile_dir
+            )
+            profile_lock = AutomationProfileLock(profile_path)
+            if not profile_lock.acquire():
+                result.update(
+                    status=NEEDS_YOU,
+                    pause_reason="automation_profile_in_use",
+                    error_category="automation_profile_in_use",
+                )
+                if on_result:
+                    on_result(result)
+                return result
+            profile_lock_acquired = True
+        with ExitStack() as cleanup_stack:
+            pw = cleanup_stack.enter_context(sync_playwright())
+            cleanup_stack.callback(close_browser_resources)
             launch = {"headless": headless}
-            if browser_path:
-                launch["executable_path"] = browser_path
-            persistent_glassdoor = target.adapter == "glassdoor"
-            if persistent_glassdoor:
-                glassdoor_lock_acquired = GLASSDOOR_PROFILE_LOCK.acquire(blocking=False)
-                if not glassdoor_lock_acquired:
-                    result.update(
-                        status=NEEDS_YOU,
-                        pause_reason="glassdoor_profile_in_use",
-                        error_category="glassdoor_profile_in_use",
+            if attach_existing_browser:
+                phase = "connect"
+                endpoint = _validate_cdp_endpoint(browser_cdp_endpoint)
+                try:
+                    browser = pw.chromium.connect_over_cdp(endpoint, timeout=5000)
+                except Exception as exc:
+                    raise BrowserAttachmentUnavailable(
+                        "Could not connect to CareerPilot Chrome. Start the dedicated "
+                        "Chrome profile with remote debugging enabled."
+                    ) from exc
+                attached_browser = True
+                contexts = browser.contexts
+                if not contexts:
+                    raise BrowserAttachmentUnavailable(
+                        "The connected Chrome session has no available browser context."
                     )
-                    if on_result:
-                        on_result(result)
-                    return result
-                context = _launch_glassdoor_context(
+                context = contexts[0]
+                verification_pages = context.pages
+                if not verification_pages:
+                    raise BrowserAttachmentUnavailable(
+                        "The connected Chrome session has no page available for verification."
+                    )
+                _verify_dedicated_chrome(context, verification_pages[0], profile_path)
+                page = context.new_page()
+            elif persistent_profile:
+                phase = "launch"
+                context = _launch_automation_context(
                     pw.chromium,
-                    _glassdoor_profile_path(glassdoor_profile_dir),
+                    profile_path,
                     launch,
                 )
             else:
                 browser = pw.chromium.launch(**launch)
                 context = browser.new_context()
-            context.route(
-                "**/*",
-                _route_guard(
-                    counter,
-                    target,
-                    submission_authorized,
-                    glassdoor_login_authorized,
-                ),
+            phase = "navigation"
+
+            # Do not trace a detected sign-in or access-challenge page.
+            route_guard = _route_guard(
+                counter,
+                target,
+                submission_authorized,
+                manual_login_authorized,
             )
-            page = context.pages[0] if persistent_glassdoor and context.pages else context.new_page()
+            if attached_browser:
+                page.route("**/*", route_guard)
+            else:
+                context.route("**/*", route_guard)
+                page = context.pages[0] if persistent_profile and context.pages else context.new_page()
+            if target.adapter == "local_test":
+                safe_to_capture = True
+                start_tracing()
             try:
                 page.goto(target.url, wait_until="domcontentloaded", timeout=30000)
                 try:
@@ -609,14 +1110,107 @@ def run_assistance(
                 flags_raw = page.evaluate(FLAGS_JS)
                 flags = {
                     "captcha": bool(flags_raw.get("captcha")),
-                    "login": bool(flags_raw.get("password")) or bool(_LOGIN_URL_RE.search(urlsplit(page.url).path)),
+                    "login": (
+                        bool(flags_raw.get("login"))
+                        or bool(flags_raw.get("password"))
+                        or bool(_LOGIN_URL_RE.search(urlsplit(page.url).path))
+                    ),
                 }
+                if flags["login"] and not flags["captcha"]:
+                    manual_login_authorized.set()
+
+                if listing_platform:
+                    if flags["captcha"]:
+                        pause_reason = "access_challenge"
+                    elif flags["login"]:
+                        pause_reason = "login_required"
+                    else:
+                        pause_reason = "listing_opened"
+
+                    safe_to_capture = pause_reason in ("listing_opened", "access_challenge")
+                    if safe_to_capture:
+                        start_tracing()
+                    result.update(
+                        status=NEEDS_YOU,
+                        pause_reason=pause_reason,
+                        error_category=(
+                            "access_challenge" if pause_reason == "access_challenge"
+                            else "login_required" if pause_reason == "login_required"
+                            else ""
+                        ),
+                        fields=[],
+                        blocked_writes=counter["blocked_writes"],
+                        duration_ms=int((time.time() - started) * 1000),
+                    )
+                    finish_diagnostics()
+
+                    browser_open = not headless and keep_open_seconds > 0
+                    result["browser_open"] = browser_open
+                    if browser_open and on_result:
+                        on_result({**result, "status": "running"})
+
+                    if attached_browser:
+                        result.update(
+                            status=NEEDS_YOU,
+                            pause_reason=pause_reason,
+                            browser_open=True,
+                            blocked_writes=counter["blocked_writes"],
+                        )
+                        if on_result:
+                            on_result(result)
+                        return result
+
+                    while browser_open and time.time() < keep_open_deadline:
+                        open_pages = [candidate for candidate in context.pages if not candidate.is_closed()]
+                        if not open_pages:
+                            break
+                        page = open_pages[-1]
+                        try:
+                            page_flags = page.evaluate(FLAGS_JS)
+                            if page_flags.get("captcha"):
+                                next_pause = "access_challenge"
+                                manual_login_authorized.clear()
+                            elif (
+                                page_flags.get("login")
+                                or page_flags.get("password")
+                                or _LOGIN_URL_RE.search(urlsplit(page.url).path)
+                            ):
+                                next_pause = "login_required"
+                                manual_login_authorized.set()
+                            else:
+                                next_pause = "listing_opened"
+                                manual_login_authorized.clear()
+                            if next_pause != pause_reason:
+                                pause_reason = next_pause
+                                result.update(
+                                    pause_reason=pause_reason,
+                                    error_category=(
+                                        "access_challenge" if pause_reason == "access_challenge"
+                                        else "login_required" if pause_reason == "login_required"
+                                        else ""
+                                    ),
+                                )
+                                if on_result:
+                                    on_result({**result, "status": "running", "browser_open": True})
+                            page.wait_for_timeout(1000)
+                        except Exception:  # noqa: BLE001 - a closed or crashed page ends the run
+                            break
+
+                    result.update(
+                        status=NEEDS_YOU,
+                        pause_reason=pause_reason,
+                        browser_open=False,
+                        blocked_writes=counter["blocked_writes"],
+                        duration_ms=int((time.time() - started) * 1000),
+                    )
+                    if on_result:
+                        on_result(result)
+                    return result
 
                 fields: list[dict] = []
-                glassdoor_form = False
                 glassdoor_site_blocked = False
                 if persistent_glassdoor and not headless and keep_open_seconds > 0:
-                    while time.time() < glassdoor_deadline:
+                    while time.time() < keep_open_deadline:
                         glassdoor_form = False
                         login_detected = False
                         for candidate in context.pages:
@@ -637,28 +1231,30 @@ def run_assistance(
                                 except Exception:  # noqa: BLE001 - a frame may be navigating
                                     continue
                         if glassdoor_site_blocked:
-                            glassdoor_login_authorized.clear()
+                            manual_login_authorized.clear()
                             result.update(
                                 status=NEEDS_YOU,
                                 pause_reason="glassdoor_site_blocked",
+                                error_category="access_challenge",
                                 fields=[],
                             )
                             break
                         if glassdoor_form:
-                            glassdoor_login_authorized.clear()
+                            manual_login_authorized.clear()
                             flags = {"login": False, "captcha": False}
                             flags_raw = page.evaluate(FLAGS_JS)
                             flags["captcha"] = bool(flags_raw.get("captcha"))
+                            safe_to_capture = not flags["captcha"]
                             break
                         if counter["blocked_top_level_navigations"]:
                             raise RuntimeError("Unsupported top-level redirect blocked.")
                         if login_detected:
-                            glassdoor_login_authorized.set()
+                            manual_login_authorized.set()
                         else:
-                            glassdoor_login_authorized.clear()
+                            manual_login_authorized.clear()
                         page.wait_for_timeout(500)
                     if not glassdoor_form and not glassdoor_site_blocked:
-                        glassdoor_login_authorized.clear()
+                        manual_login_authorized.clear()
                         result.update(
                             status=NEEDS_YOU,
                             pause_reason="glassdoor_wait_timeout",
@@ -688,15 +1284,23 @@ def run_assistance(
                             flags_raw = page.evaluate(FLAGS_JS)
                             flags = {
                                 "captcha": bool(flags_raw.get("captcha")),
-                                "login": bool(flags_raw.get("password"))
-                                or bool(_LOGIN_URL_RE.search(urlsplit(page.url).path)),
+                                "login": (
+                                    bool(flags_raw.get("login"))
+                                    or bool(flags_raw.get("password"))
+                                    or bool(_LOGIN_URL_RE.search(urlsplit(page.url).path))
+                                ),
                             }
+                    if not persistent_glassdoor and not flags["login"] and not flags["captcha"]:
+                        safe_to_capture = True
+                        start_tracing()
                     if not flags["login"]:
                         per_frame = [
                             _fill_frame(fr, values, resume_file) for fr in page.frames
                         ]
                         fields = max(per_frame, key=len, default=[])
                 elif persistent_glassdoor and glassdoor_form and not flags["captcha"]:
+                    safe_to_capture = True
+                    start_tracing()
                     per_frame = []
                     for frame in page.frames:
                         try:
@@ -717,6 +1321,10 @@ def run_assistance(
                     result.update(status=status, pause_reason=pause, fields=fields)
                     if pause == "unsupported_form":
                         result["error_category"] = "unsupported_form"
+                    elif pause == "captcha":
+                        result["error_category"] = "captcha_detected"
+                    elif pause == "login_required":
+                        result["error_category"] = "login_required"
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Assistance run failed category=%s", type(exc).__name__)
                 if counter["blocked_top_level_navigations"]:
@@ -727,6 +1335,10 @@ def run_assistance(
                     pause, category = "navigation_failed", "navigation_failed"
                 result.update(status=RUN_FAILED, pause_reason=pause, error_category=category)
 
+            # Stop diagnostics before the optional keep-open window so user
+            # interaction is not captured in artifacts.
+            finish_diagnostics()
+
             result["blocked_writes"] = counter["blocked_writes"]
             result["duration_ms"] = int((time.time() - started) * 1000)
             # Keep the network guard active while the visible page remains open;
@@ -735,9 +1347,30 @@ def run_assistance(
                 result["browser_open"] = True
                 if on_result:
                     on_result(result)
-                deadline = glassdoor_deadline if persistent_glassdoor else time.time() + keep_open_seconds
-                while time.time() < deadline and not page.is_closed():
+                while time.time() < keep_open_deadline and not page.is_closed():
                     try:
+                        if persistent_profile and not persistent_glassdoor:
+                            login_flags = page.evaluate(FLAGS_JS)
+                            if login_flags.get("captcha"):
+                                manual_login_authorized.clear()
+                                result.update(
+                                    status=NEEDS_YOU,
+                                    pause_reason="captcha",
+                                    error_category="captcha_detected",
+                                )
+                            elif (
+                                login_flags.get("login")
+                                or login_flags.get("password")
+                                or _LOGIN_URL_RE.search(urlsplit(page.url).path)
+                            ):
+                                manual_login_authorized.set()
+                                result.update(
+                                    status=NEEDS_YOU,
+                                    pause_reason="login_required",
+                                    error_category="login_required",
+                                )
+                            else:
+                                manual_login_authorized.clear()
                         page.wait_for_timeout(1000)
                     except Exception:  # noqa: BLE001 - window closed
                         break
@@ -745,10 +1378,8 @@ def run_assistance(
                 result["browser_open"] = False
             elif on_result:
                 on_result(result)
-            context.close()
-            if not persistent_glassdoor:
-                browser.close()
     except UrlRejected as exc:
+        finish_diagnostics()
         logger.warning("Application destination rejected code=%s", exc.code)
         result.update(
             status=RUN_FAILED,
@@ -759,14 +1390,53 @@ def run_assistance(
         if on_result:
             on_result(result)
     except Exception as exc:  # noqa: BLE001
-        if isinstance(exc, ImportError):
+        finish_diagnostics()
+        if isinstance(exc, BrowserProfileMismatch):
+            category = "browser_profile_mismatch"
+        elif isinstance(exc, BrowserAttachmentUnavailable):
+            category = "browser_attachment_unavailable"
+        elif isinstance(exc, ImportError):
             category = "playwright_unavailable"
-        elif target.adapter == "glassdoor":
-            category = "chrome_unavailable"
+        elif persistent_profile and not profile_lock_acquired:
+            category = "automation_profile_unavailable"
+        elif persistent_profile and phase == "launch":
+            category = (
+                "chrome_unavailable"
+                if isinstance(exc, FileNotFoundError)
+                else "chrome_launch_failed"
+            )
+        elif counter["blocked_top_level_navigations"]:
+            category = "unsafe_redirect"
+        elif "timeout" in type(exc).__name__.casefold() or "timeout" in str(exc).casefold():
+            category = "navigation_timeout"
         else:
-            category = "browser_launch_failed"
-        pause_reason = "chrome_unavailable" if category == "chrome_unavailable" else "browser_unavailable"
-        logger.warning("Browser could not start category=%s", type(exc).__name__)
+            network_error = re.search(r"net::(ERR_[A-Z0-9_]+)", str(exc))
+            category = (
+                f"network_{network_error.group(1).lower()}"
+                if network_error
+                else "navigation_failed"
+            )
+        pause_reason = (
+            "browser_profile_mismatch"
+            if category == "browser_profile_mismatch"
+            else "browser_attachment_unavailable"
+            if category == "browser_attachment_unavailable"
+            else
+            "automation_profile_unavailable"
+            if category == "automation_profile_unavailable"
+            else "chrome_unavailable"
+            if category == "chrome_unavailable"
+            else "chrome_launch_failed"
+            if category == "chrome_launch_failed"
+            else "unsafe_redirect"
+            if category == "unsafe_redirect"
+            else "navigation_timeout"
+            if category == "navigation_timeout"
+            else "navigation_failed"
+            if category.startswith("network_") or category == "navigation_failed"
+            else "browser_unavailable"
+        )
+        logger.warning("Browser automation failed category=%s", type(exc).__name__)
         result.update(
             status=RUN_FAILED,
             pause_reason=pause_reason,
@@ -776,6 +1446,6 @@ def run_assistance(
         if on_result:
             on_result(result)
     finally:
-        if glassdoor_lock_acquired:
-            GLASSDOOR_PROFILE_LOCK.release()
+        if profile_lock is not None:
+            profile_lock.release()
     return result

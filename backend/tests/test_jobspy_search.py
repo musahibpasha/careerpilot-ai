@@ -18,6 +18,15 @@ class FakeFrame:
         return self.rows
 
 
+def test_supported_sites_are_exactly_the_four_job_boards():
+    assert jobspy_search.SUPPORTED_SITES == (
+        "linkedin",
+        "naukri",
+        "indeed",
+        "glassdoor",
+    )
+
+
 def _job(**overrides):
     row = {
         "id": None,
@@ -75,6 +84,40 @@ def test_search_normalizes_listings_and_uses_bounded_jobspy_query(monkeypatch):
         "is_remote": True,
         "hours_old": 168,
     }]
+
+
+def test_indeed_search_uses_country_from_location_instead_of_jobspy_us_default(monkeypatch):
+    calls = []
+
+    def fake_scrape_jobs(**kwargs):
+        calls.append(kwargs)
+        return FakeFrame([_job(job_url="https://in.indeed.com/viewjob?jk=india123")])
+
+    monkeypatch.setattr(jobspy_search, "scrape_jobs", fake_scrape_jobs)
+    result = jobspy_search.search_jobspy_jobs(
+        site="indeed",
+        what="Software Engineer",
+        where="Bangalore, India",
+        hours_old=168,
+    )
+
+    assert len(result["results"]) == 1
+    assert result["results"][0]["url"] == "https://in.indeed.com/viewjob?jk=india123"
+    assert calls == [{
+        "site_name": ["indeed"],
+        "search_term": "Software Engineer",
+        "location": "Bangalore, India",
+        "results_wanted": 20,
+        "job_type": None,
+        "is_remote": None,
+        "hours_old": 168,
+        "country_indeed": "india",
+    }]
+
+
+def test_indeed_country_infers_supported_location_suffixes():
+    assert jobspy_search._indeed_country("Bengaluru, Karnataka, India") == "india"
+    assert jobspy_search._indeed_country("London, United Kingdom") == "uk"
 
 
 def test_search_keeps_only_supported_employer_application_links(monkeypatch):
@@ -154,5 +197,21 @@ def test_board_discovery_endpoint_validates_source_and_forwards_filters(monkeypa
     ).status_code == 422
     assert client.get(
         "/api/jobs/discover/board",
-        params={"site": "indeed", "what": "x"},
+        params={"site": "zip_recruiter", "what": "engineer"},
     ).status_code == 422
+
+
+@pytest.mark.parametrize("site", jobspy_search.SUPPORTED_SITES)
+def test_board_discovery_endpoint_accepts_each_supported_source(monkeypatch, site):
+    monkeypatch.setattr(
+        "app.main.search_jobspy_jobs",
+        lambda **kwargs: {"source": kwargs["site"], "results": []},
+    )
+
+    response = client.get(
+        "/api/jobs/discover/board",
+        params={"site": site, "what": "software engineer"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["source"] == site

@@ -200,57 +200,5 @@ def test_provider_failures_are_reported():
     assert error.value.status_code == 504
 
 
-def test_discovery_endpoint_validates_inputs_and_returns_transient_results(monkeypatch):
-    requested = []
-    response = {
-        "source": "jobicy",
-        "geo": "apac",
-        "results": [{
-            "source_job_id": "123",
-            "title": "Python Engineer",
-            "company": "Example Ltd",
-            "location": "India",
-            "url": "https://jobicy.com/jobs/123-python-engineer",
-            "employment_types": ["Full-Time"],
-            "published_at": "2026-10-27T09:00:00Z",
-        }],
-        "has_more": True,
-        "next_cursor": "next",
-    }
-
-    def fake_search(**kwargs):
-        requested.append(kwargs)
-        return response
-
-    monkeypatch.setattr("app.main.search_jobicy_jobs", fake_search)
-
-    result = client.get(
-        "/api/jobs/discover",
-        params={"what": "python engineer", "where": "India", "geo": "apac", "cursor": "previous"},
-    )
-
-    assert result.status_code == 200
-    assert result.json()["source"] == "jobicy"
-    assert result.json()["results"][0]["employment_types"] == ["Full-Time"]
-    assert result.json()["results"][0]["published_at"] == "2026-10-27T09:00:00Z"
-    assert requested == [{
-        "what": "python engineer",
-        "where": "India",
-        "geo": "apac",
-        "cursor": "previous",
-    }]
-    assert client.get("/api/jobs/discover", params={"what": "x"}).status_code == 422
-    assert client.get(
-        "/api/jobs/discover",
-        params={"what": "engineer", "geo": "india"},
-    ).status_code == 422
-
-
-def test_discovery_endpoint_reports_provider_errors(monkeypatch):
-    def fail(**_kwargs):
-        raise jobicy.JobicyError("Jobicy is unavailable.", 503)
-
-    monkeypatch.setattr("app.main.search_jobicy_jobs", fail)
-    response = client.get("/api/jobs/discover", params={"what": "engineer"})
-    assert response.status_code == 503
-    assert response.json()["detail"] == "Jobicy is unavailable."
+def test_jobicy_is_not_an_active_discovery_endpoint():
+    assert client.get("/api/jobs/discover", params={"what": "engineer"}).status_code == 404

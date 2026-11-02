@@ -6,10 +6,7 @@ import {
   CheckCircle2,
   CircleAlert,
   Copy,
-  Building2,
   Globe2,
-  Lock,
-  PanelsTopLeft,
   RotateCcw,
   ShieldCheck,
   Sparkles,
@@ -130,7 +127,12 @@ const STATUS_TEXT: Record<string, string> = {
 };
 const PAUSE_TEXT: Record<string, string> = {
   login_required: "The page asks you to log in. Log in yourself, then start again.",
-  glassdoor_interactive_required: "Glassdoor autofill needs a visible browser window and an interactive wait period. Set the assistant browser to visible and allow it to stay open, then try again.",
+  listing_opened: "The saved listing is open in the connected CareerPilot Chrome session. Sign in manually if needed. No application form was filled or submitted.",
+  access_challenge: "A CAPTCHA, Cloudflare challenge, or account restriction was detected. CareerPilot stopped and did not bypass or retry it. Resolve it manually in the connected Chrome window.",
+  browser_attachment_unavailable: "CareerPilot did not open another browser. To connect Chrome, start Google Chrome with a dedicated CareerPilot user-data directory and `--remote-debugging-port=9222` (never use your everyday Chrome profile). Set `ASSISTANT_BROWSER_CDP_ENDPOINT=http://127.0.0.1:9222` in the backend `.env`, restart the backend, then try Automate again. Sign in manually in that dedicated profile once.",
+  browser_profile_mismatch: "CareerPilot refused to use this Chrome connection because it could not verify the dedicated CareerPilot profile. Close this browser and start Chrome with the exact dedicated profile path shown in the setup instructions, `--remote-debugging-port=9222`, and `--enable-automation`. Never use your everyday Chrome profile.",
+  automation_profile_in_use: "Another CareerPilot browser run is using the shared profile. Close or finish that run before starting another.",
+  glassdoor_interactive_required: "The legacy Glassdoor form-assistance run needs a visible browser window and an interactive wait period. This Fill screen only opens the saved listing.",
   glassdoor_wait_timeout: "The Glassdoor browser timed out before an application form appeared. Your local sign-in session is kept; start the run again when ready.",
   glassdoor_profile_in_use: "Another Glassdoor browser run is already open. Finish or close that run before starting a second one.",
   glassdoor_site_blocked: "Glassdoor's security page blocked this browser session. CareerPilot won't bypass it. Open the listing in Chrome yourself and use the Application Kit to review or copy answers.",
@@ -142,27 +144,66 @@ const PAUSE_TEXT: Record<string, string> = {
   navigation_failed: "The page could not be opened. Check the address and your connection.",
   unsafe_redirect: "The page tried to redirect outside its supported employer site. CareerPilot blocked that navigation.",
   browser_unavailable:
-    "The browser could not start. Run `python -m playwright install chromium` in the backend environment (see the README).",
+    "The browser could not start. Check the local backend's Playwright installation and browser error.",
   chrome_unavailable:
-    "Google Chrome could not start. Install Chrome Stable, then restart CareerPilot. The Glassdoor session uses a separate local Chrome profile.",
+    "Google Chrome could not start. Install or repair Google Chrome Stable, then restart CareerPilot. CareerPilot will not fall back to bundled Chromium; it uses a dedicated profile separate from your regular Chrome profile.",
+  chrome_launch_failed:
+    "Google Chrome Stable is installed but could not launch the CareerPilot profile. Close any other CareerPilot automation window, check that the profile folder is writable, and try again.",
   unsafe_destination: "The application page resolves to a private or internal address and was blocked.",
   unexpected_error: "The browser run stopped unexpectedly. The form was not submitted. Try opening the employer page directly; if this happens again, check the backend log for the run's error category.",
 };
 const FIELD_ORDER = { failed: 0, needs_input: 1, filled: 2, skipped: 3 } as const;
 
-function platformFor(host: string) {
-  const normalised = host.toLowerCase();
-  if (normalised === "greenhouse.io" || normalised.endsWith(".greenhouse.io")) {
-    return { label: "Greenhouse", icon: Building2 };
+const JOB_BOARD_DOMAINS: Record<string, string[]> = {
+  linkedin: ["linkedin.com"],
+  naukri: ["naukri.com"],
+  indeed: [
+    "indeed.com", "indeed.co.in", "indeed.co.uk", "indeed.ca", "indeed.com.au",
+    "indeed.fr", "indeed.de", "indeed.nl", "indeed.es", "indeed.com.br",
+    "indeed.com.sg", "indeed.com.mx", "indeed.com.hk", "indeed.co.jp",
+  ],
+  glassdoor: [
+    "glassdoor.com", "glassdoor.co.in", "glassdoor.co.uk", "glassdoor.ca",
+    "glassdoor.com.au", "glassdoor.de", "glassdoor.fr", "glassdoor.nl",
+    "glassdoor.es",
+  ],
+};
+const JOB_BOARD_LABELS: Record<string, string> = {
+  linkedin: "LinkedIn",
+  naukri: "Naukri",
+  indeed: "Indeed",
+  glassdoor: "Glassdoor",
+};
+
+function boardPlatformForHost(host: string) {
+  const normalised = host.toLowerCase().replace(/\.$/, "");
+  const platform = Object.entries(JOB_BOARD_DOMAINS).find(([, domains]) =>
+    domains.some((domain) => normalised === domain || normalised.endsWith(`.${domain}`)),
+  )?.[0];
+  return platform ? { key: platform, label: JOB_BOARD_LABELS[platform] } : null;
+}
+
+function jobListingPlatform(source: string, rawUrl: string) {
+  const sourcePlatform = JOB_BOARD_LABELS[source.toLowerCase()] ? source.toLowerCase() : null;
+  try {
+    const url = new URL(rawUrl);
+    const hostPlatform = boardPlatformForHost(url.hostname);
+    if (sourcePlatform && hostPlatform && sourcePlatform !== hostPlatform.key) {
+      return { label: `${JOB_BOARD_LABELS[sourcePlatform]} (URL mismatch)`, valid: false };
+    }
+    const valid = !!hostPlatform && url.protocol === "https:" &&
+      (!url.port || url.port === "443") && !url.username && !url.password &&
+      url.pathname !== "/" && (!sourcePlatform || sourcePlatform === hostPlatform.key);
+    return {
+      label: JOB_BOARD_LABELS[hostPlatform?.key ?? sourcePlatform ?? ""] ?? "Unsupported listing",
+      valid,
+    };
+  } catch {
+    return {
+      label: JOB_BOARD_LABELS[sourcePlatform ?? ""] ?? "Unsupported listing",
+      valid: false,
+    };
   }
-  if (normalised === "lever.co" || normalised.endsWith(".lever.co")) {
-    return { label: "Lever", icon: PanelsTopLeft };
-  }
-  if (normalised === "glassdoor.com" || normalised.endsWith(".glassdoor.com") ||
-      normalised === "glassdoor.co.in" || normalised.endsWith(".glassdoor.co.in")) {
-    return { label: "Glassdoor", icon: Globe2 };
-  }
-  return { label: "Employer site", icon: Globe2 };
 }
 
 function supportedPlatformForUrl(raw: string) {
@@ -173,14 +214,14 @@ function supportedPlatformForUrl(raw: string) {
     }
     const host = url.hostname.toLowerCase();
     if (host === "greenhouse.io" || host.endsWith(".greenhouse.io")) {
-      return { label: "Greenhouse", icon: Building2 };
+      return { label: "Greenhouse" };
     }
     if (host === "lever.co" || host.endsWith(".lever.co")) {
-      return { label: "Lever", icon: PanelsTopLeft };
+      return { label: "Lever" };
     }
     if (host === "glassdoor.com" || host.endsWith(".glassdoor.com") ||
         host === "glassdoor.co.in" || host.endsWith(".glassdoor.co.in")) {
-      return { label: "Glassdoor", icon: Globe2 };
+      return { label: "Glassdoor" };
     }
   } catch {
     return null;
@@ -287,13 +328,10 @@ export default function ApplicationAssistant({
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState("");
-  const [autoFillUrl, setAutoFillUrl] = useState<string | null>(null);
-  const autoFillStartedForJob = useRef<string | null>(null);
   const [edits, setEdits] = useState<Record<string, string>>({}); // "fact:phone" | "answer:x" | "draft:y"
   const [applyUrl, setApplyUrl] = useState("");
   const [reviewed, setReviewed] = useState(false);
   const [selfSubmitted, setSelfSubmitted] = useState(false);
-  const [uploadResume, setUploadResume] = useState(false);
   const [authorizeManualWrite, setAuthorizeManualWrite] = useState(false);
   const [materialEdits, setMaterialEdits] = useState<Record<string, string>>({});
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -303,11 +341,9 @@ export default function ApplicationAssistant({
 
   const adopt = useCallback((next: AssistantState) => {
     setS(next);
-    setApplyUrl((cur) =>
-      cur ||
-      (supportedPlatformForUrl(next.application_url) ? next.application_url : "") ||
-      (supportedPlatformForUrl(next.job.url) ? next.job.url : ""),
-    );
+    setApplyUrl((cur) => cur || (
+      supportedPlatformForUrl(next.application_url) ? next.application_url : ""
+    ));
     if (next.status !== "approved" || !next.review.confirmed) {
       setAuthorizeManualWrite(false);
     }
@@ -326,17 +362,6 @@ export default function ApplicationAssistant({
         adopt(data);
         setStep(data.steps.current === "job" ? "fill" : data.steps.current);
         onChanged(); // the tracker may have gained the application
-        if (
-          !data.linkedin_job &&
-          data.runs.length === 0 &&
-          !["submitted", "interview", "offer", "rejected", "withdrawn"].includes(data.status)
-        ) {
-          setAutoFillUrl(
-            [data.application_url, data.job.url].find((url) =>
-              supportedPlatformForUrl(url),
-            ) ?? null,
-          );
-        }
       })
       .catch((e: Error) => alive && setLoadError(e.message));
     return () => {
@@ -344,44 +369,6 @@ export default function ApplicationAssistant({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobId]);
-
-  useEffect(() => {
-    if (
-      !s ||
-      !autoFillUrl ||
-      s.job.id !== jobId ||
-      autoFillStartedForJob.current === jobId
-    ) {
-      return;
-    }
-
-    autoFillStartedForJob.current = jobId;
-    setBusy("auto-fill");
-    setError("");
-    let alive = true;
-    void (async () => {
-      try {
-        await api(`/api/applications/${s.application_id}/assistant/fill`, {
-          method: "POST",
-          body: JSON.stringify({ url: autoFillUrl, upload_resume: false }),
-        });
-        const next = await api<AssistantState>(
-          `/api/applications/${s.application_id}/assistant`,
-        );
-        if (alive) {
-          adopt(next);
-          setStep("fill");
-        }
-      } catch (e) {
-        if (alive) setError((e as Error).message);
-      } finally {
-        if (alive) setBusy("");
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [s, autoFillUrl, jobId, adopt]);
 
   useEffect(() => {
     closeRef.current?.focus();
@@ -466,7 +453,6 @@ export default function ApplicationAssistant({
   }
 
   function selectResume(resumeId: string) {
-    setUploadResume(false);
     return run("resume", () =>
       api<AssistantState>(`${base}/resume`, {
         method: "PUT",
@@ -521,10 +507,8 @@ export default function ApplicationAssistant({
   const rows = s?.kit.rows ?? [];
   const missing = rows.filter((r) => r.source === "missing");
   const latestRun = s?.runs[s.runs.length - 1];
-  const platform = latestRun
-    ? platformFor(latestRun.host)
-    : supportedPlatformForUrl(applyUrl) ?? { label: "Greenhouse, Lever, or Glassdoor", icon: Globe2 };
-  const applyUrlSupported = !!supportedPlatformForUrl(applyUrl);
+  const listing = s ? jobListingPlatform(s.job.source, s.job.url) : { label: "Unsupported listing", valid: false };
+  const listingRun = !!latestRun?.adapter.endsWith("_listing");
   const reviewBlocked = s?.status === "submitted" || ["interview", "offer", "rejected", "withdrawn"].includes(s?.status ?? "");
 
   return (
@@ -613,7 +597,7 @@ export default function ApplicationAssistant({
               <input
                 type="url"
                 value={applyUrl}
-                placeholder="Greenhouse, Lever, or Glassdoor job URL"
+                placeholder="Optional employer application URL"
                 onChange={(e) => setApplyUrl(e.target.value)}
                 onBlur={() => {
                   const value = applyUrl.trim();
@@ -630,13 +614,6 @@ export default function ApplicationAssistant({
                 Open employer application page <ArrowUpRight size={13} />
               </a>
             )}
-            {s.job.url && !supportedPlatformForUrl(s.job.url) && !supportedPlatformForUrl(s.application_url) && (
-              <p className="aa-hint">
-                No supported application URL was included with this {sourceLabel(s.job.source).toLowerCase()}.
-                Open the listing and follow its Apply link. Greenhouse, Lever, and Glassdoor are supported; use the Application Kit manually on other sites.
-              </p>
-            )}
-
             {s.available_resumes.length > 0 ? (
               <label className="aa-field">
                 <span>Resume for this application</span>
@@ -660,11 +637,9 @@ export default function ApplicationAssistant({
               </div>
             )}
 
-            {s.linkedin_job && (
-              <div className="aa-banner aa-warn">
-                <Lock size={16} /> LinkedIn jobs are never filled automatically. Use the kit and the manual checklist in the Fill step.
-              </div>
-            )}
+            <p className="aa-hint">
+              In this stage CareerPilot opens the saved listing in its dedicated browser. It does not fill or submit application forms.
+            </p>
             <div className="aa-actions">
               <button type="button" className="primary-button" onClick={() => goto("kit")}>
                 Continue to kit
@@ -862,83 +837,40 @@ export default function ApplicationAssistant({
         {/* ---------------- FILL ---------------- */}
         {s && step === "fill" && (
           <section className="aa-card" aria-label="Fill">
-            {s.linkedin_job ? (
-              <>
-                <h3>Fill this LinkedIn application by hand</h3>
-                <div className="aa-banner aa-warn">
-                  <Lock size={16} /> CareerPilot does not automate LinkedIn. Your kit is ready to copy from.
-                </div>
-                <ol className="aa-list aa-checklist">
-                  {s.manual_checklist.map((c, i) => (
-                    <li key={i}>{c}</li>
-                  ))}
-                </ol>
-              </>
-            ) : (
-              <>
-                <h3>Prepare the employer application</h3>
-                <p className="aa-muted">
-                  Greenhouse and Lever forms, and Glassdoor job listings, can start autofill automatically. For Glassdoor, sign in yourself in its dedicated local browser and open the application form; only matching fields are filled. You review every field and submit on the employer's site yourself.
-                </p>
-                {busy === "auto-fill" && (
-                  <div className="aa-banner aa-run-running" role="status">
-                    {latestRun?.adapter === "glassdoor"
-                      ? "Glassdoor is open in its dedicated local browser. Sign in yourself, then open the job's application form; CareerPilot will fill matching fields and stop for your review."
-                      : "Opening the verified employer application and filling confirmed fields…"}
-                  </div>
-                )}
-                <div className="aa-platform"><platform.icon size={16} /> {platform.label}</div>
-                <label className="aa-field">
-                  <span>Employer application URL</span>
-                  <input type="url" value={applyUrl} placeholder="Paste a Greenhouse, Lever, or Glassdoor job URL" onChange={(e) => setApplyUrl(e.target.value)} />
-                </label>
-                {applyUrl && !applyUrlSupported && (
-                  <div className="aa-banner aa-warn">
-                    This is not a supported Greenhouse, Lever, or Glassdoor URL. Open the saved listing below, follow its employer Apply link, then paste the application URL here. You can still use the Application Kit to fill other sites manually.
-                  </div>
-                )}
-                {s.job.url && (
-                  <p className="aa-hint">
-                    Source listing: <a className="aa-inline-link" href={s.job.url} target="_blank" rel="noreferrer">{sourceLabel(s.job.source)} <ArrowUpRight size={12} /></a>
-                  </p>
-                )}
-                {s.resume && applyUrlSupported && (
-                  <label className="aa-check">
-                    <input type="checkbox" checked={uploadResume} onChange={(e) => setUploadResume(e.target.checked)} />
-                    Attach {s.resume.label || s.resume.filename} to this application page. I understand this sends the selected PDF to the employer's website.
-                  </label>
-                )}
-                <div className="aa-actions">
-                  {s.job.url && (
-                    <a
-                      href={s.job.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="secondary-button"
-                    >
-                      Open job listing <ArrowUpRight size={14} />
-                    </a>
-                  )}
-                  <button
-                    type="button"
-                    className="primary-button"
-                    disabled={!applyUrlSupported || !!busy || !!running || reviewBlocked}
-                    onClick={() => void run("fill", async () => {
-                      await api(`${base}/fill`, {
-                        method: "POST",
-                        body: JSON.stringify({ url: applyUrl.trim(), upload_resume: uploadResume }),
-                      });
-                      setUploadResume(false);
-                      return api<AssistantState>(base);
-                    })}
-                  >
-                    {running ? "Opening and filling..." : `Open & fill on ${platform.label}`}
-                  </button>
-                </div>
-              </>
+            <h3>Open the saved job listing</h3>
+            <p className="aa-muted">
+              CareerPilot opens this {listing.label} listing in an already-running, verified dedicated Chrome profile. Sign in yourself if prompted; the platform session is stored in that profile. Automate will not launch another browser when no Chrome connection is available. No application form is filled or submitted in this stage.
+            </p>
+            <div className="aa-platform"><Globe2 size={16} /> {listing.label}</div>
+            {!listing.valid && (
+              <div className="aa-banner aa-warn">
+                {!s.job.url
+                  ? "This saved job has no listing URL. Add a valid job link before opening it in the CareerPilot browser."
+                  : "The saved URL is invalid, unsupported, or does not match this job's platform. Only valid LinkedIn, Naukri, Indeed, and Glassdoor listing URLs can be opened."}
+              </div>
             )}
+            {s.job.url && (
+              <p className="aa-hint">
+                Saved listing: <a className="aa-inline-link" href={s.job.url} target="_blank" rel="noreferrer">{sourceLabel(s.job.source)} <ArrowUpRight size={12} /></a>
+              </p>
+            )}
+            <div className="aa-actions">
+              <button
+                type="button"
+                className="primary-button"
+                disabled={!listing.valid || !!busy || !!running || reviewBlocked}
+                onClick={() => void run("open-listing", async () => {
+                  await api(`${base}/open-listing`, { method: "POST" });
+                  return api<AssistantState>(base);
+                })}
+              >
+                {busy === "open-listing" || running
+                  ? "Opening CareerPilot browser..."
+                  : `Open ${listing.label} in connected Chrome`}
+              </button>
+            </div>
 
-            {latestRun && !s.linkedin_job && (
+            {latestRun && (
               <div className="aa-run" aria-live="polite">
                 <div className="aa-row">
                   <strong>Latest run · {latestRun.host}</strong>
@@ -948,21 +880,27 @@ export default function ApplicationAssistant({
                 </div>
                 {latestRun.status === "running" && (
                   <p className="aa-muted">
-                    {latestRun.adapter === "glassdoor"
-                      ? "The local Glassdoor browser is waiting for you to sign in and open the application form. Your session stays in that local profile; CareerPilot does not collect credentials or click Submit."
+                    {listingRun
+                      ? "The connected CareerPilot Chrome session is open on this job listing. Sign in manually if needed; CareerPilot is not filling an application."
                       : "Filling in the browser window... this updates automatically."}
                   </p>
                 )}
                 {latestRun.pause_reason && (
-                  <div className="aa-banner aa-warn">
-                    {PAUSE_TEXT[latestRun.pause_reason] ?? latestRun.pause_reason}
-                    {latestRun.error_category && <span> (Diagnostic: {latestRun.error_category.replace(/_/g, " ")})</span>}
+                  <div className={`aa-banner ${listingRun && latestRun.pause_reason === "listing_opened" ? "aa-good" : "aa-warn"}`}>
+                    {latestRun.pause_reason === "navigation_failed" &&
+                    /^network_err_[a-z0-9_]+$/i.test(latestRun.error_category ?? "")
+                      ? `Chrome reported ${(latestRun.error_category ?? "").slice("network_".length).toUpperCase()} while loading this page. Check network, DNS, firewall, or provider availability; CareerPilot did not bypass the navigation guard.`
+                      : PAUSE_TEXT[latestRun.pause_reason] ?? latestRun.pause_reason}
+                    {latestRun.error_category && latestRun.pause_reason !== "listing_opened" && <span> (Diagnostic: {latestRun.error_category.replace(/_/g, " ")})</span>}
                   </div>
                 )}
                 {latestRun.status === "prepared" && (
                   <div className="aa-banner aa-good">Matched fields are filled. Nothing has been submitted; inspect the open employer form and review every value in CareerPilot.</div>
                 )}
-                {latestRun.browser_open && !latestRun.submission_enabled && (
+                {latestRun.browser_open && listingRun && (
+                  <div className="aa-banner aa-good">The connected Chrome session remains open. Close its window yourself when you are done; CareerPilot disconnects without closing Chrome.</div>
+                )}
+                {latestRun.browser_open && !listingRun && !latestRun.submission_enabled && (
                   <div className="aa-banner aa-warn">Form writes are blocked. They remain blocked until you confirm your review and explicitly enable manual submission.</div>
                 )}
                 {latestRun.submission_enabled && (

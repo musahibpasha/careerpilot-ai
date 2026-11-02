@@ -43,7 +43,6 @@ from app.auth import get_current_user_id
 from app.config import settings
 from app.database import ensure_indexes, get_base_db, get_db
 from app.assistant_urls import UrlRejected, check_fill_url
-from app.jobicy import ALLOWED_GEOS, JobicyError, search_jobicy_jobs
 from app.job_scan import scan_and_save
 from app.job_fetch import JobFetchError, fetch_job_text, is_search_results_url
 from app.job_import import MIN_IMPORT_CHARS, extract_job
@@ -243,7 +242,7 @@ def health():
 
 @app.post("/api/scan")
 def trigger_scan(db: Database = Depends(get_db)):
-    """Scan Jobicy and Greenhouse public boards for new matching jobs.
+    """Scan the four supported job boards for new matching jobs.
 
     Safe to call on a schedule — duplicates are detected and skipped.
     Returns a count of newly saved and skipped listings.
@@ -846,29 +845,6 @@ def list_jobs(
         .sort("created_at", -1)
         .limit(500)
     ]
-
-
-@app.get("/api/jobs/discover", response_model=schemas.JobDiscoveryResponse)
-def discover_jobs(
-    what: str = Query(default="software engineer", min_length=2, max_length=100),
-    where: str = Query(default="", max_length=100),
-    geo: str = Query(default="apac", pattern=r"^(apac|europe|usa|canada|uk)$"),
-    cursor: str = Query(default="", max_length=2000),
-):
-    """Search Jobicy's public remote-jobs API; results stay transient until saved."""
-    if not what.strip():
-        raise HTTPException(status_code=422, detail="Enter a job-search keyword.")
-    if geo not in ALLOWED_GEOS:
-        raise HTTPException(status_code=422, detail="Choose a supported job-search region.")
-    try:
-        return search_jobicy_jobs(
-            what=what.strip(),
-            where=where.strip(),
-            geo=geo,
-            cursor=cursor,
-        )
-    except JobicyError as error:
-        raise HTTPException(status_code=error.status_code, detail=error.message) from None
 
 
 @app.get("/api/jobs/discover/board", response_model=schemas.JobSpyDiscoveryResponse)

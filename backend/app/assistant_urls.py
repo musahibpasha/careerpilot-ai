@@ -1,13 +1,11 @@
-"""URL policy for browser-assisted form filling.
+"""URL policy for browser-assisted job listings and form filling.
 
 Pure functions, no network. The backend route calls check_fill_url() before
 any browser is launched, so the rules hold no matter what the frontend does.
 
 Rules:
-  * Only http/https, no credentials in the URL.
-  * LinkedIn (and every subdomain, plus its lnkd.in short links) is always
-    blocked: LinkedIn jobs get a manual-fill checklist instead.
-  * Automated form filling supports Greenhouse, Lever, and Glassdoor pages.
+  * Job listings may only open on LinkedIn, Naukri, Indeed, or Glassdoor.
+  * Form filling supports Greenhouse, Lever, and Glassdoor pages.
   * The local test form is available only through the opt-in development flag.
 """
 
@@ -26,6 +24,45 @@ SUPPORTED_DOMAINS = (
     ("glassdoor.com", "glassdoor"),
     ("glassdoor.co.in", "glassdoor"),
 )
+
+JOB_BOARD_DOMAINS = {
+    "linkedin": ("linkedin.com",),
+    "naukri": ("naukri.com",),
+    "indeed": (
+        "indeed.com",
+        "indeed.co.in",
+        "indeed.co.uk",
+        "indeed.ca",
+        "indeed.com.au",
+        "indeed.fr",
+        "indeed.de",
+        "indeed.nl",
+        "indeed.es",
+        "indeed.com.br",
+        "indeed.com.sg",
+        "indeed.com.mx",
+        "indeed.com.hk",
+        "indeed.co.jp",
+    ),
+    "glassdoor": (
+        "glassdoor.com",
+        "glassdoor.co.in",
+        "glassdoor.co.uk",
+        "glassdoor.ca",
+        "glassdoor.com.au",
+        "glassdoor.de",
+        "glassdoor.fr",
+        "glassdoor.nl",
+        "glassdoor.es",
+    ),
+}
+
+JOB_SOURCE_PLATFORMS = {
+    "linkedin": "linkedin",
+    "naukri": "naukri",
+    "indeed": "indeed",
+    "glassdoor": "glassdoor",
+}
 
 LOCAL_FORM_PATH = "/assistant-test-form"
 LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
@@ -66,6 +103,64 @@ def adapter_for_host(host: str) -> str | None:
         (adapter for domain, adapter in SUPPORTED_DOMAINS if _domain_matches(host, domain)),
         None,
     )
+
+
+def platform_for_host(host: str) -> str | None:
+    host = (host or "").lower().rstrip(".")
+    return next(
+        (
+            platform
+            for platform, domains in JOB_BOARD_DOMAINS.items()
+            if any(_domain_matches(host, domain) for domain in domains)
+        ),
+        None,
+    )
+
+
+def check_job_listing_url(raw: str, source: str = "") -> FillTarget:
+    """Validate a saved job URL for listing-only persistent-browser navigation."""
+    raw = (raw or "").strip()
+    if not raw or len(raw) > 2000:
+        raise UrlRejected("invalid_url", "This saved job has no valid listing URL.")
+    if any(ch in raw for ch in "\r\n\t\x00") or " " in raw:
+        raise UrlRejected("invalid_url", "The saved job URL contains characters that are not allowed.")
+
+    try:
+        parts = urlsplit(raw)
+        port = parts.port
+    except ValueError:
+        raise UrlRejected("invalid_url", "The saved job URL is malformed.") from None
+
+    host = (parts.hostname or "").lower().rstrip(".")
+    if (
+        parts.scheme.lower() != "https"
+        or not host
+        or parts.username
+        or parts.password
+        or port not in (None, 443)
+        or parts.path in ("", "/")
+    ):
+        raise UrlRejected(
+            "invalid_url",
+            "The saved job must have a valid HTTPS listing URL.",
+        )
+
+    platform = platform_for_host(host)
+    if platform is None:
+        raise UrlRejected(
+            "unsupported_host",
+            "Only LinkedIn, Naukri, Indeed, and Glassdoor job listings can open in the CareerPilot browser.",
+        )
+    expected_platform = JOB_SOURCE_PLATFORMS.get((source or "").strip().lower())
+    if expected_platform and expected_platform != platform:
+        raise UrlRejected(
+            "platform_mismatch",
+            "The saved job's source does not match its listing URL.",
+        )
+    if is_non_public_host(host):
+        raise UrlRejected("non_public_host", "The saved listing must use a public internet address.")
+
+    return FillTarget(url=raw, host=host, adapter=f"{platform}_listing")
 
 
 def is_non_public_host(host: str) -> bool:

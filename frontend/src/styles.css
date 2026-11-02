@@ -1586,12 +1586,7 @@ body {
 .linkedin-brand { background: #0a66c2; }
 .indeed-brand { background: #2164f3; }
 .glassdoor-brand { background: #16835d; }
-.zip-recruiter-brand { background: #4a70df; }
-.bayt-brand { background: #e38a2c; }
 .naukri-brand { background: #e66c35; }
-.bdjobs-brand { background: #168b70; }
-.hellowork-brand { background: #db5a49; }
-.jobicy-brand { background: #585276; }
 .job-source-option.selected .source-brand-icon { background: rgba(255,255,255,.2); }
 .source-primary-tag, .source-secondary-tag {
   padding: 3px 7px;
@@ -1618,7 +1613,7 @@ body {
 .criteria-panel-head { margin-bottom: 10px; }
 .criteria-panel-head h2 { font-size: 14px; }
 .criteria-panel-head p { font-size: 11px; }
-.linkedin-search-card, .jobicy-search-card { padding: 15px 17px; }
+.linkedin-search-card { padding: 15px 17px; }
 .search-criteria-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1681,19 +1676,6 @@ body {
   color: var(--muted);
   font-size: 10px;
 }
-.jobicy-search-card {
-  border-color: var(--line);
-  background: var(--surface-2);
-  box-shadow: none;
-}
-.jobicy-search-card .source-disclaimer { display: block; margin-top: 12px; }
-.jobicy-criteria-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.jobicy-criteria-grid > button {
-  min-height: 34px;
-  align-self: end;
-  padding: 9px 12px;
-  font-size: 11px;
-}
 .source-feedback, .source-loading {
   display: flex;
   align-items: center;
@@ -1731,13 +1713,13 @@ body {
   color: var(--muted);
   font-size: 11px;
 }
-.jobicy-results, .saved-job-results-list {
+.source-search-results, .saved-job-results-list {
   grid-template-columns: minmax(0, 1fr);
 }
-.jobicy-results .job-info > p:last-of-type {
+.source-search-results .job-info > p:last-of-type {
   overflow-wrap: anywhere;
 }
-.jobicy-results .job-actions { min-width: 0; }
+.source-search-results .job-actions { min-width: 0; }
 .saved-matches-card { margin-top: 16px; }
 .job-results-heading {
   align-items: center;
@@ -1771,7 +1753,7 @@ body {
 .saved-job-results-list > .empty-state { grid-column: 1 / -1; }
 
 @media (min-width: 1181px) {
-  .jobicy-results, .saved-job-results-list {
+  .source-search-results, .saved-job-results-list {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

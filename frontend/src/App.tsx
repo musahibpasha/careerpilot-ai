@@ -216,14 +216,9 @@ type DiscoveredJob = {
 
 type JobSearchSource =
   | "linkedin"
-  | "indeed"
-  | "glassdoor"
-  | "zip_recruiter"
-  | "bayt"
   | "naukri"
-  | "bdjobs"
-  | "hellowork"
-  | "jobicy";
+  | "indeed"
+  | "glassdoor";
 
 const JOB_SEARCH_SOURCES: {
   id: JobSearchSource;
@@ -232,14 +227,9 @@ const JOB_SEARCH_SOURCES: {
   description: string;
 }[] = [
   { id: "linkedin", label: "LinkedIn", mark: "in", description: "Professional network" },
+  { id: "naukri", label: "Naukri", mark: "N", description: "Jobs across India" },
   { id: "indeed", label: "Indeed", mark: "I", description: "Global job listings" },
   { id: "glassdoor", label: "Glassdoor", mark: "G", description: "Jobs and company reviews" },
-  { id: "zip_recruiter", label: "ZipRecruiter", mark: "Z", description: "Personalized job search" },
-  { id: "bayt", label: "Bayt", mark: "B", description: "Middle East opportunities" },
-  { id: "naukri", label: "Naukri", mark: "N", description: "Jobs across India" },
-  { id: "bdjobs", label: "BDJobs", mark: "BD", description: "Jobs across Bangladesh" },
-  { id: "hellowork", label: "HelloWork", mark: "H", description: "Jobs across France" },
-  { id: "jobicy", label: "Jobicy", mark: "J", description: "Remote-first listings" },
 ];
 
 // Why you passed on a job. "page" is where the matching setting lives.
@@ -1159,13 +1149,7 @@ function App() {
   const [linkedinSalaryCurrency, setLinkedinSalaryCurrency] = useState("INR");
   const [linkedinPostedWithin, setLinkedinPostedWithin] = useState("any");
   const [linkedinSort, setLinkedinSort] = useState("relevance");
-  const [discoveryWhat, setDiscoveryWhat] = useState("software engineer");
-  const [discoveryWhere, setDiscoveryWhere] = useState("Bengaluru, India");
-  const [discoveryGeo, setDiscoveryGeo] = useState("apac");
   const [discoveryResults, setDiscoveryResults] = useState<DiscoveredJob[]>([]);
-  const [discoveryPage, setDiscoveryPage] = useState(1);
-  const [discoveryNextCursor, setDiscoveryNextCursor] = useState<string | null>(null);
-  const [discoveryHasMore, setDiscoveryHasMore] = useState(false);
   const [discoveryBusy, setDiscoveryBusy] = useState(false);
   const [discoveryMessage, setDiscoveryMessage] = useState("");
   const [discoveryError, setDiscoveryError] = useState(false);
@@ -1343,68 +1327,8 @@ function App() {
     discoveryRequestId.current += 1;
     setDiscoveryBusy(false);
     setDiscoveryResults([]);
-    setDiscoveryPage(1);
-    setDiscoveryNextCursor(null);
-    setDiscoveryHasMore(false);
     setDiscoveryMessage("");
     setDiscoveryError(false);
-  }
-
-  async function searchJobicy(cursor: string | null = null, pageNumber = 1) {
-    const requestId = ++discoveryRequestId.current;
-    setDiscoveryBusy(true);
-    setDiscoveryMessage("");
-    setDiscoveryError(false);
-    try {
-      const params = new URLSearchParams({
-        what: discoveryWhat.trim(),
-        where: discoveryWhere.trim(),
-        geo: discoveryGeo,
-      });
-      if (cursor) params.set("cursor", cursor);
-      const response = await fetch(`${API}/api/jobs/discover?${params}`);
-      const data = await response.json().catch(() => null);
-      if (!response.ok) {
-        throw new Error(errorText(data, `Job search failed (HTTP ${response.status}).`));
-      }
-      if (
-        !Array.isArray(data?.results) ||
-        typeof data?.has_more !== "boolean" ||
-        typeof data?.geo !== "string"
-      ) {
-        throw new Error("Jobicy returned an invalid search response.");
-      }
-      if (requestId !== discoveryRequestId.current) return;
-      setDiscoveryResults(
-        data.results.map((job: Omit<DiscoveredJob, "source">) => ({
-          ...job,
-          source: "jobicy",
-        })),
-      );
-      setDiscoveryPage(pageNumber);
-      setDiscoveryHasMore(data.has_more);
-      setDiscoveryNextCursor(
-        typeof data.next_cursor === "string" ? data.next_cursor : null,
-      );
-      if (data.results.length === 0) {
-        setDiscoveryMessage(
-          data.has_more
-            ? "No listings on this page match that location. Try the next page or broaden the location."
-            : "No recent listings matched those search criteria.",
-        );
-      }
-    } catch (e) {
-      if (requestId !== discoveryRequestId.current) return;
-      setDiscoveryResults([]);
-      setDiscoveryHasMore(false);
-      setDiscoveryNextCursor(null);
-      setDiscoveryError(true);
-      setDiscoveryMessage(e instanceof Error ? e.message : "Could not search Jobicy.");
-    } finally {
-      if (requestId === discoveryRequestId.current) {
-        setDiscoveryBusy(false);
-      }
-    }
   }
 
   async function searchJobBoard() {
@@ -1449,17 +1373,16 @@ function App() {
           source: data.source,
         })),
       );
-      setDiscoveryPage(1);
-      setDiscoveryHasMore(false);
-      setDiscoveryNextCursor(null);
       if (data.results.length === 0) {
-        setDiscoveryMessage("No listings matched those search criteria. Try broader keywords or another source.");
+        setDiscoveryMessage(
+          data.source === "indeed"
+            ? "Indeed returned no listings. This may mean there are no matches or the board temporarily restricted the search; try broader keywords or check Indeed directly."
+            : "No listings were returned. Try broader keywords or another source.",
+        );
       }
     } catch (e) {
       if (requestId !== discoveryRequestId.current) return;
       setDiscoveryResults([]);
-      setDiscoveryHasMore(false);
-      setDiscoveryNextCursor(null);
       setDiscoveryError(true);
       setDiscoveryMessage(e instanceof Error ? e.message : "Could not search this job board.");
     } finally {
@@ -1533,7 +1456,7 @@ function App() {
       });
       const data = await response.json().catch(() => null);
       if (response.status === 409) {
-        setDiscoveryMessage("This Jobicy listing is already saved.");
+        setDiscoveryMessage("This listing is already saved.");
         return;
       }
       if (!response.ok) {
@@ -1574,10 +1497,7 @@ function App() {
     [applications, draggedAppId],
   );
 
-  const sources = useMemo(
-    () => Array.from(new Set(jobs.map((j) => j.source))).sort(),
-    [jobs],
-  );
+  const sources = JOB_SEARCH_SOURCES.map((source) => source.id);
 
   const dismissedJobs = useMemo(
     () => jobs.filter((j) => j.feedback === "not_interested"),
@@ -3485,11 +3405,10 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                 ))}
               </div>
               <p className="source-disclaimer">
-                Job boards use JobSpy; Jobicy uses its public jobs API. Listings stay here until you save them. Availability and filters vary by source; application form filling remains review-first and is only supported on select employer sites.
+                Search LinkedIn, Naukri, Indeed, or Glassdoor with JobSpy. Listings stay here until you save them; application form filling remains review-first and is only supported on select employer sites.
               </p>
             </section>
 
-            {jobSource !== "jobicy" ? (
             <>
             <section className="panel search-card linkedin-search-card">
               <div className="panel-head criteria-panel-head">
@@ -3691,7 +3610,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                     <h3>{JOB_SEARCH_SOURCES.find((source) => source.id === jobSource)?.label} results</h3>
                     <span>{discoveryResults.length} listing{discoveryResults.length === 1 ? "" : "s"}</span>
                   </div>
-                  <section className="jobs-list jobicy-results">
+                  <section className="jobs-list source-search-results">
                     {discoveryResults.map((job) => {
                       const saved = jobs.some(
                         (existing) =>
@@ -3752,200 +3671,6 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
               )}
             </section>
             </>
-            ) : (
-            <section className="panel search-card jobicy-search-card">
-              <div className="panel-head criteria-panel-head">
-                <div>
-                  <h2>Search criteria</h2>
-                  <p>Search recent public remote listings from Jobicy.</p>
-                </div>
-              </div>
-              <form
-                className="search-criteria-grid jobicy-criteria-grid"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void searchJobicy();
-                }}
-              >
-                <label>
-                  Keywords
-                  <input
-                    value={discoveryWhat}
-                    onChange={(event) => {
-                      setDiscoveryWhat(event.target.value);
-                      clearDiscoveryResults();
-                    }}
-                    placeholder="e.g. software engineer"
-                    minLength={2}
-                    maxLength={100}
-                    required
-                  />
-                </label>
-                <label>
-                  Location eligibility
-                  <input
-                    value={discoveryWhere}
-                    onChange={(event) => {
-                      setDiscoveryWhere(event.target.value);
-                      clearDiscoveryResults();
-                    }}
-                    placeholder="e.g. Bengaluru, India"
-                    maxLength={100}
-                  />
-                </label>
-                <label>
-                  Region
-                  <select
-                    value={discoveryGeo}
-                    onChange={(event) => {
-                      setDiscoveryGeo(event.target.value);
-                      clearDiscoveryResults();
-                    }}
-                  >
-                    <option value="apac">Asia-Pacific</option>
-                    <option value="europe">Europe</option>
-                    <option value="usa">USA</option>
-                    <option value="canada">Canada</option>
-                    <option value="uk">United Kingdom</option>
-                  </select>
-                </label>
-                <button className="primary-button" type="submit" disabled={discoveryBusy}>
-                  {discoveryBusy ? "Searching..." : "Search Jobicy"}
-                </button>
-              </form>
-              <small className="source-disclaimer">
-                Jobicy supplies remote listings and broad region filters; it does not
-                offer an India- or city-specific filter. Location is matched locally
-                against the eligibility text provided by the source. Results link to
-                Jobicy, as required by its public API terms.
-              </small>
-              {discoveryBusy && (
-                <p className="source-loading" role="status" aria-live="polite">
-                  Searching recent Jobicy listings…
-                </p>
-              )}
-              {discoveryMessage && (
-                <div className={discoveryError ? "source-feedback error" : "source-feedback"} role={discoveryError ? "alert" : "status"}>
-                  <span>{discoveryMessage}</span>
-                  {discoveryError && (
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      onClick={() => void searchJobicy()}
-                      disabled={discoveryBusy}
-                    >
-                      Try again
-                    </button>
-                  )}
-                </div>
-              )}
-              {discoveryResults.length > 0 && (
-                <>
-                  <div className="source-results-heading">
-                    <h3>Jobicy results</h3>
-                    <span>
-                      Page {discoveryPage} · {discoveryResults.length} listing
-                      {discoveryResults.length === 1 ? "" : "s"}
-                    </span>
-                  </div>
-                  <section className="jobs-list jobicy-results">
-                    {discoveryResults.map((job) => {
-                      const saved = jobs.some(
-                        (existing) =>
-                          existing.source === "jobicy" &&
-                          existing.source_job_id === job.source_job_id,
-                      );
-                      const publishedDate = job.published_at
-                        ? new Date(job.published_at)
-                        : null;
-                      return (
-                        <article className="job-card" key={job.source_job_id}>
-                          <div className="company-logo">
-                            {job.company.slice(0, 1).toUpperCase()}
-                          </div>
-                          <div className="job-info">
-                            <h3>{job.title}</h3>
-                            <p>
-                              {job.company}
-                              {job.location ? ` · Remote eligibility: ${job.location}` : ""}
-                            </p>
-                            <div className="job-meta">
-                              <span>Remote</span>
-                              {job.work_arrangement && <span>{job.work_arrangement}</span>}
-                              {job.employment_types.map((type) => (
-                                <span key={type}>{type}</span>
-                              ))}
-                              {job.experience_level && <span>{job.experience_level}</span>}
-                              {(job.salary_min != null || job.salary_max != null) && (
-                                <span>
-                                  Salary: {job.salary_currency ? `${job.salary_currency} ` : ""}
-                                  {job.salary_min != null ? job.salary_min.toLocaleString() : "—"}
-                                  {"–"}
-                                  {job.salary_max != null ? job.salary_max.toLocaleString() : "—"}
-                                  {" / "}
-                                  {job.salary_period}
-                                </span>
-                              )}
-                              {publishedDate && !Number.isNaN(publishedDate.getTime()) && (
-                                <span>Posted {publishedDate.toLocaleDateString()}</span>
-                              )}
-                            </div>
-                            {job.description && (
-                              <p>{job.description.slice(0, 900)}</p>
-                            )}
-                            {job.skills.length > 0 && (
-                              <div className="skill-list">
-                                {job.skills.slice(0, 6).map((skill) => (
-                                  <span key={skill}>{skill}</span>
-                                ))}
-                              </div>
-                            )}
-                            <small className="source-attribution">Source: Jobicy</small>
-                          </div>
-                          <div className="job-actions">
-                            <button
-                              className="primary-button"
-                              type="button"
-                              disabled={saved || savingDiscoveryId === job.source_job_id}
-                              onClick={() => void saveDiscoveredJob(job)}
-                            >
-                              {saved
-                                ? "Saved"
-                                : savingDiscoveryId === job.source_job_id
-                                  ? "Saving..."
-                                  : "Save job"}
-                            </button>
-                            <a
-                              href={job.url}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="secondary-button"
-                            >
-                              Original posting <ArrowUpRight size={14} />
-                            </a>
-                          </div>
-                        </article>
-                      );
-                    })}
-                  </section>
-                </>
-              )}
-              {discoveryHasMore && discoveryNextCursor && (
-                <div className="row" style={{ justifyContent: "center", marginTop: 16 }}>
-                  <button
-                    className="secondary-button"
-                    type="button"
-                    disabled={discoveryBusy}
-                    onClick={() =>
-                      void searchJobicy(discoveryNextCursor, discoveryPage + 1)
-                    }
-                  >
-                    {discoveryBusy ? "Loading..." : "Next page"}
-                  </button>
-                </div>
-              )}
-            </section>
-            )}
 
             <section className="panel search-card saved-matches-card">
               <div className="job-results-heading">
@@ -4006,7 +3731,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                       <option value="all">All</option>
                       {sources.map((src) => (
                         <option key={src} value={src}>
-                          {src}
+                          {JOB_SEARCH_SOURCES.find((source) => source.id === src)?.label ?? src}
                         </option>
                       ))}
                     </select>

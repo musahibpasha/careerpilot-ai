@@ -158,24 +158,12 @@ class JobDiscoveryListing(BaseModel):
     salary_period: str = "year"
 
 
-class JobDiscoveryResponse(BaseModel):
-    source: Literal["jobicy"] = "jobicy"
-    geo: str
-    results: list[JobDiscoveryListing]
-    has_more: bool
-    next_cursor: str | None = None
-
-
 class JobSpyDiscoveryResponse(BaseModel):
     source: Literal[
         "linkedin",
+        "naukri",
         "indeed",
         "glassdoor",
-        "zip_recruiter",
-        "bayt",
-        "naukri",
-        "bdjobs",
-        "hellowork",
     ]
     results: list[JobDiscoveryListing]
 

@@ -6,22 +6,18 @@ import math
 from datetime import date, datetime
 from urllib.parse import urlparse
 
-from jobspy import scrape_jobs
+from jobspy import Country, scrape_jobs
 
 from app.assistant_urls import UrlRejected, check_fill_url
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_SITES = {
+SUPPORTED_SITES = (
     "linkedin",
+    "naukri",
     "indeed",
     "glassdoor",
-    "zip_recruiter",
-    "bayt",
-    "naukri",
-    "bdjobs",
-    "hellowork",
-}
+)
 
 _SITE_DOMAINS = {
     "linkedin": ("linkedin.com",),
@@ -52,22 +48,14 @@ _SITE_DOMAINS = {
         "glassdoor.nl",
         "glassdoor.es",
     ),
-    "zip_recruiter": ("ziprecruiter.com",),
-    "bayt": ("bayt.com",),
     "naukri": ("naukri.com",),
-    "bdjobs": ("bdjobs.com",),
-    "hellowork": ("hellowork.com",),
 }
 
 _SITE_LABELS = {
     "linkedin": "LinkedIn",
     "indeed": "Indeed",
     "glassdoor": "Glassdoor",
-    "zip_recruiter": "ZipRecruiter",
-    "bayt": "Bayt",
     "naukri": "Naukri",
-    "bdjobs": "BDJobs",
-    "hellowork": "HelloWork",
 }
 
 
@@ -149,6 +137,22 @@ def _string_list(value) -> list[str]:
     return [text] if text else []
 
 
+def _indeed_country(where: str) -> str:
+    """Use a country suffix from the location, defaulting to CareerPilot's India market."""
+    countries = {country.value.casefold(): country.value for country in Country}
+    aliases = {
+        "united kingdom": "uk",
+        "united states": "usa",
+        "united states of america": "usa",
+    }
+    fragments = [part.strip().casefold() for part in where.split(",") if part.strip()]
+    for fragment in reversed(fragments):
+        country = aliases.get(fragment, fragment)
+        if country in countries:
+            return countries[country]
+    return countries["india"]
+
+
 def search_jobspy_jobs(
     *,
     site: str,
@@ -163,14 +167,19 @@ def search_jobspy_jobs(
         raise JobSpyError("Choose a supported job-search source.", 422)
 
     try:
+        search_options = {
+            "site_name": [site],
+            "search_term": what,
+            "location": where,
+            "results_wanted": 20,
+            "job_type": job_type,
+            "is_remote": is_remote,
+            "hours_old": hours_old,
+        }
+        if site == "indeed":
+            search_options["country_indeed"] = _indeed_country(where)
         frame = scrape_jobs(
-            site_name=[site],
-            search_term=what,
-            location=where,
-            results_wanted=20,
-            job_type=job_type,
-            is_remote=is_remote,
-            hours_old=hours_old,
+            **search_options,
         )
     except Exception as error:
         logger.exception("JobSpy search failed for %s.", site)
