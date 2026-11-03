@@ -822,11 +822,7 @@ def _run_in_thread(
             browser_cdp_endpoint=(
                 settings.assistant_browser_cdp_endpoint
                 if target.adapter.endswith("_listing")
-                else (
-                    settings.assistant_browser_cdp_endpoint
-                    if target.adapter.endswith("_automate") and (settings.assistant_browser_cdp_endpoint or "").strip()
-                    else None
-                )
+                else None
             ),
             on_result=lambda r: save(r, finished=False),
             automation_profile_dir=(

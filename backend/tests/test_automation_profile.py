@@ -1,7 +1,9 @@
+import json
 import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -179,7 +181,6 @@ def test_installed_chrome_launch_failure_does_not_fall_back(tmp_path, monkeypatc
     (
         ("greenhouse", "https://boards.greenhouse.io/acme/jobs/1", "boards.greenhouse.io"),
         ("lever", "https://jobs.lever.co/acme/1", "jobs.lever.co"),
-        ("linkedin_automate", "https://www.linkedin.com/jobs/view/123", "www.linkedin.com"),
     ),
 )
 def test_supported_assistant_runs_launch_with_the_shared_persistent_profile(
@@ -261,6 +262,225 @@ def test_supported_assistant_runs_launch_with_the_shared_persistent_profile(
         "headless": False,
         "channel": "chrome",
     }]
+
+
+def test_external_chrome_starts_with_dedicated_profile_and_loopback_cdp(
+    tmp_path, monkeypatch
+):
+    launches = []
+
+    class Process:
+        def __init__(self):
+            self.terminated = False
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            self.terminated = True
+
+    process = Process()
+
+    def fake_popen(command, **kwargs):
+        launches.append((command, kwargs))
+        return process
+
+    class Response:
+        def __init__(self, port):
+            self.port = port
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _limit):
+            return json.dumps({
+                "webSocketDebuggerUrl": f"ws://127.0.0.1:{self.port}/devtools/browser/test"
+            }).encode()
+
+    class Opener:
+        def open(self, url, timeout):
+            assert timeout == 1
+            return Response(int(urlsplit(url).port))
+
+    monkeypatch.setattr(assistant_fill, "_installed_chrome_executable", lambda: tmp_path / "chrome.exe")
+    monkeypatch.setattr(assistant_fill.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(assistant_fill, "build_opener", lambda *_args: Opener())
+
+    process, endpoint = assistant_fill._start_external_chrome(str(tmp_path / "profile"))
+
+    command, kwargs = launches[0]
+    port = int(next(arg.split("=", 1)[1] for arg in command if arg.startswith("--remote-debugging-port=")))
+    assert endpoint == f"http://127.0.0.1:{port}"
+    assert command[0] == str(tmp_path / "chrome.exe")
+    assert f"--user-data-dir={tmp_path / 'profile'}" in command
+    assert "--remote-debugging-address=127.0.0.1" in command
+    assert "--enable-automation" not in command
+    assert kwargs["stdin"] == subprocess.DEVNULL
+    assert kwargs["stdout"] == subprocess.DEVNULL
+    assert kwargs["stderr"] == subprocess.DEVNULL
+    assert process.terminated is False
+
+
+def test_external_chrome_process_is_reused_while_open_and_restarted_after_close(
+    tmp_path, monkeypatch
+):
+    class Process:
+        returncode = None
+
+        def poll(self):
+            return self.returncode
+
+    processes = []
+
+    def start(_profile):
+        process = Process()
+        processes.append(process)
+        return process, f"http://127.0.0.1:{40000 + len(processes)}"
+
+    monkeypatch.setattr(assistant_fill, "_start_external_chrome", start)
+    profile_dir = str(tmp_path / "profile")
+
+    try:
+        first = assistant_fill._get_or_start_external_chrome(profile_dir)
+        second = assistant_fill._get_or_start_external_chrome(profile_dir)
+        assert second == first
+        assert len(processes) == 1
+
+        processes[0].returncode = 0
+        third = assistant_fill._get_or_start_external_chrome(profile_dir)
+        assert third[0] is processes[1]
+        assert len(processes) == 2
+    finally:
+        key = assistant_fill.os.path.normcase(str(Path(profile_dir).resolve()))
+        with assistant_fill._EXTERNAL_CHROME_LOCK:
+            assistant_fill._EXTERNAL_CHROME_PROCESSES.pop(key, None)
+
+
+def test_automate_attaches_to_normal_chrome_and_does_not_close_its_process(
+    tmp_path, monkeypatch
+):
+    process = SimpleNamespace(terminated=False)
+    calls = []
+
+    class Frame:
+        url = "https://www.linkedin.com/jobs/view/123"
+
+        def evaluate(self, script, *_args):
+            if script == assistant_fill.COLLECT_JS:
+                return []
+            return []
+
+    class Page:
+        url = "about:blank"
+        frames = [Frame()]
+
+        def route(self, *_args):
+            pass
+
+        def goto(self, url, **_kwargs):
+            self.url = url
+
+        def wait_for_load_state(self, *_args, **_kwargs):
+            pass
+
+        def evaluate(self, script, *_args):
+            if script == assistant_fill.FLAGS_JS:
+                return {"password": False, "login": False, "captcha": False}
+            if script == assistant_fill.TRIGGER_APPLY_JS:
+                return "not_found"
+            return None
+
+        def is_closed(self):
+            return False
+
+        def wait_for_timeout(self, _milliseconds):
+            pass
+
+    class Context:
+        def __init__(self):
+            self.pages = [Page()]
+            self.tracing = SimpleNamespace(
+                start=lambda **_kwargs: None,
+                stop=lambda **_kwargs: None,
+            )
+
+        def new_cdp_session(self, _page):
+            class Session:
+                def send(self, command):
+                    assert command == "Browser.getVersion"
+                    return {"product": "Chrome/156.0.0.0"}
+
+                def detach(self):
+                    pass
+
+            return Session()
+
+        def new_page(self):
+            page = Page()
+            self.pages.append(page)
+            return page
+
+        def route(self, *_args):
+            pass
+
+    context = Context()
+
+    class Browser:
+        contexts = [context]
+
+        def close(self):
+            self.disconnected = True
+
+    browser = Browser()
+
+    class Chromium:
+        def connect_over_cdp(self, endpoint, **kwargs):
+            calls.append((endpoint, kwargs))
+            return browser
+
+        def launch_persistent_context(self, **_kwargs):
+            raise AssertionError("Automate must attach to externally launched Chrome.")
+
+    class Playwright:
+        chromium = Chromium()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setitem(
+        sys.modules,
+        "playwright.sync_api",
+        SimpleNamespace(sync_playwright=lambda: Playwright()),
+    )
+    monkeypatch.setattr(
+        assistant_fill,
+        "_get_or_start_external_chrome",
+        lambda _profile: (process, "http://127.0.0.1:45678"),
+    )
+    monkeypatch.setattr(assistant_fill, "check_public_host", lambda _host: None)
+    monkeypatch.setattr(assistant_fill, "_automation_profile_path", lambda _path: str(tmp_path))
+
+    result = assistant_fill.run_assistance(
+        assistant_fill.FillTarget(
+            url="https://www.linkedin.com/jobs/view/123",
+            host="www.linkedin.com",
+            adapter="linkedin_automate",
+        ),
+        {},
+        keep_open_seconds=0,
+    )
+
+    assert calls == [("http://127.0.0.1:45678", {"timeout": 15000})]
+    assert context.pages[-1].url == "https://www.linkedin.com/jobs/view/123"
+    assert result["status"] == assistant_fill.NEEDS_YOU
+    assert browser.disconnected
+    assert process.terminated is False
 
 
 def test_automate_board_platform_allows_linkedin_and_google_sign_in_navigation():

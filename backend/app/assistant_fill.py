@@ -19,10 +19,12 @@ the authenticated owner. This module never logs field values or credentials.
 """
 
 import errno
+import json
 import logging
 import os
 import re
 import shutil
+import socket
 import subprocess
 import threading
 import time
@@ -30,6 +32,7 @@ from contextlib import ExitStack
 from pathlib import Path
 from typing import Callable
 from urllib.parse import urlsplit
+from urllib.request import ProxyHandler, build_opener
 
 from app.assistant_kit import ANSWER_LABELS, DRAFT_LABELS, FACT_LABELS
 from app.assistant_urls import (
@@ -45,6 +48,8 @@ from app.assistant_urls import (
 logger = logging.getLogger(__name__)
 _PROFILE_LOCKS_GUARD = threading.Lock()
 _PROFILE_THREAD_LOCKS: dict[str, threading.Lock] = {}
+_EXTERNAL_CHROME_LOCK = threading.Lock()
+_EXTERNAL_CHROME_PROCESSES: dict[str, tuple[subprocess.Popen, str]] = {}
 _CDP_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1"})
 
 FILLED, SKIPPED, NEEDS_INPUT, FAILED = "filled", "skipped", "needs_input", "failed"
@@ -1052,17 +1057,22 @@ def _validate_cdp_endpoint(endpoint: str | None) -> str:
     return f"http://{(parts.hostname or '').lower().rstrip('.')}:{port}"
 
 
-def _verify_dedicated_chrome(context, page, expected_profile: str) -> None:
-    """Fail closed unless CDP identifies Google Chrome using our dedicated profile."""
+def _verify_dedicated_chrome(
+    context, page, expected_profile: str, *, verify_command_line: bool = True
+) -> None:
+    """Verify Chrome identity and, for external sessions, its dedicated profile."""
     session = context.new_cdp_session(page)
     try:
         try:
             product = session.send("Browser.getVersion").get("product", "")
-            arguments = session.send("Browser.getBrowserCommandLine").get("arguments", [])
+            arguments = (
+                session.send("Browser.getBrowserCommandLine").get("arguments", [])
+                if verify_command_line
+                else []
+            )
         except Exception as exc:
             raise BrowserAttachmentUnavailable(
-                "Could not verify the connected Chrome profile. Start Chrome with "
-                "--enable-automation and the dedicated CareerPilot --user-data-dir."
+                "Could not verify the connected Google Chrome session."
             ) from exc
     finally:
         try:
@@ -1074,6 +1084,8 @@ def _verify_dedicated_chrome(context, page, expected_profile: str) -> None:
         raise BrowserProfileMismatch(
             "The local debugging endpoint is not connected to Google Chrome."
         )
+    if not verify_command_line:
+        return
 
     user_data_dir = None
     for index, argument in enumerate(arguments if isinstance(arguments, list) else []):
@@ -1118,6 +1130,82 @@ def _launch_automation_context(chromium, profile_dir: str, launch: dict):
     }
     options.update(headless=False, channel="chrome")
     return chromium.launch_persistent_context(user_data_dir=profile_dir, **options)
+
+
+def _start_external_chrome(profile_dir: str) -> tuple[subprocess.Popen, str]:
+    """Start ordinary Google Chrome with a dedicated profile and loopback CDP."""
+    executable = _installed_chrome_executable()
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+
+    endpoint = f"http://127.0.0.1:{port}"
+    command = [
+        str(executable),
+        f"--remote-debugging-port={port}",
+        "--remote-debugging-address=127.0.0.1",
+        f"--user-data-dir={profile_dir}",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "about:blank",
+    ]
+    creation_flags = (
+        getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if os.name == "nt" else 0
+    )
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        close_fds=os.name != "nt",
+        creationflags=creation_flags,
+    )
+    opener = build_opener(ProxyHandler({}))
+    deadline = time.monotonic() + 25
+    last_error = None
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise RuntimeError(
+                "Google Chrome exited before its local debugging endpoint became ready."
+            )
+        try:
+            with opener.open(f"{endpoint}/json/version", timeout=1) as response:
+                details = json.loads(response.read(16384).decode("utf-8"))
+            websocket_url = urlsplit(details.get("webSocketDebuggerUrl", ""))
+            if (
+                websocket_url.scheme == "ws"
+                and websocket_url.hostname == "127.0.0.1"
+                and websocket_url.port == port
+            ):
+                return process, endpoint
+            last_error = RuntimeError(
+                "Google Chrome returned an unexpected local debugging endpoint."
+            )
+        except Exception as exc:  # noqa: BLE001 - retry until Chrome's CDP endpoint is ready
+            last_error = exc
+        time.sleep(0.25)
+
+    try:
+        process.terminate()
+        process.wait(timeout=5)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        logger.warning("Chrome startup cleanup failed category=%s", type(exc).__name__)
+    raise RuntimeError(
+        "Google Chrome started, but its local debugging endpoint did not become ready."
+    ) from last_error
+
+
+def _get_or_start_external_chrome(profile_dir: str) -> tuple[subprocess.Popen, str]:
+    """Reuse the CareerPilot Chrome process for this profile while it remains open."""
+    profile_key = os.path.normcase(str(Path(profile_dir).resolve()))
+    with _EXTERNAL_CHROME_LOCK:
+        existing = _EXTERNAL_CHROME_PROCESSES.get(profile_key)
+        if existing and existing[0].poll() is None:
+            return existing
+        _EXTERNAL_CHROME_PROCESSES.pop(profile_key, None)
+        launched = _start_external_chrome(profile_dir)
+        _EXTERNAL_CHROME_PROCESSES[profile_key] = launched
+        return launched
 
 
 def _launch_glassdoor_context(chromium, profile_dir: str, launch: dict):
@@ -1223,6 +1311,7 @@ def run_assistance(
     attach_existing_browser = (
         listing_platform is not None
         or bool((browser_cdp_endpoint or "").strip())
+        or automate_platform is not None
     )
     counter = {
         "blocked_writes": 0,
@@ -1236,6 +1325,8 @@ def run_assistance(
     profile_lock: AutomationProfileLock | None = None
     profile_lock_acquired = False
     browser = None
+    launched_chrome_process = None
+    internally_launched_chrome = False
     context = None
     page = None
     attached_browser = False
@@ -1335,14 +1426,27 @@ def run_assistance(
             cleanup_stack.callback(close_browser_resources)
             launch = {"headless": headless}
             if attach_existing_browser:
+                if (
+                    automate_platform is not None
+                    and listing_platform is None
+                    and not (browser_cdp_endpoint or "").strip()
+                ):
+                    phase = "launch"
+                    launched_chrome_process, endpoint = _get_or_start_external_chrome(
+                        profile_path
+                    )
+                    internally_launched_chrome = True
+                else:
+                    endpoint = _validate_cdp_endpoint(browser_cdp_endpoint)
                 phase = "connect"
-                endpoint = _validate_cdp_endpoint(browser_cdp_endpoint)
                 try:
-                    browser = pw.chromium.connect_over_cdp(endpoint, timeout=5000)
+                    browser = pw.chromium.connect_over_cdp(
+                        endpoint,
+                        timeout=15000 if internally_launched_chrome else 5000,
+                    )
                 except Exception as exc:
                     raise BrowserAttachmentUnavailable(
-                        "Could not connect to CareerPilot Chrome. Start the dedicated "
-                        "Chrome profile with remote debugging enabled."
+                        "Could not connect Playwright to the dedicated CareerPilot Chrome session."
                     ) from exc
                 attached_browser = True
                 contexts = browser.contexts
@@ -1356,7 +1460,12 @@ def run_assistance(
                     raise BrowserAttachmentUnavailable(
                         "The connected Chrome session has no page available for verification."
                     )
-                _verify_dedicated_chrome(context, verification_pages[0], profile_path)
+                _verify_dedicated_chrome(
+                    context,
+                    verification_pages[0],
+                    profile_path,
+                    verify_command_line=not internally_launched_chrome,
+                )
                 page = context.new_page()
             elif persistent_profile:
                 phase = "launch"

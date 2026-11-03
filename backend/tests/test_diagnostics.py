@@ -762,6 +762,60 @@ def test_worker_persists_cancellation_and_releases_run(monkeypatch):
     assert run_id not in assistant_routes.ACTIVE_RUNS
 
 
+def test_automate_worker_launches_its_own_chrome_instead_of_using_configured_cdp(
+    monkeypatch,
+):
+    database = mongomock.MongoClient(tz_aware=True)["automate_cdp_test"]
+    uid = "automate_cdp_user"
+    application_id = ObjectId()
+    run_id = "8" * 32
+    database.applications.insert_one({
+        "_id": application_id,
+        "owner_uid": uid,
+        "assistant": {"runs": [{
+            "id": run_id,
+            "status": "running",
+            "fields": [],
+            "blocked_writes": 0,
+            "browser_open": False,
+        }]},
+    })
+    captured = {}
+    monkeypatch.setattr(
+        assistant_routes.settings,
+        "assistant_browser_cdp_endpoint",
+        "http://127.0.0.1:9222",
+    )
+
+    def fake_run(_target, _values, **kwargs):
+        captured.update(kwargs)
+        return {
+            "status": "needs_you",
+            "pause_reason": "login_required",
+            "fields": [],
+            "blocked_writes": 0,
+            "browser_open": False,
+        }
+
+    monkeypatch.setattr(assistant_routes, "run_assistance", fake_run)
+    assistant_routes._run_in_thread(
+        UserScopedDatabase(database, uid),
+        application_id,
+        run_id,
+        assistant_fill.FillTarget(
+            url="https://www.linkedin.com/jobs/view/123",
+            host="www.linkedin.com",
+            adapter="linkedin_automate",
+        ),
+        {},
+        threading.Event(),
+        None,
+        None,
+    )
+
+    assert captured["browser_cdp_endpoint"] is None
+
+
 # ── approval workflow remains intact with diagnostics ─────────────────────────
 
 class TestApprovalIntegrityWithDiagnostics:
