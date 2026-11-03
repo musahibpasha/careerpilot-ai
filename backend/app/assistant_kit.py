@@ -34,13 +34,22 @@ FACT_LABELS = {
     "skills": "Skills",
 }
 
-# Facts that exist only if the user explicitly types them. Never guessed.
+# Primary answers always shown in the kit review table. Never guessed.
 ANSWER_LABELS = {
     "notice_period": "Notice period",
     "expected_salary": "Salary expectation",
     "work_authorization": "Work authorization",
     "visa_sponsorship": "Visa sponsorship needed",
 }
+
+# Optional extra screening answers accepted by save_kit and used during form filling if provided.
+EXTRA_ANSWER_LABELS = {
+    "current_ctc": "Current CTC / salary",
+    "years_of_experience": "Total years of experience",
+    "willing_to_relocate": "Willing to relocate",
+}
+
+ALL_ANSWER_LABELS = {**ANSWER_LABELS, **EXTRA_ANSWER_LABELS}
 
 DRAFT_LABELS = {
     "tell_me_about_yourself": "Tell us about yourself",
@@ -114,7 +123,7 @@ def effective_answers(stored: dict | None) -> dict[str, dict]:
     out = {}
     for key, entry in (stored or {}).get("answers", {}).items():
         value = _s(entry.get("value"))[:MAX_VALUE]
-        if key in ANSWER_LABELS and value:
+        if key in ALL_ANSWER_LABELS and value:
             out[key] = {"value": value, "source": "user"}
     return out
 
@@ -309,6 +318,11 @@ def review_rows(facts: dict, answers: dict, drafts: dict) -> list[dict]:
         e = answers.get(key)
         rows.append({"key": key, "group": "answer", "label": label,
                      "value": e["value"] if e else "", "source": e["source"] if e else "missing"})
+    for key, label in EXTRA_ANSWER_LABELS.items():
+        e = answers.get(key)
+        if e and e.get("value"):
+            rows.append({"key": key, "group": "answer", "label": label,
+                         "value": e["value"], "source": e["source"]})
     for key, label in DRAFT_LABELS.items():
         d = drafts.get(key) or {}
         text = _s(d.get("text"))

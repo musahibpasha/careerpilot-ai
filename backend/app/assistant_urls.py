@@ -1,11 +1,15 @@
 """URL policy for browser-assisted job listings and form filling.
 
-Pure functions, no network. The backend route calls check_fill_url() before
-any browser is launched, so the rules hold no matter what the frontend does.
+Pure functions, no network. The backend route calls check_fill_url(),
+check_job_listing_url(), or check_automate_url() before any browser is
+launched, so the rules hold no matter what the frontend does.
 
 Rules:
-  * Job listings may only open on LinkedIn, Naukri, Indeed, or Glassdoor.
-  * Form filling supports Greenhouse, Lever, and Glassdoor pages.
+  * Job listings may open on LinkedIn, Naukri, Indeed, or Glassdoor.
+  * Direct employer form filling supports Greenhouse, Lever, and Glassdoor pages.
+  * Full automation (/automate) supports LinkedIn, Naukri, Indeed, Glassdoor,
+    Greenhouse, Lever, and common external ATS redirects (Workday, Ashby,
+    SmartRecruiters, BambooHR, iCIMS).
   * The local test form is available only through the opt-in development flag.
 """
 
@@ -23,6 +27,31 @@ SUPPORTED_DOMAINS = (
     ("lever.co", "lever"),
     ("glassdoor.com", "glassdoor"),
     ("glassdoor.co.in", "glassdoor"),
+)
+
+# Extended ATS + job board domains permitted during multi-step automation runs
+AUTOMATION_DOMAINS = (
+    ("linkedin.com", "linkedin"),
+    ("naukri.com", "naukri"),
+    ("indeed.com", "indeed"),
+    ("indeed.co.in", "indeed"),
+    ("indeed.co.uk", "indeed"),
+    ("indeed.ca", "indeed"),
+    ("indeed.com.au", "indeed"),
+    ("smartapply.indeed.com", "indeed"),
+    ("glassdoor.com", "glassdoor"),
+    ("glassdoor.co.in", "glassdoor"),
+    ("glassdoor.co.uk", "glassdoor"),
+    ("glassdoor.ca", "glassdoor"),
+    ("glassdoor.com.au", "glassdoor"),
+    ("greenhouse.io", "greenhouse"),
+    ("lever.co", "lever"),
+    ("myworkdayjobs.com", "workday"),
+    ("workday.com", "workday"),
+    ("smartrecruiters.com", "smartrecruiters"),
+    ("ashbyhq.com", "ashby"),
+    ("bamboohr.com", "bamboohr"),
+    ("icims.com", "icims"),
 )
 
 JOB_BOARD_DOMAINS = {
@@ -81,7 +110,7 @@ class UrlRejected(Exception):
 class FillTarget:
     url: str
     host: str
-    adapter: str  # "greenhouse" | "lever" | "local_test"
+    adapter: str
 
 
 def _domain_matches(host: str, domain: str) -> bool:
@@ -101,6 +130,14 @@ def adapter_for_host(host: str) -> str | None:
     host = (host or "").lower().rstrip(".")
     return next(
         (adapter for domain, adapter in SUPPORTED_DOMAINS if _domain_matches(host, domain)),
+        None,
+    )
+
+
+def automation_adapter_for_host(host: str) -> str | None:
+    host = (host or "").lower().rstrip(".")
+    return next(
+        (adapter for domain, adapter in AUTOMATION_DOMAINS if _domain_matches(host, domain)),
         None,
     )
 
@@ -163,6 +200,61 @@ def check_job_listing_url(raw: str, source: str = "") -> FillTarget:
     return FillTarget(url=raw, host=host, adapter=f"{platform}_listing")
 
 
+def check_automate_url(raw: str, source: str = "", allow_local_form: bool = True) -> FillTarget:
+    """Validate a job URL or application URL for interactive multi-step automation."""
+    raw = (raw or "").strip()
+    if not raw or len(raw) > 2000:
+        raise UrlRejected("invalid_url", "This job has no valid application or listing URL.")
+    if any(ch in raw for ch in "\r\n\t\x00") or " " in raw:
+        raise UrlRejected("invalid_url", "That URL contains characters that are not allowed.")
+
+    try:
+        parts = urlsplit(raw)
+        port = parts.port
+    except ValueError:
+        raise UrlRejected("invalid_url", "That does not look like a valid URL.") from None
+
+    if parts.scheme.lower() not in ("http", "https"):
+        raise UrlRejected("invalid_scheme", "Only http:// and https:// addresses are allowed.")
+    host = (parts.hostname or "").lower().rstrip(".")
+    if not host or parts.username or parts.password:
+        raise UrlRejected("invalid_url", "That does not look like a valid URL.")
+
+    if host in LOOPBACK_HOSTS:
+        if allow_local_form and parts.path == LOCAL_FORM_PATH:
+            return FillTarget(url=raw, host=f"{host}:{port}" if port else host, adapter="local_test")
+        raise UrlRejected("unsupported_host", "Local addresses are only allowed for the built-in test form.")
+
+    if parts.scheme.lower() != "https":
+        raise UrlRejected("insecure_url", "Application pages must use https://.")
+    if port not in (None, 443):
+        raise UrlRejected("unsupported_port", "Application pages must use the standard HTTPS port.")
+    if parts.path in ("", "/"):
+        raise UrlRejected("invalid_url", "Enter a specific job listing or application URL, not a homepage.")
+    if is_non_public_host(host):
+        raise UrlRejected("non_public_host", "Application pages must use a public internet address.")
+
+    board_platform = platform_for_host(host)
+    expected_platform = JOB_SOURCE_PLATFORMS.get((source or "").strip().lower())
+    if expected_platform and board_platform and expected_platform != board_platform:
+        raise UrlRejected(
+            "platform_mismatch",
+            "The saved job's source does not match its listing URL.",
+        )
+
+    adapter = (
+        f"{board_platform}_automate"
+        if board_platform
+        else automation_adapter_for_host(host)
+    )
+    if not adapter:
+        raise UrlRejected(
+            "unsupported_host",
+            "Only LinkedIn, Indeed, Naukri, Glassdoor, Greenhouse, Lever, and supported ATS pages can be automated.",
+        )
+    return FillTarget(url=raw, host=host, adapter=adapter)
+
+
 def is_non_public_host(host: str) -> bool:
     host = (host or "").lower().rstrip(".")
     if host in LOOPBACK_HOSTS or host.endswith((".localhost", ".local", ".internal")):
@@ -198,8 +290,8 @@ def check_fill_url(raw: str, allow_local_form: bool = True) -> FillTarget:
     if is_blocked_host(host):
         raise UrlRejected(
             "linkedin_blocked",
-            "LinkedIn pages are never opened or filled automatically. "
-            "Use the Application Kit and the manual-fill checklist instead.",
+            "LinkedIn pages are never opened or filled through the legacy direct-URL endpoint. "
+            "Use the Automate Job Application button to run LinkedIn Easy Apply in the persistent browser.",
         )
 
     if host in LOOPBACK_HOSTS:
@@ -234,7 +326,7 @@ def check_fill_url(raw: str, allow_local_form: bool = True) -> FillTarget:
     raise UrlRejected(
         "unsupported_host",
         "Automatic form filling currently supports Greenhouse, Lever, and Glassdoor pages. "
-        "For other sites, use the Application Kit to fill the form manually.",
+        "For LinkedIn, Indeed, or Naukri listings, use the Automate Job Application button.",
     )
 
 

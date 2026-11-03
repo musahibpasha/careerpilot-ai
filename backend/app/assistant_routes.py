@@ -40,6 +40,7 @@ from app.approval import (
 from app.assistant_fill import run_assistance
 from app.assistant_urls import (
     UrlRejected,
+    check_automate_url,
     check_fill_url,
     check_job_listing_url,
     is_blocked_host,
@@ -333,7 +334,6 @@ def _http_url(raw: str) -> str:
 
 
 def _state(db: Database, app_doc: dict, job: dict, generation: dict | None = None) -> dict:
-    m = _main()
     stored = _stored(app_doc)
     rows, digest = _rows_and_hash(db, app_doc, job)
     review = stored.get("review") or {}
@@ -496,6 +496,11 @@ class StepRequest(BaseModel):
 class FillRequest(BaseModel):
     url: str = Field(max_length=2000)
     upload_resume: bool = False
+
+
+class AutomateRequest(BaseModel):
+    url: str | None = Field(default=None, max_length=2000)
+    upload_resume: bool = True
 
 
 class ResumeSelection(BaseModel):
@@ -798,7 +803,6 @@ def _run_in_thread(
         }
         if result.get("submission_enabled"):
             sets["assistant.runs.$.submission_enabled"] = True
-        # Persist artifact paths so the download endpoints can locate the files.
         if result.get("trace_path"):
             sets["assistant.runs.$.trace_path"] = result["trace_path"]
         if result.get("screenshot_path"):
@@ -808,7 +812,6 @@ def _run_in_thread(
         db.applications.update_one({"_id": app_id, "assistant.runs.id": run_id}, {"$set": sets})
 
     try:
-        # Create the artifact directory and clean up old ones before launching.
         artifact_dir = _make_artifact_dir(owner_uid, run_id) if owner_uid else None
         if owner_uid:
             _cleanup_old_artifacts(owner_uid)
@@ -819,7 +822,11 @@ def _run_in_thread(
             browser_cdp_endpoint=(
                 settings.assistant_browser_cdp_endpoint
                 if target.adapter.endswith("_listing")
-                else None
+                else (
+                    settings.assistant_browser_cdp_endpoint
+                    if target.adapter.endswith("_automate") and (settings.assistant_browser_cdp_endpoint or "").strip()
+                    else None
+                )
             ),
             on_result=lambda r: save(r, finished=False),
             automation_profile_dir=(
@@ -832,7 +839,7 @@ def _run_in_thread(
             artifact_dir=artifact_dir,
         )
         save(final, finished=True)
-    except Exception as exc:  # noqa: BLE001 - never leave a run stuck on 'running'
+    except Exception:  # noqa: BLE001 - never leave a run stuck on 'running'
         logger.warning("Assistant run crashed category=unexpected_error")
         save({
             "status": "failed",
@@ -951,6 +958,85 @@ def open_saved_job_listing(application_id: str, db: Database = Depends(get_db)):
     )
 
 
+@router.post("/api/applications/{application_id}/assistant/automate", status_code=202)
+def automate_application(
+    application_id: str,
+    payload: AutomateRequest | None = None,
+    db: Database = Depends(get_db),
+):
+    """Open the job or application URL in CareerPilot's persistent browser, handle login pause/resume, fill multi-step fields, and stop at final review."""
+    if settings.vercel:
+        raise HTTPException(
+            status_code=503,
+            detail="Browser automation is available only from the local backend.",
+        )
+    payload = payload or AutomateRequest()
+    app_doc, job = _load(db, application_id)
+    if app_doc["status"] in ("submitted", "interview", "offer", "rejected", "withdrawn"):
+        raise HTTPException(
+            status_code=409,
+            detail="This application is already past the preparation stage.",
+        )
+    if any(r.get("status") == "running" for r in _stored(app_doc).get("runs", [])):
+        raise HTTPException(
+            status_code=409,
+            detail="A browser assistance run is already in progress.",
+        )
+
+    allow_local_form = (
+        settings.assistant_allow_local_test_form
+        and settings.app_env.lower() in ("development", "test")
+    )
+    stored = _stored(app_doc)
+    raw_url = (
+        (payload.url or "").strip()
+        or (stored.get("application_url") or "").strip()
+        or (job.get("application_url") or "").strip()
+        or (job.get("url") or "").strip()
+    )
+    try:
+        target = check_automate_url(
+            raw_url,
+            source=job.get("source", "") if raw_url == (job.get("url") or "").strip() else "",
+            allow_local_form=allow_local_form,
+        )
+    except UrlRejected as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": exc.code, "message": exc.message},
+        ) from None
+
+    resume_file = None
+    if payload.upload_resume:
+        resume_id = app_doc.get("resume_id")
+        if resume_id is None and not stored.get("resume_selection_cleared"):
+            active = db.resumes.find_one({"is_active": True}, {"_id": 1})
+            resume_id = active.get("_id") if active else None
+        resume_doc = db.resumes.find_one({"_id": resume_id}) if resume_id else None
+        if resume_doc:
+            stored_data = resume_doc.get("data")
+            data = (
+                bytes(stored_data)
+                if isinstance(stored_data, (bytes, bytearray, memoryview))
+                else b""
+            )
+            if (
+                data.startswith(b"%PDF-")
+                and len(data) <= MAX_RESUME_BYTES
+                and str(resume_doc.get("filename", "")).lower().endswith(".pdf")
+            ):
+                resume_file = (data, safe_filename(resume_doc["filename"]))
+
+    return _start_browser_run(
+        db,
+        app_doc,
+        target,
+        _fill_values(db, app_doc),
+        resume_file=resume_file,
+        persist_application_url=bool(payload.url and payload.url.strip()),
+    )
+
+
 @router.post("/api/applications/{application_id}/assistant/fill", status_code=202)
 def start_fill(application_id: str, payload: FillRequest, db: Database = Depends(get_db)):
     if settings.vercel:
@@ -1021,13 +1107,6 @@ def get_run(application_id: str, run_id: str, db: Database = Depends(get_db)):
 
 @router.get("/api/applications/{application_id}/assistant/runs/{run_id}/trace")
 def download_run_trace(application_id: str, run_id: str, db: Database = Depends(get_db)):
-    """Download the Playwright trace archive for a completed run.
-
-    Ownership is enforced by the UserScopedDatabase dependency (get_db):
-    the query only finds documents belonging to the authenticated Firebase user.
-    The filesystem path is read from the database record and validated to be
-    inside the configured artifact base directory before it is served.
-    """
     from fastapi.responses import FileResponse as _FR
     app_doc, _ = _load(db, application_id)
     run = next((r for r in _stored(app_doc).get("runs", []) if r.get("id") == run_id), None)
@@ -1043,10 +1122,6 @@ def download_run_trace(application_id: str, run_id: str, db: Database = Depends(
 
 @router.get("/api/applications/{application_id}/assistant/runs/{run_id}/screenshot")
 def download_run_screenshot(application_id: str, run_id: str, db: Database = Depends(get_db)):
-    """Download the post-fill screenshot for a completed run.
-
-    Same ownership enforcement as the trace endpoint.
-    """
     from fastapi.responses import FileResponse as _FR
     app_doc, _ = _load(db, application_id)
     run = next((r for r in _stored(app_doc).get("runs", []) if r.get("id") == run_id), None)

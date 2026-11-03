@@ -179,6 +179,7 @@ def test_installed_chrome_launch_failure_does_not_fall_back(tmp_path, monkeypatc
     (
         ("greenhouse", "https://boards.greenhouse.io/acme/jobs/1", "boards.greenhouse.io"),
         ("lever", "https://jobs.lever.co/acme/1", "jobs.lever.co"),
+        ("linkedin_automate", "https://www.linkedin.com/jobs/view/123", "www.linkedin.com"),
     ),
 )
 def test_supported_assistant_runs_launch_with_the_shared_persistent_profile(
@@ -260,6 +261,22 @@ def test_supported_assistant_runs_launch_with_the_shared_persistent_profile(
         "headless": False,
         "channel": "chrome",
     }]
+
+
+def test_automate_board_platform_allows_linkedin_and_google_sign_in_navigation():
+    target = assistant_fill.FillTarget(
+        url="https://www.linkedin.com/jobs/view/123",
+        host="www.linkedin.com",
+        adapter="linkedin_automate",
+    )
+
+    assert assistant_fill._listing_platform(target) is None
+    assert assistant_fill._board_platform(target) == "linkedin"
+    assert assistant_fill._is_safe_main_frame_navigation(target.url, target)
+    assert assistant_fill._is_safe_main_frame_navigation(
+        "https://accounts.google.com/ServiceLogin",
+        target,
+    )
 
 
 def test_persistent_profile_lock_is_released_when_run_is_cancelled(tmp_path, monkeypatch):

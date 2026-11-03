@@ -1,14 +1,14 @@
-"""Browser-assisted form filling (Playwright).
+"""Browser-assisted form filling and multi-step application automation (Playwright).
 
-What this module does:   open an allowed application page, find form fields,
-                         fill those matching confirmed Application Kit values,
-                         and report every field. Supported browser runs share
-                         one dedicated persistent local profile.
-What it never does:      enter credentials, click Submit, tick consent boxes,
-                         or solve CAPTCHAs. Resume upload is available only
-                         after explicit user consent. Non-read requests are
-                         blocked except while a supported sign-in form is
-                         detected or after separate post-review authorization.
+What this module does:   open an allowed job listing or application page,
+                         allow manual sign-in when a login wall appears,
+                         open the application modal/form (LinkedIn Easy Apply,
+                         Indeed SmartApply, Naukri Apply/Chatbot, Glassdoor/ATS),
+                         fill fields matching confirmed Application Kit values
+                         across multi-step forms, and stop at the final review
+                         screen while keeping the browser open for manual submit.
+What it never does:      enter credentials, click Submit, tick arbitrary consent
+                         boxes, invent unconfirmed answers, or solve CAPTCHAs.
 
 Field outcomes: filled | skipped | needs_input | failed.
 Run outcomes:   prepared | needs_you | failed  (never "submitted").
@@ -18,8 +18,8 @@ The caller stores them in a private per-user directory and serves them only to
 the authenticated owner. This module never logs field values or credentials.
 """
 
-import logging
 import errno
+import logging
 import os
 import re
 import shutil
@@ -59,22 +59,41 @@ _NOT_PERSON = r"company|employer|user|manager|referr|reference|school|university
 RULES: dict[str, tuple[str, str | None]] = {
     "first_name": (r"first.?name|given.?name|\bfname\b", None),
     "last_name": (r"last.?name|family.?name|surname|\blname\b", None),
-    "full_name": (r"full.?name|^name$|your name|legal name|candidate name|applicant name",
-                  r"first|last|" + _NOT_PERSON),
+    "full_name": (
+        r"full.?name|^name$|your name|legal name|candidate name|applicant name",
+        r"first|last|" + _NOT_PERSON,
+    ),
     "email": (r"e-?mail", None),
     "phone": (r"phone|mobile|telephone|contact number|\btel\b", None),
-    "location": (r"\blocation\b|\bcity\b|where are you (based|located)|current location",
-                 r"relocat|office|preferred|work location"),
+    "location": (
+        r"\blocation\b|\bcity\b|where are you (based|located)|current location|residing",
+        r"relocat|office|preferred|work location",
+    ),
     "linkedin": (r"linkedin", None),
     "github": (r"github", None),
     "portfolio": (r"portfolio|personal (web)?site|^website$|your website|personal url", None),
-    "current_company": (r"current.*(company|employer)|present employer", None),
-    "current_title": (r"current.*(title|role|position|job)", None),
-    "notice_period": (r"notice.?period|how soon.*(join|start)|earliest.*start|available to start", None),
-    "expected_salary": (r"(expected|desired|target).*(salary|compensation|ctc|pay)|salary expectation|compensation expectation",
-                        None),
-    "work_authorization": (r"authori[sz]ed to work|work authori[sz]ation|legally.*(authori[sz]ed|permitted)|right to work|eligible to work",
-                           None),
+    "current_company": (r"current.*(company|employer)|present employer|most recent employer", None),
+    "current_title": (r"current.*(title|role|position|job)|most recent (title|role)", None),
+    "notice_period": (
+        r"notice.?period|how soon.*(join|start)|earliest.*start|available to start|days to join",
+        None,
+    ),
+    "expected_salary": (
+        r"(expected|desired|target).*(salary|compensation|ctc|pay)|salary expectation|compensation expectation",
+        None,
+    ),
+    "years_of_experience": (
+        r"total.*(experience|exp)|years of.*experience|how many years.*experience|work experience.*years",
+        None,
+    ),
+    "willing_to_relocate": (
+        r"relocat|willing to move|comfortable commuting|commute",
+        None,
+    ),
+    "work_authorization": (
+        r"authori[sz]ed to work|work authori[sz]ation|legally.*(authori[sz]ed|permitted)|right to work|eligible to work",
+        None,
+    ),
     "visa_sponsorship": (r"sponsor|\bvisa\b", None),
     # long-form drafts (textarea only)
     "tell_me_about_yourself": (r"about yourself|introduce yourself|tell us about you|short bio", None),
@@ -84,6 +103,7 @@ RULES: dict[str, tuple[str, str | None]] = {
     "project_example": (r"\bproject\b|example of (your )?work|relevant experience", None),
 }
 _DRAFT_KEYS = set(DRAFT_LABELS)
+_RADIO_SAFE_KEYS = frozenset({"work_authorization", "visa_sponsorship", "willing_to_relocate"})
 
 # Demographic / sensitive questions: never filled, always the user's call.
 SENSITIVE_RE = re.compile(
@@ -110,6 +130,27 @@ def _hit(key: str, text: str, kind: str) -> bool:
     return bool(re.search(pos, text))
 
 
+def pick_option(options: list[dict], answer: str) -> str | None:
+    """Option value matching the answer: exact (case-insensitive), single prefix, or single substring."""
+    a = answer.strip().casefold()
+    if not a:
+        return None
+    for o in options:
+        if a in (str(o.get("text", "")).strip().casefold(), str(o.get("value", "")).strip().casefold()):
+            return str(o.get("value"))
+    pref = [
+        o for o in options
+        if str(o.get("text", "")).strip().casefold().startswith(a) and o.get("value") != ""
+    ]
+    if len(pref) == 1:
+        return str(pref[0].get("value"))
+    sub = [
+        o for o in options
+        if a in str(o.get("text", "")).strip().casefold() and o.get("value") != ""
+    ]
+    return str(sub[0].get("value")) if len(sub) == 1 else None
+
+
 def match_field(desc: dict, values: dict[str, dict]) -> dict:
     """Decide what to do with one field, without touching the browser.
 
@@ -121,18 +162,43 @@ def match_field(desc: dict, values: dict[str, dict]) -> dict:
     ftype = (desc.get("type") or "text").lower()
     label = (desc.get("label") or desc.get("placeholder") or desc.get("name") or "field")[:120]
     required = bool(desc.get("required"))
-    text = normalise(desc.get("label", ""), desc.get("aria", ""), desc.get("placeholder", ""),
-                     desc.get("name", ""), desc.get("autocomplete", ""))
+    text = normalise(
+        desc.get("label", ""),
+        desc.get("aria", ""),
+        desc.get("placeholder", ""),
+        desc.get("name", ""),
+        desc.get("autocomplete", ""),
+    )
 
     def out(state, reason, key="", value="", source=""):
-        return {"label": label, "state": state, "key": key, "reason": reason,
-                "required": required, "value": value, "source": source}
+        return {
+            "label": label,
+            "state": state,
+            "key": key,
+            "reason": reason,
+            "required": required,
+            "value": value,
+            "source": source,
+        }
 
     unmatched_state = NEEDS_INPUT if required else SKIPPED
 
     if ftype == "file":
         return out(NEEDS_INPUT, "File upload: attach your resume yourself.")
-    if ftype in ("checkbox", "radio"):
+    if ftype == "checkbox":
+        return out(unmatched_state, "Choice and consent fields are never ticked automatically.")
+    if ftype == "radio":
+        radio_options = desc.get("options") or []
+        hits = [k for k in _RADIO_SAFE_KEYS if _hit(k, text, kind)]
+        if len(hits) == 1 and radio_options:
+            key = hits[0]
+            entry = values.get(key)
+            nice = {**FACT_LABELS, **ANSWER_LABELS, **DRAFT_LABELS}.get(key, key)
+            if not entry or not entry.get("value"):
+                return out(NEEDS_INPUT, f"Needs your input: {nice} is not in your kit.", key=key)
+            opt = pick_option(radio_options, entry["value"])
+            if opt is not None:
+                return out(FILLED, "", key=key, value=opt, source=entry.get("source", ""))
         return out(unmatched_state, "Choice and consent fields are never ticked automatically.")
     if desc.get("has_value"):
         return out(SKIPPED, "Already has a value; left unchanged.")
@@ -156,7 +222,7 @@ def match_field(desc: dict, values: dict[str, dict]) -> dict:
 
     key = hits[0]
     entry = values.get(key)
-    nice = {**FACT_LABELS, **ANSWER_LABELS, **DRAFT_LABELS}[key]
+    nice = {**FACT_LABELS, **ANSWER_LABELS, **DRAFT_LABELS}.get(key, key)
     if not entry or not entry.get("value"):
         return out(NEEDS_INPUT, f"Needs your input: {nice} is not in your kit.", key=key)
 
@@ -167,18 +233,6 @@ def match_field(desc: dict, values: dict[str, dict]) -> dict:
             return out(NEEDS_INPUT, f"No dropdown option clearly matches your {nice.lower()}.", key=key)
         value = opt
     return out(FILLED, "", key=key, value=value, source=entry.get("source", ""))
-
-
-def pick_option(options: list[dict], answer: str) -> str | None:
-    """Option value matching the answer: exact (case-insensitive), else a single prefix match."""
-    a = answer.strip().casefold()
-    if not a:
-        return None
-    for o in options:
-        if a in (str(o.get("text", "")).strip().casefold(), str(o.get("value", "")).strip().casefold()):
-            return str(o.get("value"))
-    pref = [o for o in options if str(o.get("text", "")).strip().casefold().startswith(a) and o.get("value") != ""]
-    return str(pref[0].get("value")) if len(pref) == 1 else None
 
 
 def summarise(fields: list[dict], page_flags: dict) -> tuple[str, str]:
@@ -207,27 +261,76 @@ COLLECT_JS = """
     const s = getComputedStyle(el), r = el.getBoundingClientRect();
     return s.visibility !== 'hidden' && s.display !== 'none' && (r.width > 0 || r.height > 0);
   };
+  const modalRoot = document.querySelector(
+    '.jobs-easy-apply-modal, [data-test-modal-id="easy-apply-modal"], .chatbot_DrawerContentWrapper, .ia-BasePage'
+  );
+  const root = (modalRoot && vis(modalRoot)) ? modalRoot : document;
+
   const labelOf = (el) => {
     const bits = [];
     if (el.id) document.querySelectorAll('label[for="' + CSS.escape(el.id) + '"]').forEach(l => bits.push(l.innerText));
     const wrap = el.closest('label'); if (wrap) bits.push(wrap.innerText);
     const lb = el.getAttribute('aria-labelledby');
     if (lb) lb.split(/\\s+/).forEach(id => { const e = document.getElementById(id); if (e) bits.push(e.innerText); });
+    const fs = el.closest('fieldset');
+    if (fs) {
+      const leg = fs.querySelector('legend, [data-test-form-element-label], .fb-dash-form-element__label');
+      if (leg) bits.unshift(leg.innerText);
+    }
     if (!bits.length) {
-      const grp = el.closest('.field, .form-group, .application-question, .application-field, li, fieldset, div');
-      const l = grp && grp.querySelector('label, legend'); if (l) bits.push(l.innerText);
+      const grp = el.closest('.field, .form-group, .application-question, .application-field, .jobs-easy-apply-form-section__grouping, .fb-dash-form-element, li, fieldset, div');
+      const l = grp && grp.querySelector('label, legend, [data-test-form-element-label]');
+      if (l) bits.push(l.innerText);
     }
     return bits.join(' ').trim();
   };
-  document.querySelectorAll('input, textarea, select').forEach(el => {
+
+  const seenRadioGroups = new Set();
+  root.querySelectorAll('input, textarea, select').forEach(el => {
     if (glassdoor && !el.closest('[data-cp-glassdoor-application-form="true"]')) return;
     const type = (el.getAttribute('type') || (el.tagName === 'SELECT' ? 'select' : 'text')).toLowerCase();
     if (['hidden','submit','button','image','reset'].includes(type)) return;
-    if (!vis(el)) return;
+    if (!vis(el) && type !== 'file') return;
     if (el.disabled || el.readOnly) return;
+
+    if (type === 'radio') {
+      const fs = el.closest('fieldset');
+      const groupKey = el.name || (fs ? 'fs-' + Array.from(root.querySelectorAll('fieldset')).indexOf(fs) : '');
+      if (groupKey && seenRadioGroups.has(groupKey)) return;
+      if (groupKey) seenRadioGroups.add(groupKey);
+      const radios = fs
+        ? Array.from(fs.querySelectorAll('input[type="radio"]'))
+        : (el.name ? Array.from(root.querySelectorAll('input[type="radio"][name="' + CSS.escape(el.name) + '"]')) : [el]);
+      const radioOpts = radios.map((r, rIdx) => {
+        r.setAttribute('data-cp-radio-idx', String(n) + '-' + String(rIdx));
+        let txt = '';
+        if (r.id) {
+          const lbl = document.querySelector('label[for="' + CSS.escape(r.id) + '"]');
+          if (lbl) txt = lbl.innerText.trim();
+        }
+        if (!txt && r.closest('label')) txt = r.closest('label').innerText.trim();
+        return { value: String(rIdx), text: txt || r.value || '' };
+      });
+      const questionEl = fs ? fs.querySelector('legend, [data-test-form-element-label], .fb-dash-form-element__label') : null;
+      const questionText = questionEl ? questionEl.innerText.trim() : labelOf(el);
+      el.setAttribute('data-cp-idx', String(n));
+      out.push({
+        idx: n++, kind: 'input', type: 'radio',
+        label: questionText, aria: el.getAttribute('aria-label') || '',
+        placeholder: '', name: el.getAttribute('name') || el.id || '',
+        autocomplete: '',
+        required: el.required || el.getAttribute('aria-required') === 'true' || !!(fs && fs.querySelector('[aria-required="true"], .fb-dash-form-element__label-title--is-required')),
+        has_value: radios.some(r => r.checked),
+        options: radioOpts,
+      });
+      return;
+    }
+
+    const isCombobox = el.getAttribute('role') === 'combobox' || el.getAttribute('aria-autocomplete') === 'list' || el.getAttribute('aria-autocomplete') === 'both';
     el.setAttribute('data-cp-idx', String(n));
     out.push({
       idx: n++, kind: el.tagName.toLowerCase(), type,
+      is_combobox: isCombobox,
       label: labelOf(el), aria: el.getAttribute('aria-label') || '',
       placeholder: el.getAttribute('placeholder') || '', name: el.getAttribute('name') || el.id || '',
       autocomplete: el.getAttribute('autocomplete') || '',
@@ -250,11 +353,11 @@ FLAGS_JS = """
   };
   const fields = Array.from(document.querySelectorAll('input, textarea')).filter(visible);
   const pw = fields.some(e => (e.getAttribute('type') || '').toLowerCase() === 'password');
-  const loginPath = /\\/(log-?in|sign-?in|sso|auth)(\\/|$|\\?)/i.test(location.pathname);
+  const loginPath = /\\/(log-?in|sign-?in|sso|auth|checkpoint|uas\\/login)(\\/|$|\\?)/i.test(location.pathname);
   const text = document.body ? document.body.innerText : '';
   const loginText = /sign in|log in|welcome back/i.test(text);
   const hasIdentity = fields.some(e =>
-    /email|user.?name|login/i.test([
+    /email|user.?name|login|session_key/i.test([
       e.getAttribute('type'), e.getAttribute('name'), e.id,
       e.getAttribute('placeholder'), e.getAttribute('aria-label')
     ].join(' '))
@@ -281,7 +384,135 @@ APPLY_LINK_JS = """
 }
 """
 
-_LOGIN_URL_RE = re.compile(r"/(log-?in|sign-?in|sso|auth)(/|$|\?)", re.I)
+TRIGGER_APPLY_JS = """
+(platform) => {
+  const vis = (el) => {
+    const r = el.getBoundingClientRect(), s = getComputedStyle(el);
+    return s.display !== 'none' && s.visibility !== 'hidden' && !el.disabled && (r.width > 0 || r.height > 0);
+  };
+  let selectors = [];
+  if (platform === 'linkedin') {
+    if (document.querySelector('.jobs-easy-apply-modal, [data-test-modal-id="easy-apply-modal"]')) return 'modal_already_open';
+    selectors = [
+      'button.jobs-apply-button',
+      'button[aria-label*="Easy Apply"]',
+      '.jobs-apply-button--top-card button',
+      'button[data-control-name*="jobdetails_topcard_inapply"]'
+    ];
+  } else if (platform === 'indeed') {
+    if (document.querySelector('.ia-BasePage, [id*="ia-"]')) return 'modal_already_open';
+    selectors = [
+      '#indeedApplyButton',
+      '[data-testid="indeedApplyButton"]',
+      'button[id*="indeedApply"]',
+      'a[id*="indeedApply"]',
+      'button[aria-label*="Apply now"]'
+    ];
+  } else if (platform === 'naukri') {
+    if (document.querySelector('.chatbot_DrawerContentWrapper')) return 'modal_already_open';
+    selectors = [
+      '#login-apply-button',
+      '.apply-button',
+      'button[id*="apply-button"]',
+      '#company-site-button'
+    ];
+  } else if (platform === 'glassdoor') {
+    selectors = [
+      'button[data-test="applyButton"]',
+      'a[data-test="applyButton"]',
+      'button[aria-label*="Easy Apply"]',
+      'button[aria-label*="Apply"]'
+    ];
+  }
+  for (const sel of selectors) {
+    const btn = Array.from(document.querySelectorAll(sel)).find(vis);
+    if (btn) {
+      btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+      return 'triggered';
+    }
+  }
+  return 'not_found';
+}
+"""
+
+STEP_BUTTON_JS = """
+() => {
+  const visible = (el) => {
+    const r = el.getBoundingClientRect(), s = getComputedStyle(el);
+    return s.display !== 'none' && s.visibility !== 'hidden' && !el.disabled && (r.width > 0 || r.height > 0);
+  };
+  const modalRoot = document.querySelector(
+    '.jobs-easy-apply-modal, [data-test-modal-id="easy-apply-modal"], .chatbot_DrawerContentWrapper, .ia-BasePage'
+  );
+  const root = (modalRoot && visible(modalRoot)) ? modalRoot : document;
+  const buttons = Array.from(root.querySelectorAll('button, input[type="button"], input[type="submit"], [role="button"]')).filter(visible);
+
+  const submitRe = /\\b(submit application|submit|send application|finish|complete application|apply now)\\b/i;
+  const reviewRe = /\\b(review your application|review application|review)\\b/i;
+  const nextRe = /\\b(continue to next step|next|continue|save and continue|proceed)\\b/i;
+
+  for (const b of buttons) {
+    const label = ((b.innerText || b.value || '') + ' ' + (b.getAttribute('aria-label') || '')).trim();
+    if (submitRe.test(label) && !/continue|next/i.test(label)) {
+      return { action: 'submit_ready', label };
+    }
+  }
+  for (const b of buttons) {
+    const label = ((b.innerText || b.value || '') + ' ' + (b.getAttribute('aria-label') || '')).trim();
+    if (reviewRe.test(label)) {
+      b.setAttribute('data-cp-step-btn', 'true');
+      return { action: 'advance', label };
+    }
+  }
+  for (const b of buttons) {
+    const label = ((b.innerText || b.value || '') + ' ' + (b.getAttribute('aria-label') || '')).trim();
+    if (nextRe.test(label) && !submitRe.test(label)) {
+      b.setAttribute('data-cp-step-btn', 'true');
+      return { action: 'advance', label };
+    }
+  }
+  return { action: 'none', label: '' };
+}
+"""
+
+RADIO_SELECT_JS = """
+(arg) => {
+  const el = document.querySelector('[data-cp-radio-idx="' + arg.idx + '-' + arg.opt + '"]');
+  if (!el) return false;
+  if (el.id) {
+    const lbl = document.querySelector('label[for="' + CSS.escape(el.id) + '"]');
+    if (lbl) {
+      lbl.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+    }
+  }
+  if (!el.checked && el.closest('label')) {
+    el.closest('label').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+  }
+  if (!el.checked) {
+    el.checked = true;
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  return !!el.checked;
+}
+"""
+
+COMBOBOX_PICK_JS = """
+(val) => {
+  const vis = (el) => {
+    const r = el.getBoundingClientRect(), s = getComputedStyle(el);
+    return s.display !== 'none' && s.visibility !== 'hidden' && (r.width > 0 || r.height > 0);
+  };
+  const opts = Array.from(document.querySelectorAll('[role="listbox"] [role="option"], .basic-typeahead__selectable, .artdeco-typeahead__result')).filter(vis);
+  if (!opts.length) return false;
+  const target = (val || '').trim().toLowerCase();
+  const match = opts.find(o => (o.innerText || '').trim().toLowerCase().includes(target)) || opts[0];
+  match.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+  return true;
+}
+"""
+
+_LOGIN_URL_RE = re.compile(r"/(log-?in|sign-?in|sso|auth|checkpoint|uas/login)(/|$|\?)", re.I)
 _LINKEDIN_GOOGLE_AUTH_HOST = "accounts.google.com"
 _GOOGLE_AUTH_PATH_RE = re.compile(
     r"^/(?:gsi/|o/oauth2/|signin/|v\d+/signin/|ServiceLogin|AccountChooser)",
@@ -304,6 +535,30 @@ def _same_origin_application_link(href: str, target: FillTarget) -> bool:
     )
 
 
+def _listing_platform(target: FillTarget | None) -> str | None:
+    if target is None or not target.adapter.endswith("_listing"):
+        return None
+    return target.adapter.removesuffix("_listing")
+
+
+def _automate_platform(target: FillTarget | None) -> str | None:
+    if target is None or not target.adapter.endswith("_automate"):
+        return None
+    return target.adapter.removesuffix("_automate")
+
+
+def _board_platform(target: FillTarget | None) -> str | None:
+    if target is None:
+        return None
+    if target.adapter.endswith("_listing"):
+        return target.adapter.removesuffix("_listing")
+    if target.adapter.endswith("_automate"):
+        return target.adapter.removesuffix("_automate")
+    if target.adapter in ("linkedin", "indeed", "naukri", "glassdoor"):
+        return target.adapter
+    return None
+
+
 def _is_safe_main_frame_navigation(url: str, target: FillTarget) -> bool:
     try:
         parts = urlsplit(url)
@@ -311,11 +566,11 @@ def _is_safe_main_frame_navigation(url: str, target: FillTarget) -> bool:
     except ValueError:
         return False
     host = (parts.hostname or "").lower().rstrip(".")
-    listing_platform = _listing_platform(target)
-    if parts.username or parts.password or (is_blocked_host(host) and platform_for_host(host) != listing_platform):
+    board_platform = _board_platform(target)
+    if parts.username or parts.password or (is_blocked_host(host) and platform_for_host(host) != board_platform):
         return False
     if (
-        listing_platform == "linkedin"
+        board_platform == "linkedin"
         and host == _LINKEDIN_GOOGLE_AUTH_HOST
         and parts.scheme.lower() == "https"
         and port in (None, 443)
@@ -330,29 +585,27 @@ def _is_safe_main_frame_navigation(url: str, target: FillTarget) -> bool:
             and port == target_parts.port
             and parts.path == "/assistant-test-form"
         )
-    return (
-        parts.scheme.lower() == "https"
-        and port in (None, 443)
-        and (
-            platform_for_host(host) == listing_platform
-            if listing_platform
-            else adapter_for_host(host) == target.adapter
-        )
-    )
-
-
-def _listing_platform(target: FillTarget | None) -> str | None:
-    if target is None or not target.adapter.endswith("_listing"):
-        return None
-    return target.adapter.removesuffix("_listing")
+    if parts.scheme.lower() != "https" or port not in (None, 443):
+        return False
+    if board_platform:
+        if platform_for_host(host) == board_platform:
+            return True
+        if _automate_platform(target) in ("indeed", "naukri", "glassdoor") and adapter_for_host(host) is not None:
+            return True
+        return False
+    return adapter_for_host(host) == target.adapter
 
 
 def _is_listing_platform_request_host(host: str, platform: str) -> bool:
     if platform_for_host(host) == platform:
         return True
-    return platform == "linkedin" and (
-        host == "licdn.com" or host.endswith(".licdn.com")
-    )
+    if platform == "linkedin" and (host == "licdn.com" or host.endswith(".licdn.com")):
+        return True
+    if platform == "indeed" and (host.endswith(".indeed.com") or host.endswith(".indeed.net")):
+        return True
+    if platform == "naukri" and (host.endswith(".naukri.com") or host.endswith(".naukrimg.com")):
+        return True
+    return False
 
 
 def _route_guard(
@@ -360,15 +613,16 @@ def _route_guard(
     target: FillTarget | None = None,
     submission_authorized=None,
     manual_login_authorized=None,
+    step_navigation_authorized=None,
 ):
-    """Block writes except detected user sign-in and explicitly authorized submits."""
+    """Block writes except detected user sign-in, step progression, and explicitly authorized submits."""
     def handler(route):
         req = route.request
         parts = urlsplit(req.url)
         host = (parts.hostname or "").lower().rstrip(".")
-        listing_platform = _listing_platform(target)
+        board_platform = _board_platform(target)
         is_linkedin_google_auth = (
-            listing_platform == "linkedin"
+            board_platform == "linkedin"
             and host == _LINKEDIN_GOOGLE_AUTH_HOST
         )
         local_target = target is not None and target.adapter == "local_test"
@@ -405,8 +659,8 @@ def _route_guard(
                 and (
                     adapter_for_host(host) == target.adapter
                     or (
-                        listing_platform is not None
-                        and _is_listing_platform_request_host(host, listing_platform)
+                        board_platform is not None
+                        and _is_listing_platform_request_host(host, board_platform)
                     )
                     or is_linkedin_google_auth
                 )
@@ -415,22 +669,44 @@ def _route_guard(
                 and not parts.username
                 and not parts.password
             )
+            allowed_step_write = bool(
+                step_navigation_authorized
+                and step_navigation_authorized.is_set()
+                and target
+                and target.adapter != "local_test"
+                and (
+                    adapter_for_host(host) == target.adapter
+                    or (
+                        board_platform is not None
+                        and _is_listing_platform_request_host(host, board_platform)
+                    )
+                )
+                and parts.scheme.lower() == "https"
+                and parts.port in (None, 443)
+                and not parts.username
+                and not parts.password
+                and not re.search(r"/submit|/apply-submit|/complete", parts.path, re.I)
+            )
             allowed_manual_write = bool(
                 submission_authorized
                 and submission_authorized.is_set()
                 and target
                 and target.adapter != "local_test"
-                and listing_platform is None
+                and _listing_platform(target) is None
                 and (
                     host == target.host
                     or adapter_for_host(host) == target.adapter
+                    or (
+                        board_platform is not None
+                        and _is_listing_platform_request_host(host, board_platform)
+                    )
                 )
                 and parts.scheme.lower() == "https"
                 and parts.port in (None, 443)
                 and not parts.username
                 and not parts.password
             )
-            if manual_login_write or allowed_manual_write:
+            if manual_login_write or allowed_step_write or allowed_manual_write:
                 try:
                     check_public_host(host)
                     route.continue_()
@@ -451,8 +727,8 @@ def _route_guard(
         elif parts.username or parts.password or (
             is_blocked_host(host)
             and not (
-                listing_platform
-                and _is_listing_platform_request_host(host, listing_platform)
+                board_platform
+                and _is_listing_platform_request_host(host, board_platform)
             )
         ) or (
             is_non_public_host(host) and not is_target_local_origin
@@ -525,6 +801,7 @@ GLASSDOOR_FORM_JS = """
   return {login, application, blocked};
 }
 """
+
 
 def _secure_profile_directory(path: Path) -> None:
     if os.name == "nt":
@@ -885,13 +1162,28 @@ def _fill_frame(
         if result["state"] == FILLED:
             loc = frame.locator(f'[data-cp-idx="{desc["idx"]}"]')
             try:
-                if desc["kind"] == "select":
+                if desc["type"] == "radio":
+                    ok = bool(
+                        frame.evaluate(
+                            RADIO_SELECT_JS,
+                            {"idx": desc["idx"], "opt": result["value"]},
+                        )
+                    )
+                    valid = True
+                elif desc["kind"] == "select":
                     loc.select_option(result["value"], timeout=4000)
                     ok = loc.input_value(timeout=2000) == result["value"]
+                    valid = loc.evaluate("el => el.checkValidity()") if ok else True
                 else:
                     loc.fill(result["value"], timeout=4000)
-                    ok = loc.input_value(timeout=2000) == result["value"]
-                valid = loc.evaluate("el => el.checkValidity()") if ok else True
+                    if desc.get("is_combobox"):
+                        try:
+                            frame.wait_for_timeout(350)
+                            frame.evaluate(COMBOBOX_PICK_JS, result["value"])
+                        except Exception:
+                            pass
+                    ok = bool(loc.input_value(timeout=2000).strip())
+                    valid = loc.evaluate("el => el.checkValidity()") if ok else True
                 if not ok:
                     result.update(state=FAILED, reason="The page did not keep the value.")
                 elif not valid:
@@ -922,27 +1214,23 @@ def run_assistance(
     submission_authorized=None,
     artifact_dir: str | None = None,
 ) -> dict:
-    """Open the page, fill matched fields, report. Blocking: run it in a thread.
-
-    `on_result` is called as soon as filling finishes, before the optional
-    keep-open wait, so the UI can show results while the user's browser is open.
-
-    `artifact_dir` is an optional private directory for this run's trace and
-    screenshot. Both may contain sensitive page content, so the caller must
-    restrict filesystem access and authenticated downloads. They are never
-    logged.
-    """
+    """Open the page, fill matched fields across steps, and report. Blocking: run it in a thread."""
     started = time.time()
     persistent_profile = target.adapter != "local_test"
     persistent_glassdoor = target.adapter == "glassdoor"
     listing_platform = _listing_platform(target)
-    attach_existing_browser = listing_platform is not None
+    automate_platform = _automate_platform(target)
+    attach_existing_browser = (
+        listing_platform is not None
+        or bool((browser_cdp_endpoint or "").strip())
+    )
     counter = {
         "blocked_writes": 0,
         "blocked_navigations": 0,
         "blocked_top_level_navigations": 0,
     }
     manual_login_authorized = threading.Event()
+    step_navigation_authorized = threading.Event()
     keep_open_deadline = time.time() + max(0, keep_open_seconds)
     result = {"status": RUN_FAILED, "pause_reason": "", "fields": [], "host": target.host}
     profile_lock: AutomationProfileLock | None = None
@@ -957,7 +1245,6 @@ def run_assistance(
     safe_to_capture = False
     phase = "profile"
 
-    # Resolve artifact paths (None when no artifact_dir is given).
     _trace_path: str | None = None
     _screenshot_path: str | None = None
     if artifact_dir:
@@ -980,7 +1267,7 @@ def run_assistance(
                         if os.name != "nt":
                             os.chmod(_screenshot_path, 0o600)
                         result["screenshot_path"] = _screenshot_path
-            except Exception as exc:  # noqa: BLE001 - artifacts never block run cleanup
+            except Exception as exc:  # noqa: BLE001
                 logger.warning("Screenshot capture failed category=%s", type(exc).__name__)
         if tracing_started:
             tracing_started = False
@@ -990,7 +1277,7 @@ def run_assistance(
                     if os.name != "nt":
                         os.chmod(_trace_path, 0o600)
                     result["trace_path"] = _trace_path
-            except Exception as exc:  # noqa: BLE001 - always continue to close browser resources
+            except Exception as exc:  # noqa: BLE001
                 logger.warning("Playwright trace finalization failed category=%s", type(exc).__name__)
 
     def start_tracing() -> None:
@@ -1000,7 +1287,7 @@ def run_assistance(
         try:
             context.tracing.start(screenshots=True, snapshots=True)
             tracing_started = True
-        except Exception as exc:  # noqa: BLE001 - tracing is optional
+        except Exception as exc:  # noqa: BLE001
             logger.warning("Playwright tracing could not start category=%s", type(exc).__name__)
 
     def close_browser_resources() -> None:
@@ -1024,7 +1311,7 @@ def run_assistance(
                 logger.warning("Browser cleanup failed category=%s", type(exc).__name__)
 
     try:
-        from playwright.sync_api import sync_playwright  # imported lazily: optional dependency
+        from playwright.sync_api import sync_playwright
 
         if target.adapter != "local_test":
             check_public_host(target.host)
@@ -1083,12 +1370,12 @@ def run_assistance(
                 context = browser.new_context()
             phase = "navigation"
 
-            # Do not trace a detected sign-in or access-challenge page.
             route_guard = _route_guard(
                 counter,
                 target,
                 submission_authorized,
                 manual_login_authorized,
+                step_navigation_authorized,
             )
             if attached_browser:
                 page.route("**/*", route_guard)
@@ -1102,7 +1389,7 @@ def run_assistance(
                 page.goto(target.url, wait_until="domcontentloaded", timeout=30000)
                 try:
                     page.wait_for_load_state("networkidle", timeout=6000)
-                except Exception:  # noqa: BLE001 - slow pages are fine
+                except Exception:  # noqa: BLE001
                     pass
                 if counter["blocked_top_level_navigations"]:
                     raise RuntimeError("Unsupported top-level redirect blocked.")
@@ -1118,6 +1405,79 @@ def run_assistance(
                 }
                 if flags["login"] and not flags["captcha"]:
                     manual_login_authorized.set()
+
+                if automate_platform:
+                    # 1. Pre-apply manual login pause & auto-resume
+                    if flags["login"] and not headless and keep_open_seconds > 0:
+                        manual_login_authorized.set()
+                        if on_result:
+                            on_result({
+                                **result,
+                                "status": "running",
+                                "pause_reason": "login_required",
+                                "browser_open": True,
+                            })
+                        while time.time() < keep_open_deadline and not page.is_closed():
+                            try:
+                                pf = page.evaluate(FLAGS_JS)
+                                if (
+                                    not pf.get("login")
+                                    and not pf.get("password")
+                                    and not _LOGIN_URL_RE.search(urlsplit(page.url).path)
+                                ):
+                                    flags["login"] = False
+                                    manual_login_authorized.clear()
+                                    break
+                                page.wait_for_timeout(1000)
+                            except Exception:
+                                break
+
+                    # 2. Click platform Apply / Easy Apply button and handle post-click login wall or new tab
+                    if not flags["login"] and not flags["captcha"]:
+                        step_navigation_authorized.set()
+                        pages_before = len(context.pages)
+                        try:
+                            page.evaluate(TRIGGER_APPLY_JS, automate_platform)
+                            page.wait_for_timeout(1200)
+                        except Exception:
+                            pass
+                        open_pages = [p for p in context.pages if not p.is_closed()]
+                        if len(open_pages) > pages_before:
+                            page = open_pages[-1]
+                        flags_raw = page.evaluate(FLAGS_JS)
+                        flags = {
+                            "captcha": bool(flags_raw.get("captcha")),
+                            "login": (
+                                bool(flags_raw.get("login"))
+                                or bool(flags_raw.get("password"))
+                                or bool(_LOGIN_URL_RE.search(urlsplit(page.url).path))
+                            ),
+                        }
+                        if flags["login"] and not headless and keep_open_seconds > 0:
+                            manual_login_authorized.set()
+                            if on_result:
+                                on_result({
+                                    **result,
+                                    "status": "running",
+                                    "pause_reason": "login_required",
+                                    "browser_open": True,
+                                })
+                            while time.time() < keep_open_deadline and not page.is_closed():
+                                try:
+                                    pf = page.evaluate(FLAGS_JS)
+                                    if (
+                                        not pf.get("login")
+                                        and not pf.get("password")
+                                        and not _LOGIN_URL_RE.search(urlsplit(page.url).path)
+                                    ):
+                                        flags["login"] = False
+                                        manual_login_authorized.clear()
+                                        page.evaluate(TRIGGER_APPLY_JS, automate_platform)
+                                        page.wait_for_timeout(1200)
+                                        break
+                                    page.wait_for_timeout(1000)
+                                except Exception:
+                                    break
 
                 if listing_platform:
                     if flags["captcha"]:
@@ -1193,7 +1553,7 @@ def run_assistance(
                                 if on_result:
                                     on_result({**result, "status": "running", "browser_open": True})
                             page.wait_for_timeout(1000)
-                        except Exception:  # noqa: BLE001 - a closed or crashed page ends the run
+                        except Exception:  # noqa: BLE001
                             break
 
                     result.update(
@@ -1228,7 +1588,7 @@ def run_assistance(
                                     if page_flags["application"]:
                                         page = candidate
                                         glassdoor_form = True
-                                except Exception:  # noqa: BLE001 - a frame may be navigating
+                                except Exception:  # noqa: BLE001
                                     continue
                         if glassdoor_site_blocked:
                             manual_login_authorized.clear()
@@ -1277,7 +1637,7 @@ def run_assistance(
                             page.goto(application_link, wait_until="domcontentloaded", timeout=30000)
                             try:
                                 page.wait_for_load_state("networkidle", timeout=6000)
-                            except Exception:  # noqa: BLE001 - slow application pages are fine
+                            except Exception:  # noqa: BLE001
                                 pass
                             if counter["blocked_top_level_navigations"]:
                                 raise RuntimeError("Unsupported top-level redirect blocked.")
@@ -1294,10 +1654,44 @@ def run_assistance(
                         safe_to_capture = True
                         start_tracing()
                     if not flags["login"]:
-                        per_frame = [
-                            _fill_frame(fr, values, resume_file) for fr in page.frames
-                        ]
-                        fields = max(per_frame, key=len, default=[])
+                        accumulated_fields: list[dict] = []
+                        seen_labels: set[str] = set()
+                        for _step_idx in range(8):
+                            per_frame = [
+                                _fill_frame(fr, values, resume_file) for fr in page.frames
+                            ]
+                            step_fields = max(per_frame, key=len, default=[])
+                            for sf in step_fields:
+                                key_id = f"{sf.get('label')}::{sf.get('key')}"
+                                if key_id not in seen_labels:
+                                    seen_labels.add(key_id)
+                                    accumulated_fields.append(sf)
+                            if any(
+                                sf["state"] in (NEEDS_INPUT, FAILED) and sf.get("required")
+                                for sf in step_fields
+                            ):
+                                break
+                            try:
+                                step_info = page.evaluate(STEP_BUTTON_JS)
+                            except Exception:
+                                break
+                            if not isinstance(step_info, dict) or step_info.get("action") != "advance":
+                                break
+                            try:
+                                step_navigation_authorized.set()
+                                page.evaluate(
+                                    """() => {
+                                      const b = document.querySelector('[data-cp-step-btn="true"]');
+                                      if (b) {
+                                        b.removeAttribute('data-cp-step-btn');
+                                        b.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+                                      }
+                                    }"""
+                                )
+                                page.wait_for_timeout(900)
+                            except Exception:
+                                break
+                        fields = accumulated_fields
                 elif persistent_glassdoor and glassdoor_form and not flags["captcha"]:
                     safe_to_capture = True
                     start_tracing()
@@ -1310,7 +1704,7 @@ def run_assistance(
                                 per_frame.append(
                                     _fill_frame(frame, values, resume_file, glassdoor=True)
                                 )
-                        except Exception:  # noqa: BLE001 - frames can detach during navigation
+                        except Exception:  # noqa: BLE001
                             continue
                     fields = max(per_frame, key=len, default=[])
 
@@ -1335,14 +1729,10 @@ def run_assistance(
                     pause, category = "navigation_failed", "navigation_failed"
                 result.update(status=RUN_FAILED, pause_reason=pause, error_category=category)
 
-            # Stop diagnostics before the optional keep-open window so user
-            # interaction is not captured in artifacts.
             finish_diagnostics()
 
             result["blocked_writes"] = counter["blocked_writes"]
             result["duration_ms"] = int((time.time() - started) * 1000)
-            # Keep the network guard active while the visible page remains open;
-            # page scripts must not gain a chance to submit after autofill.
             if not headless and keep_open_seconds > 0 and result["status"] != RUN_FAILED:
                 result["browser_open"] = True
                 if on_result:
@@ -1372,7 +1762,7 @@ def run_assistance(
                             else:
                                 manual_login_authorized.clear()
                         page.wait_for_timeout(1000)
-                    except Exception:  # noqa: BLE001 - window closed
+                    except Exception:  # noqa: BLE001
                         break
                 result["blocked_writes"] = counter["blocked_writes"]
                 result["browser_open"] = False
@@ -1421,8 +1811,7 @@ def run_assistance(
             if category == "browser_profile_mismatch"
             else "browser_attachment_unavailable"
             if category == "browser_attachment_unavailable"
-            else
-            "automation_profile_unavailable"
+            else "automation_profile_unavailable"
             if category == "automation_profile_unavailable"
             else "chrome_unavailable"
             if category == "chrome_unavailable"

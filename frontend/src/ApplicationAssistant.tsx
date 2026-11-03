@@ -61,6 +61,8 @@ type Run = {
   browser_open: boolean;
   submission_enabled: boolean;
   error_category?: string;
+  has_trace?: boolean;
+  has_screenshot?: boolean;
 };
 type ResumeOption = {
   id: string;
@@ -126,27 +128,27 @@ const STATUS_TEXT: Record<string, string> = {
   withdrawn: "Withdrawn",
 };
 const PAUSE_TEXT: Record<string, string> = {
-  login_required: "The page asks you to log in. Log in yourself, then start again.",
-  listing_opened: "The saved listing is open in the connected CareerPilot Chrome session. Sign in manually if needed. No application form was filled or submitted.",
-  access_challenge: "A CAPTCHA, Cloudflare challenge, or account restriction was detected. CareerPilot stopped and did not bypass or retry it. Resolve it manually in the connected Chrome window.",
-  browser_attachment_unavailable: "CareerPilot did not open another browser. To connect Chrome, start Google Chrome with a dedicated CareerPilot user-data directory and `--remote-debugging-port=9222` (never use your everyday Chrome profile). Set `ASSISTANT_BROWSER_CDP_ENDPOINT=http://127.0.0.1:9222` in the backend `.env`, restart the backend, then try Automate again. Sign in manually in that dedicated profile once.",
+  login_required: "The page asks you to log in. Sign in manually in the open CareerPilot Chrome window; CareerPilot will resume or wait for you.",
+  listing_opened: "The saved listing is open in the CareerPilot Chrome session. Sign in manually if needed.",
+  access_challenge: "A CAPTCHA, Cloudflare challenge, or account restriction was detected. CareerPilot stopped and did not bypass or retry it. Resolve it manually in the open Chrome window.",
+  browser_attachment_unavailable: "CareerPilot did not open another browser. To connect Chrome, start Google Chrome with a dedicated CareerPilot user-data directory and `--remote-debugging-port=9222` (never use your everyday Chrome profile). Set `ASSISTANT_BROWSER_CDP_ENDPOINT=http://127.0.0.1:9222` in the backend `.env`, restart the backend, then try Automate again.",
   browser_profile_mismatch: "CareerPilot refused to use this Chrome connection because it could not verify the dedicated CareerPilot profile. Close this browser and start Chrome with the exact dedicated profile path shown in the setup instructions, `--remote-debugging-port=9222`, and `--enable-automation`. Never use your everyday Chrome profile.",
   automation_profile_in_use: "Another CareerPilot browser run is using the shared profile. Close or finish that run before starting another.",
-  glassdoor_interactive_required: "The legacy Glassdoor form-assistance run needs a visible browser window and an interactive wait period. This Fill screen only opens the saved listing.",
+  glassdoor_interactive_required: "The Glassdoor form-assistance run needs a visible browser window and an interactive wait period.",
   glassdoor_wait_timeout: "The Glassdoor browser timed out before an application form appeared. Your local sign-in session is kept; start the run again when ready.",
   glassdoor_profile_in_use: "Another Glassdoor browser run is already open. Finish or close that run before starting a second one.",
   glassdoor_site_blocked: "Glassdoor's security page blocked this browser session. CareerPilot won't bypass it. Open the listing in Chrome yourself and use the Application Kit to review or copy answers.",
   captcha: "A CAPTCHA is on the page. Complete it yourself; CareerPilot does not solve or bypass it.",
-  unsupported_form: "No fillable form was found here. This page's structure is not supported; use the kit manually.",
-  required_fields_need_input: "Some required fields need your input before this form is complete.",
-  field_failed: "At least one field could not be filled. Check the list below.",
+  unsupported_form: "No fillable form was found here yet. If the job opens an external employer portal, click Apply in the open window or use the Application Kit manually.",
+  required_fields_need_input: "Some required fields need your input before this form is complete. Check the table below and fill any remaining blanks in the open browser.",
+  field_failed: "At least one field could not be filled automatically. Check the list below and verify in the open browser.",
   navigation_timeout: "The employer page took too long to open. Check the URL and try again.",
   navigation_failed: "The page could not be opened. Check the address and your connection.",
   unsafe_redirect: "The page tried to redirect outside its supported employer site. CareerPilot blocked that navigation.",
   browser_unavailable:
     "The browser could not start. Check the local backend's Playwright installation and browser error.",
   chrome_unavailable:
-    "Google Chrome could not start. Install or repair Google Chrome Stable, then restart CareerPilot. CareerPilot will not fall back to bundled Chromium; it uses a dedicated profile separate from your regular Chrome profile.",
+    "Google Chrome could not start. Install or repair Google Chrome Stable, then restart CareerPilot. CareerPilot uses a dedicated profile separate from your regular Chrome profile.",
   chrome_launch_failed:
     "Google Chrome Stable is installed but could not launch the CareerPilot profile. Close any other CareerPilot automation window, check that the profile folder is writable, and try again.",
   unsafe_destination: "The application page resolves to a private or internal address and was blocked.",
@@ -195,7 +197,7 @@ function jobListingPlatform(source: string, rawUrl: string) {
       (!url.port || url.port === "443") && !url.username && !url.password &&
       url.pathname !== "/" && (!sourcePlatform || sourcePlatform === hostPlatform.key);
     return {
-      label: JOB_BOARD_LABELS[hostPlatform?.key ?? sourcePlatform ?? ""] ?? "Unsupported listing",
+      label: JOB_BOARD_LABELS[hostPlatform?.key ?? sourcePlatform ?? ""] ?? "Supported ATS",
       valid,
     };
   } catch {
@@ -223,6 +225,10 @@ function supportedPlatformForUrl(raw: string) {
         host === "glassdoor.co.in" || host.endsWith(".glassdoor.co.in")) {
       return { label: "Glassdoor" };
     }
+    const board = boardPlatformForHost(host);
+    if (board) {
+      return { label: board.label };
+    }
   } catch {
     return null;
   }
@@ -249,6 +255,8 @@ const ANSWER_HELP: Record<string, string> = {
   expected_salary: "e.g. 8 LPA",
   work_authorization: "Yes / No",
   visa_sponsorship: "Yes / No",
+  years_of_experience: "e.g. 2",
+  willing_to_relocate: "Yes / No",
 };
 
 function errText(data: unknown, fallback: string): string {
@@ -328,8 +336,9 @@ export default function ApplicationAssistant({
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState("");
-  const [edits, setEdits] = useState<Record<string, string>>({}); // "fact:phone" | "answer:x" | "draft:y"
+  const [edits, setEdits] = useState<Record<string, string>>({});
   const [applyUrl, setApplyUrl] = useState("");
+  const [uploadResume, setUploadResume] = useState(true);
   const [reviewed, setReviewed] = useState(false);
   const [selfSubmitted, setSelfSubmitted] = useState(false);
   const [authorizeManualWrite, setAuthorizeManualWrite] = useState(false);
@@ -361,7 +370,7 @@ export default function ApplicationAssistant({
         if (!alive) return;
         adopt(data);
         setStep(data.steps.current === "job" ? "fill" : data.steps.current);
-        onChanged(); // the tracker may have gained the application
+        onChanged();
       })
       .catch((e: Error) => alive && setLoadError(e.message));
     return () => {
@@ -377,7 +386,6 @@ export default function ApplicationAssistant({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  // Poll the browser-assistance run while it is in progress.
   const running = !!s?.runs.some((r) => r.status === "running");
   useEffect(() => {
     if (!running || !base) return;
@@ -509,6 +517,7 @@ export default function ApplicationAssistant({
   const latestRun = s?.runs[s.runs.length - 1];
   const listing = s ? jobListingPlatform(s.job.source, s.job.url) : { label: "Unsupported listing", valid: false };
   const listingRun = !!latestRun?.adapter.endsWith("_listing");
+  const canAutomate = listing.valid || !!supportedPlatformForUrl(applyUrl.trim() || s?.application_url || s?.job.url || "");
   const reviewBlocked = s?.status === "submitted" || ["interview", "offer", "rejected", "withdrawn"].includes(s?.status ?? "");
 
   return (
@@ -603,7 +612,7 @@ export default function ApplicationAssistant({
                   const value = applyUrl.trim();
                   if (value !== s.application_url && (!value || supportedPlatformForUrl(value))) {
                     void run("url", () =>
-                    api<AssistantState>(`${base}/kit`, { method: "PUT", body: JSON.stringify({ application_url: applyUrl.trim() }) }),
+                      api<AssistantState>(`${base}/kit`, { method: "PUT", body: JSON.stringify({ application_url: applyUrl.trim() }) }),
                     );
                   }
                 }}
@@ -638,7 +647,7 @@ export default function ApplicationAssistant({
             )}
 
             <p className="aa-hint">
-              In this stage CareerPilot opens the saved listing in its dedicated browser. It does not fill or submit application forms.
+              CareerPilot uses its dedicated persistent Chrome profile to open the job, fill supported fields, and stop at the final review screen. It never submits for you.
             </p>
             <div className="aa-actions">
               <button type="button" className="primary-button" onClick={() => goto("kit")}>
@@ -837,16 +846,16 @@ export default function ApplicationAssistant({
         {/* ---------------- FILL ---------------- */}
         {s && step === "fill" && (
           <section className="aa-card" aria-label="Fill">
-            <h3>Open the saved job listing</h3>
+            <h3>Automate application in CareerPilot browser</h3>
             <p className="aa-muted">
-              CareerPilot opens this {listing.label} listing in an already-running, verified dedicated Chrome profile. Sign in yourself if prompted; the platform session is stored in that profile. Automate will not launch another browser when no Chrome connection is available. No application form is filled or submitted in this stage.
+              CareerPilot opens this {listing.label} application in its dedicated persistent Chrome profile, pauses if you need to sign in manually, fills supported multi-step form fields from your confirmed Application Kit, and stops at the final review screen so you can inspect everything and click Submit yourself.
             </p>
             <div className="aa-platform"><Globe2 size={16} /> {listing.label}</div>
-            {!listing.valid && (
+            {!canAutomate && (
               <div className="aa-banner aa-warn">
                 {!s.job.url
                   ? "This saved job has no listing URL. Add a valid job link before opening it in the CareerPilot browser."
-                  : "The saved URL is invalid, unsupported, or does not match this job's platform. Only valid LinkedIn, Naukri, Indeed, and Glassdoor listing URLs can be opened."}
+                  : "The saved URL is invalid, unsupported, or does not match this job's platform. Only valid LinkedIn, Naukri, Indeed, Glassdoor, Greenhouse, and Lever URLs can be automated."}
               </div>
             )}
             {s.job.url && (
@@ -854,19 +863,47 @@ export default function ApplicationAssistant({
                 Saved listing: <a className="aa-inline-link" href={s.job.url} target="_blank" rel="noreferrer">{sourceLabel(s.job.source)} <ArrowUpRight size={12} /></a>
               </p>
             )}
+            <label className="aa-check">
+              <input
+                type="checkbox"
+                checked={uploadResume && !!s.resume}
+                disabled={!s.resume || !!busy || !!running}
+                onChange={(e) => setUploadResume(e.target.checked)}
+              />
+              {s.resume
+                ? `Attach selected PDF resume (${s.resume.label || s.resume.filename}) when the form asks for a resume/CV`
+                : "No PDF resume selected (select or upload one in the Job step to enable automatic resume upload)"}
+            </label>
             <div className="aa-actions">
               <button
                 type="button"
                 className="primary-button"
+                disabled={!canAutomate || !!busy || !!running || reviewBlocked}
+                onClick={() => void run("automate", async () => {
+                  await api(`${base}/automate`, {
+                    method: "POST",
+                    body: JSON.stringify({
+                      url: applyUrl.trim() || undefined,
+                      upload_resume: uploadResume && !!s.resume,
+                    }),
+                  });
+                  return api<AssistantState>(base);
+                })}
+              >
+                {busy === "automate" || running
+                  ? "Automating in CareerPilot browser..."
+                  : `Automate ${listing.label} Application`}
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
                 disabled={!listing.valid || !!busy || !!running || reviewBlocked}
                 onClick={() => void run("open-listing", async () => {
                   await api(`${base}/open-listing`, { method: "POST" });
                   return api<AssistantState>(base);
                 })}
               >
-                {busy === "open-listing" || running
-                  ? "Opening CareerPilot browser..."
-                  : `Open ${listing.label} in connected Chrome`}
+                Open {listing.label} listing only
               </button>
             </div>
 
@@ -882,7 +919,7 @@ export default function ApplicationAssistant({
                   <p className="aa-muted">
                     {listingRun
                       ? "The connected CareerPilot Chrome session is open on this job listing. Sign in manually if needed; CareerPilot is not filling an application."
-                      : "Filling in the browser window... this updates automatically."}
+                      : "Automating in the browser window... Sign in manually if prompted. This updates automatically."}
                   </p>
                 )}
                 {latestRun.pause_reason && (
@@ -895,13 +932,13 @@ export default function ApplicationAssistant({
                   </div>
                 )}
                 {latestRun.status === "prepared" && (
-                  <div className="aa-banner aa-good">Matched fields are filled. Nothing has been submitted; inspect the open employer form and review every value in CareerPilot.</div>
+                  <div className="aa-banner aa-good">Matched fields are filled and automation stopped at the review screen. Nothing has been submitted; inspect the open employer form and review every value in CareerPilot.</div>
                 )}
                 {latestRun.browser_open && listingRun && (
                   <div className="aa-banner aa-good">The connected Chrome session remains open. Close its window yourself when you are done; CareerPilot disconnects without closing Chrome.</div>
                 )}
                 {latestRun.browser_open && !listingRun && !latestRun.submission_enabled && (
-                  <div className="aa-banner aa-warn">Form writes are blocked. They remain blocked until you confirm your review and explicitly enable manual submission.</div>
+                  <div className="aa-banner aa-warn">Form writes are guarded. Confirm your review in the next step and enable manual form requests before clicking Submit in the browser.</div>
                 )}
                 {latestRun.submission_enabled && (
                   <div className="aa-banner aa-warn">Manual form requests are enabled. CareerPilot will not click Submit; use the employer's button yourself only after checking the form.</div>
