@@ -156,6 +156,10 @@ class JobDiscoveryListing(BaseModel):
     salary_max: int | None = None
     salary_currency: str = ""
     salary_period: str = "year"
+    match_score: float = 0
+    match_reasons: list[str] = Field(default_factory=list)
+    match_confidence: Literal["", "low", "medium", "high"] = ""
+    match_breakdown: list[MatchFactor] = Field(default_factory=list)
 
 
 class JobSpyDiscoveryResponse(BaseModel):

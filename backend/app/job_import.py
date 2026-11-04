@@ -251,8 +251,9 @@ def _find_level(title: str, text: str) -> str:
     t = title.lower()
     for level, pattern in (
         ("intern", r"\bintern(?:ship)?\b|\btrainee\b"),
-        ("lead", r"\blead\b|\bprincipal\b|\bhead of\b|\barchitect\b|\bstaff\b"),
+        ("lead", r"\blead\b|\bprincipal\b|\bhead of\b|\barchitect\b|\bstaff\b|\bdirector\b|\bexecutive\b"),
         ("senior", r"\bsenior\b|\bsr\.?\b"),
+        ("mid", r"\bassociate\b|\bmid[- ]level\b"),
         ("entry", r"\bjunior\b|\bjr\.?\b|\bfresher\b|\bgraduate\b|\bentry[- ]level\b"),
     ):
         if re.search(pattern, t):
@@ -305,6 +306,15 @@ def _find_salary(text: str) -> dict:
         }
         return out
     return {}
+
+
+def infer_job_attributes(title: str, text: str) -> dict:
+    """Infer experience level, work arrangement, and salary from a title and description."""
+    return {
+        "experience_level": _find_level(title, text),
+        "work_arrangement": _find_arrangement(_lines(text), text),
+        **_find_salary(text),
+    }
 
 
 def _find_skills(lines: list[str]) -> tuple[list[str], list[str]]:
@@ -364,11 +374,16 @@ def extract_job(text: str, url: str = "") -> dict:
     lines = _lines(text)
     title, company = _find_title_and_company(lines)
     location = _find_location(lines)
-    arrangement = _find_arrangement(lines, text)
+    attributes = infer_job_attributes(title, text)
+    arrangement = attributes["work_arrangement"]
     if not location and arrangement == "remote":
         location = "Remote"
     must, nice = _find_skills(lines)
-    salary = _find_salary(text)
+    salary = {
+        key: attributes[key]
+        for key in ("salary_min", "salary_max", "salary_currency", "salary_period")
+        if key in attributes
+    }
 
     if not url:
         m = URL_RE.search(text)
@@ -383,7 +398,7 @@ def extract_job(text: str, url: str = "") -> dict:
         "skills": must,
         "nice_to_have_skills": nice,
         "work_arrangement": arrangement,
-        "experience_level": _find_level(title, text),
+        "experience_level": attributes["experience_level"],
         "salary_min": salary.get("salary_min"),
         "salary_max": salary.get("salary_max"),
         "salary_currency": salary.get("salary_currency", ""),

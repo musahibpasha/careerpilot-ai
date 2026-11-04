@@ -3,12 +3,14 @@
 import hashlib
 import logging
 import math
+import re
 from datetime import date, datetime
 from urllib.parse import urlparse
 
 from jobspy import Country, scrape_jobs
 
 from app.assistant_urls import UrlRejected, check_fill_url
+from app.job_import import infer_job_attributes
 
 logger = logging.getLogger(__name__)
 
@@ -132,9 +134,25 @@ def _supported_application_url(value) -> str | None:
 
 def _string_list(value) -> list[str]:
     if isinstance(value, (list, tuple, set)):
-        return [text for item in value if (text := _value_text(item, 100))]
+        items = [_value_text(item, 100) for item in value]
+        return [part.strip() for item in items for part in item.split(",") if part.strip()]
     text = _value_text(value, 100)
-    return [text] if text else []
+    return [part.strip() for part in text.split(",") if part.strip()]
+
+
+def _title_search_terms(text: str) -> list[str]:
+    return re.findall(r"[^\W_]+(?:[+#]+)?", text.casefold())
+
+
+def _search_alternatives(search_term: str) -> list[str]:
+    alternatives = re.split(r"\s*(?:\bOR\b|[,;\n\r|])\s*", search_term, flags=re.IGNORECASE)
+    return list(dict.fromkeys(term.strip() for term in alternatives if term.strip()))
+
+
+def _title_matches_search(title: str, search_term: str) -> bool:
+    title_terms = set(_title_search_terms(title))
+    terms = _title_search_terms(search_term)
+    return bool(terms) and all(term in title_terms for term in terms)
 
 
 def _indeed_country(where: str) -> str:
@@ -153,6 +171,111 @@ def _indeed_country(where: str) -> str:
     return countries["india"]
 
 
+_LEVEL_FILTERS = {
+    "internship": {"intern"},
+    "entry": {"entry"},
+    "associate": {"mid"},
+    "mid-senior": {"mid", "senior"},
+    "director": {"lead"},
+    "executive": {"lead"},
+}
+_JOB_TYPE_ALIASES = {
+    "fulltime": "fulltime",
+    "parttime": "parttime",
+    "internship": "internship",
+    "intern": "internship",
+    "contract": "contract",
+    "freelance": "contract",
+    "temporary": "temporary",
+    "perdiem": "perdiem",
+    "volunteer": "volunteer",
+    "other": "other",
+}
+_JOB_TYPE_PATTERNS = {
+    "fulltime": r"\bfull[- ]?time\b",
+    "parttime": r"\bpart[- ]?time\b",
+    "internship": r"\bintern(?:ship)?\b",
+    "contract": r"\bcontract(?:or)?\b",
+    "freelance": r"\bfreelanc(?:e|er|ing)\b",
+    "temporary": r"\btemporary\b",
+    "perdiem": r"\bper[- ]diem\b",
+    "volunteer": r"\bvolunteer(?:ing)?\b",
+}
+_ANNUAL_FACTOR = {
+    "year": 1,
+    "yearly": 1,
+    "month": 12,
+    "monthly": 12,
+    "week": 52,
+    "weekly": 52,
+    "day": 260,
+    "daily": 260,
+    "hour": 2080,
+    "hourly": 2080,
+}
+
+
+def _normalized_job_types(value) -> set[str]:
+    return {
+        _JOB_TYPE_ALIASES.get(re.sub(r"[^a-z0-9]", "", text.casefold()), text.casefold())
+        for text in _string_list(value)
+    }
+
+
+def _job_matches_filters(
+    *,
+    job_type: str | None,
+    work_arrangement: str | None,
+    experience_level: str | None,
+    salary_min: int | None,
+    salary_max: int | None,
+    salary_currency: str | None,
+    salary_period: str,
+    row_job_types: list[str],
+    arrangement: str,
+    level: str,
+    found_salary_min: int | None,
+    found_salary_max: int | None,
+    found_salary_currency: str,
+    found_salary_period: str,
+) -> bool:
+    if job_type and job_type not in _normalized_job_types(row_job_types):
+        return False
+    if work_arrangement and arrangement != work_arrangement:
+        return False
+    if experience_level and level not in _LEVEL_FILTERS[experience_level]:
+        return False
+    if salary_min is None and salary_max is None:
+        return True
+    if not found_salary_currency or found_salary_currency.casefold() != (salary_currency or "").casefold():
+        return False
+    normalized_min = _convert_salary_period(
+        found_salary_min, found_salary_period, salary_period
+    )
+    normalized_max = _convert_salary_period(
+        found_salary_max, found_salary_period, salary_period
+    )
+    if normalized_min is None and normalized_max is None:
+        return False
+    if salary_min is not None and (normalized_max is None or normalized_max < salary_min):
+        return False
+    if salary_max is not None and (normalized_min is None or normalized_min > salary_max):
+        return False
+    return True
+
+
+def _convert_salary_period(
+    amount: int | None, source_period: str, target_period: str
+) -> int | None:
+    if amount is None:
+        return None
+    source_factor = _ANNUAL_FACTOR.get(source_period.casefold())
+    target_factor = _ANNUAL_FACTOR.get(target_period.casefold())
+    if source_factor is None or target_factor is None:
+        return None
+    return round(amount * source_factor / target_factor)
+
+
 def search_jobspy_jobs(
     *,
     site: str,
@@ -160,79 +283,208 @@ def search_jobspy_jobs(
     where: str,
     job_type: str | None = None,
     is_remote: bool | None = None,
+    easy_apply: bool | None = None,
     hours_old: int | None = None,
+    work_arrangement: str | None = None,
+    experience_level: str | None = None,
+    salary_min: int | None = None,
+    salary_max: int | None = None,
+    salary_currency: str | None = None,
+    salary_period: str = "year",
+    sort_by: str = "match",
 ) -> dict:
     """Search one supported board and return transient, normalized listings."""
     if site not in SUPPORTED_SITES:
         raise JobSpyError("Choose a supported job-search source.", 422)
+    if experience_level is not None and experience_level not in _LEVEL_FILTERS:
+        raise JobSpyError("Choose a supported experience level.", 422)
+    if work_arrangement not in (None, "remote", "hybrid", "onsite"):
+        raise JobSpyError("Choose a supported work arrangement.", 422)
+    if salary_period not in ("year", "month"):
+        raise JobSpyError("Choose a supported salary period.", 422)
+    if salary_min is not None and salary_max is not None and salary_max < salary_min:
+        raise JobSpyError("Maximum salary cannot be lower than minimum salary.", 422)
 
-    try:
-        search_options = {
-            "site_name": [site],
-            "search_term": what,
-            "location": where,
-            "results_wanted": 20,
-            "job_type": job_type,
-            "is_remote": is_remote,
-            "hours_old": hours_old,
-        }
-        if site == "indeed":
-            search_options["country_indeed"] = _indeed_country(where)
-        frame = scrape_jobs(
-            **search_options,
-        )
-    except Exception as error:
-        logger.exception("JobSpy search failed for %s.", site)
-        raise JobSpyError(f"{_SITE_LABELS[site]} search is unavailable right now.") from error
+    alternatives = _search_alternatives(what) or [what.strip()]
+    search_options = {
+        "site_name": [site],
+        "location": where,
+        "results_wanted": 20,
+        "job_type": job_type,
+        "is_remote": is_remote,
+        "easy_apply": easy_apply,
+        "hours_old": hours_old,
+        "fetch_description": any((
+            job_type is not None and site == "linkedin",
+            experience_level is not None and site != "naukri",
+            (salary_min is not None or salary_max is not None) and site == "linkedin",
+            work_arrangement in {"hybrid", "onsite"} and site != "naukri",
+        )),
+    }
+    if site == "indeed":
+        search_options["country_indeed"] = _indeed_country(where)
 
-    if frame is None or not hasattr(frame, "to_dict"):
-        raise JobSpyError("JobSpy returned an invalid search response.")
+    results_by_alternative = []
+    for alternative in alternatives:
+        try:
+            frame = scrape_jobs(search_term=alternative, **search_options)
+        except Exception as error:
+            logger.exception("JobSpy search failed for %s.", site)
+            raise JobSpyError(
+                f"{_SITE_LABELS[site]} search is unavailable right now."
+            ) from error
 
-    try:
-        rows = frame.to_dict(orient="records")
-    except (TypeError, ValueError) as error:
-        logger.exception("JobSpy returned an unreadable result for %s.", site)
-        raise JobSpyError("JobSpy returned an invalid search response.") from error
+        if frame is None or not hasattr(frame, "to_dict"):
+            raise JobSpyError("JobSpy returned an invalid search response.")
+
+        try:
+            rows = frame.to_dict(orient="records")
+        except (TypeError, ValueError) as error:
+            logger.exception("JobSpy returned an unreadable result for %s.", site)
+            raise JobSpyError("JobSpy returned an invalid search response.") from error
+
+        alternative_results = []
+        seen_urls = set()
+        for row in rows:
+            url_value = row.get("job_url")
+            if not _value_text(url_value):
+                url_value = row.get("url")
+            url = _job_url(url_value, site)
+            title = _value_text(row.get("title"), 250)
+            company = _value_text(row.get("company"), 250)
+            description = _value_text(row.get("description"))
+            if (
+                not url
+                or not title
+                or not company
+                or url in seen_urls
+                or not _title_matches_search(title, alternative)
+            ):
+                continue
+
+            provider_id = _value_text(row.get("id"), 200)
+            source_job_id = provider_id or hashlib.sha256(url.encode("utf-8")).hexdigest()[:32]
+            interval = _value_text(row.get("interval"), 40).lower()
+            remote = _value_text(row.get("is_remote"), 10).lower() in {
+                "true",
+                "yes",
+                "remote",
+                "1",
+            }
+            row_job_types = _string_list(row.get("job_type"))
+            arrangement_text = " ".join((
+                _value_text(row.get("work_from_home_type"), 100),
+                _value_text(row.get("location"), 250),
+            )).casefold()
+            attributes = infer_job_attributes(
+                title,
+                "\n".join(filter(None, (
+                    title,
+                    description,
+                    _value_text(row.get("experience_range"), 200),
+                    _value_text(row.get("job_level"), 100),
+                ))),
+            )
+            if "hybrid" in arrangement_text:
+                arrangement = "hybrid"
+            elif "remote" in arrangement_text or remote:
+                arrangement = "remote"
+            elif any(term in arrangement_text for term in ("office", "onsite", "on-site")):
+                arrangement = "onsite"
+            else:
+                arrangement = attributes["work_arrangement"]
+            level = attributes["experience_level"]
+            if not row_job_types and description:
+                description_lower = description.casefold()
+                row_job_types = [
+                    _JOB_TYPE_ALIASES[keyword]
+                    for keyword, pattern in _JOB_TYPE_PATTERNS.items()
+                    if re.search(pattern, description_lower)
+                ]
+            found_salary_min = _number(row.get("min_amount"))
+            found_salary_max = _number(row.get("max_amount"))
+            found_salary_currency = _value_text(row.get("currency"), 10).upper()
+            found_salary_period = interval
+            if found_salary_min is None and found_salary_max is None:
+                salary = attributes
+                found_salary_min = salary.get("salary_min")
+                found_salary_max = salary.get("salary_max")
+                found_salary_currency = _value_text(salary.get("salary_currency"), 10).upper()
+                found_salary_period = salary.get("salary_period", "")
+            display_period = salary_period if salary_min is not None or salary_max is not None else (
+                "month" if found_salary_period in {"month", "monthly"} else "year"
+            )
+            display_salary_min = _convert_salary_period(
+                found_salary_min, found_salary_period, display_period
+            )
+            display_salary_max = _convert_salary_period(
+                found_salary_max, found_salary_period, display_period
+            )
+            effective_arrangement_filter = work_arrangement or (
+                "remote" if is_remote else None
+            )
+            if not _job_matches_filters(
+                job_type=job_type,
+                work_arrangement=effective_arrangement_filter,
+                experience_level=experience_level,
+                salary_min=salary_min,
+                salary_max=salary_max,
+                salary_currency=salary_currency,
+                salary_period=salary_period,
+                row_job_types=row_job_types,
+                arrangement=arrangement,
+                level=level,
+                found_salary_min=found_salary_min,
+                found_salary_max=found_salary_max,
+                found_salary_currency=found_salary_currency,
+                found_salary_period=found_salary_period,
+            ):
+                continue
+            seen_urls.add(url)
+
+            alternative_results.append({
+                "source_job_id": source_job_id,
+                "title": title,
+                "company": company,
+                "location": _value_text(row.get("location"), 250) or None,
+                "url": url,
+                "application_url": _supported_application_url(row.get("job_url_direct")),
+                "description": description,
+                "skills": [],
+                "nice_to_have_skills": [],
+                "employment_types": row_job_types,
+                "published_at": _date_text(row.get("date_posted")),
+                "work_arrangement": arrangement,
+                "experience_level": level,
+                "salary_min": display_salary_min,
+                "salary_max": display_salary_max,
+                "salary_currency": found_salary_currency,
+                "salary_period": display_period,
+            })
+        results_by_alternative.append(alternative_results)
 
     results = []
-    for row in rows:
-        url_value = row.get("job_url")
-        if not _value_text(url_value):
-            url_value = row.get("url")
-        url = _job_url(url_value, site)
-        title = _value_text(row.get("title"), 250)
-        company = _value_text(row.get("company"), 250)
-        if not url or not title or not company:
-            continue
+    seen_urls = set()
+    while len(results) < 20:
+        progressed = False
+        for alternative_results in results_by_alternative:
+            if not alternative_results:
+                continue
+            job = alternative_results.pop(0)
+            progressed = True
+            if job["url"] in seen_urls:
+                continue
+            seen_urls.add(job["url"])
+            results.append(job)
+            if len(results) == 20:
+                break
+        if not progressed:
+            break
 
-        provider_id = _value_text(row.get("id"), 200)
-        source_job_id = provider_id or hashlib.sha256(url.encode("utf-8")).hexdigest()[:32]
-        interval = _value_text(row.get("interval"), 40).lower()
-        remote = _value_text(row.get("is_remote"), 10).lower() in {
-            "true",
-            "yes",
-            "remote",
-            "1",
-        }
-
-        results.append({
-            "source_job_id": source_job_id,
-            "title": title,
-            "company": company,
-            "location": _value_text(row.get("location"), 250) or None,
-            "url": url,
-            "application_url": _supported_application_url(row.get("job_url_direct")),
-            "description": _value_text(row.get("description")),
-            "skills": [],
-            "nice_to_have_skills": [],
-            "employment_types": _string_list(row.get("job_type")),
-            "published_at": _date_text(row.get("date_posted")),
-            "work_arrangement": "remote" if remote else "",
-            "experience_level": "",
-            "salary_min": _number(row.get("min_amount")),
-            "salary_max": _number(row.get("max_amount")),
-            "salary_currency": _value_text(row.get("currency"), 10).upper(),
-            "salary_period": "month" if "month" in interval else "year",
-        })
+    if sort_by == "newest":
+        results.sort(
+            key=lambda job: job["published_at"] or "",
+            reverse=True,
+        )
 
     return {"source": site, "results": results}

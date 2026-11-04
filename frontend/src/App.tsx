@@ -212,6 +212,10 @@ type DiscoveredJob = {
   salary_max: number | null;
   salary_currency: string;
   salary_period: "year" | "month";
+  match_score: number;
+  match_reasons: string[];
+  match_confidence: "" | "low" | "medium" | "high";
+  match_breakdown: MatchFactor[];
 };
 
 type JobSearchSource =
@@ -1143,12 +1147,14 @@ function App() {
   const [linkedinLocation, setLinkedinLocation] = useState("Bengaluru, India");
   const [linkedinWorkArrangement, setLinkedinWorkArrangement] = useState("any");
   const [linkedinEmploymentType, setLinkedinEmploymentType] = useState("Full-time");
+  const [linkedinApplicationType, setLinkedinApplicationType] = useState("any");
   const [linkedinExperience, setLinkedinExperience] = useState("any");
   const [linkedinSalaryMin, setLinkedinSalaryMin] = useState("");
   const [linkedinSalaryMax, setLinkedinSalaryMax] = useState("");
   const [linkedinSalaryCurrency, setLinkedinSalaryCurrency] = useState("INR");
+  const [linkedinSalaryPeriod, setLinkedinSalaryPeriod] = useState<"year" | "month">("year");
   const [linkedinPostedWithin, setLinkedinPostedWithin] = useState("any");
-  const [linkedinSort, setLinkedinSort] = useState("relevance");
+  const [linkedinSort, setLinkedinSort] = useState("match");
   const [discoveryResults, setDiscoveryResults] = useState<DiscoveredJob[]>([]);
   const [discoveryBusy, setDiscoveryBusy] = useState(false);
   const [discoveryMessage, setDiscoveryMessage] = useState("");
@@ -1347,10 +1353,23 @@ function App() {
         "Part-time": "parttime",
         Internship: "internship",
         Contract: "contract",
+        Freelance: "contract",
         Temporary: "temporary",
       }[linkedinEmploymentType];
       if (jobType) params.set("job_type", jobType);
-      if (linkedinWorkArrangement === "remote") params.set("is_remote", "true");
+      if (linkedinApplicationType === "easy-apply") params.set("easy_apply", "true");
+      if (linkedinWorkArrangement !== "any") {
+        params.set("work_arrangement", linkedinWorkArrangement);
+        if (linkedinWorkArrangement === "remote") params.set("is_remote", "true");
+      }
+      if (linkedinExperience !== "any") params.set("experience_level", linkedinExperience);
+      if (linkedinSalaryMin.trim()) params.set("salary_min", linkedinSalaryMin.trim());
+      if (linkedinSalaryMax.trim()) params.set("salary_max", linkedinSalaryMax.trim());
+      if (linkedinSalaryMin.trim() || linkedinSalaryMax.trim()) {
+        params.set("salary_currency", linkedinSalaryCurrency.trim());
+        params.set("salary_period", linkedinSalaryPeriod);
+      }
+      params.set("sort_by", linkedinSort);
       const hoursOld = {
         "24-hours": "24",
         week: "168",
@@ -1376,8 +1395,8 @@ function App() {
       if (data.results.length === 0) {
         setDiscoveryMessage(
           data.source === "indeed"
-            ? "Indeed returned no listings. This may mean there are no matches or the board temporarily restricted the search; try broader keywords or check Indeed directly."
-            : "No listings were returned. Try broader keywords or another source.",
+            ? "Indeed returned no matching listings. Try broader keywords or clear filters; listings without details needed by a selected filter are excluded."
+            : "No matching listings were returned. Try broader keywords or clear filters; listings without details needed by a selected filter are excluded.",
         );
       }
     } catch (e) {
@@ -1409,18 +1428,27 @@ function App() {
         "Bengaluru, India",
     );
 
-    if (preferencesForm.work_arrangements.length === 1) {
-      setLinkedinWorkArrangement(preferencesForm.work_arrangements[0]);
-    }
-
-    if (preferencesForm.experience_level === "intern") {
-      setLinkedinExperience("internship");
-    } else if (preferencesForm.experience_level === "entry") {
-      setLinkedinExperience("entry");
-    }
+    setLinkedinWorkArrangement(
+      preferencesForm.work_arrangements.length === 1
+        ? preferencesForm.work_arrangements[0]
+        : "any",
+    );
+    const experienceSearchLevels: Record<string, string> = {
+      intern: "internship",
+      entry: "entry",
+      mid: "associate",
+      senior: "mid-senior",
+      lead: "executive",
+    };
+    setLinkedinExperience(
+      experienceSearchLevels[preferencesForm.experience_level] ?? "any",
+    );
 
     setLinkedinSalaryMin(preferencesForm.salary_min);
     setLinkedinSalaryMax(preferencesForm.salary_max);
+    setLinkedinSalaryPeriod(
+      preferencesForm.salary_period === "month" ? "month" : "year",
+    );
     if (preferencesForm.salary_currency) {
       setLinkedinSalaryCurrency(preferencesForm.salary_currency);
     }
@@ -3432,7 +3460,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                   <input
                     value={linkedinKeywords}
                     onChange={(event) => setLinkedinKeywords(event.target.value)}
-                    placeholder="e.g. Frontend Developer OR React"
+                    placeholder="e.g. Frontend Developer, Data Analyst"
                     maxLength={300}
                   />
                 </label>
@@ -3468,7 +3496,18 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                     <option>Part-time</option>
                     <option>Internship</option>
                     <option>Contract</option>
+                    <option>Freelance</option>
                     <option>Temporary</option>
+                  </select>
+                </label>
+                <label>
+                  Application type
+                  <select
+                    value={linkedinApplicationType}
+                    onChange={(event) => setLinkedinApplicationType(event.target.value)}
+                  >
+                    <option value="any">Any</option>
+                    <option value="easy-apply">Easy Apply</option>
                   </select>
                 </label>
                 <label>
@@ -3478,7 +3517,6 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                     onChange={(event) => setLinkedinExperience(event.target.value)}
                   >
                     <option value="any">Any</option>
-                    <option value="internship">Internship</option>
                     <option value="entry">Entry level / fresher</option>
                     <option value="associate">Associate</option>
                     <option value="mid-senior">Mid-Senior</option>
@@ -3516,6 +3554,16 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                       aria-label="Salary currency"
                     />
                   </span>
+                  <select
+                    value={linkedinSalaryPeriod}
+                    onChange={(event) =>
+                      setLinkedinSalaryPeriod(event.target.value as "year" | "month")
+                    }
+                    aria-label="Salary period"
+                  >
+                    <option value="year">Per year</option>
+                    <option value="month">Per month</option>
+                  </select>
                 </label>
                 <label>
                   Posted within
@@ -3535,8 +3583,8 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                     value={linkedinSort}
                     onChange={(event) => setLinkedinSort(event.target.value)}
                   >
-                    <option value="relevance">Relevance</option>
-                    <option value="newest">Newest</option>
+                    <option value="match">Match score (highest first)</option>
+                    <option value="newest">Match score, newest first on ties</option>
                   </select>
                 </label>
                 <div className="criteria-search-action">
@@ -3582,7 +3630,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
               )}
 
               <small className="criteria-disclaimer">
-                JobSpy searches this board using your keywords and location. Some boards may ignore filters they do not support; review each listing on its original site.
+                CareerPilot applies filters using board data and job descriptions where available. Listings missing details needed by a selected filter may be excluded; confirm details on the original posting.
               </small>
               {discoveryBusy && (
                 <p className="source-loading" role="status" aria-live="polite">
@@ -3624,7 +3672,21 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                         <article className="job-card" key={`${job.source}-${job.source_job_id}`}>
                           <div className="company-logo">{job.company.slice(0, 1).toUpperCase()}</div>
                           <div className="job-info">
-                            <h3>{job.title}</h3>
+                            <div className="source-job-title-row">
+                              <h3>{job.title}</h3>
+                              <span
+                                className={`source-match-score ${
+                                  job.match_score >= 70
+                                    ? "high"
+                                    : job.match_score >= 40
+                                      ? "mid"
+                                      : "low"
+                                }`}
+                                title={`${job.match_confidence || "low"} confidence match`}
+                              >
+                                {Math.round(job.match_score)}% match
+                              </span>
+                            </div>
                             <p>{job.company}{job.location ? ` · ${job.location}` : ""}</p>
                             <div className="job-meta">
                               {job.work_arrangement && <span>{job.work_arrangement}</span>}

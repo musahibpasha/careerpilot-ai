@@ -196,7 +196,7 @@ export default function AuthBoundary({ children }: { children?: ReactNode }) {
     return (
       <main className="auth-page">
         <section className="auth-card">
-          <div className="auth-card__brand">CareerPilot AI</div>
+          <div className="auth-card__brand"></div>
           <h1>Verify your email</h1>
           <p className="auth-card__subtitle">
             Open the verification link sent to {user.email}, then check again.
@@ -218,7 +218,7 @@ export default function AuthBoundary({ children }: { children?: ReactNode }) {
     <main className="auth-page">
       <section className="auth-layout">
         <aside className="auth-intro">
-          <div className="auth-card__brand">CareerPilot AI</div>
+          <div className="auth-card__brand"></div>
           <h1>Your career, in your control.</h1>
           <p>Sign in to your private workspace for saved jobs, applications, and resumes.</p>
           <div className="auth-steps">

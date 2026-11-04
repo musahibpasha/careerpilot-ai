@@ -857,22 +857,74 @@ def discover_board_jobs(
         pattern=r"^(fulltime|parttime|contract|temporary|internship|perdiem|other|volunteer)$",
     ),
     is_remote: bool | None = None,
+    easy_apply: bool | None = None,
+    work_arrangement: str | None = Query(
+        default=None,
+        pattern=r"^(remote|hybrid|onsite)$",
+    ),
+    experience_level: str | None = Query(
+        default=None,
+        pattern=r"^(internship|entry|associate|mid-senior|director|executive)$",
+    ),
+    salary_min: int | None = Query(default=None, ge=0, le=1_000_000_000),
+    salary_max: int | None = Query(default=None, ge=0, le=1_000_000_000),
+    salary_currency: str | None = Query(
+        default=None,
+        min_length=3,
+        max_length=10,
+        pattern=r"^[A-Za-z]{3,10}$",
+    ),
+    salary_period: str = Query(default="year", pattern=r"^(year|month)$"),
+    sort_by: str = Query(default="match", pattern=r"^(match|newest)$"),
     hours_old: int | None = Query(default=None, ge=1, le=720),
+    db: Database = Depends(get_db),
 ):
     """Search one public job board using JobSpy; results stay transient until saved."""
     if site not in SUPPORTED_SITES:
         raise HTTPException(status_code=422, detail="Choose a supported job-search source.")
     if not what.strip():
         raise HTTPException(status_code=422, detail="Enter a job-search keyword.")
+    if salary_min is not None and salary_max is not None and salary_max < salary_min:
+        raise HTTPException(
+            status_code=422,
+            detail="Maximum salary cannot be lower than minimum salary.",
+        )
+    if (salary_min is not None or salary_max is not None) and not salary_currency:
+        raise HTTPException(
+            status_code=422,
+            detail="Choose a salary currency when filtering by salary.",
+        )
     try:
-        return search_jobspy_jobs(
+        response = search_jobspy_jobs(
             site=site,
             what=what.strip(),
             where=where.strip(),
             job_type=job_type,
             is_remote=is_remote,
+            easy_apply=easy_apply,
             hours_old=hours_old,
+            work_arrangement=work_arrangement,
+            experience_level=experience_level,
+            salary_min=salary_min,
+            salary_max=salary_max,
+            salary_currency=salary_currency,
+            salary_period=salary_period,
+            sort_by=sort_by,
         )
+        profile = db.profiles.find_one({})
+        preferences = db.preferences.find_one({})
+        for job in response["results"]:
+            job.update(score_fields(job, profile, preferences))
+        if sort_by == "newest":
+            response["results"].sort(
+                key=lambda job: job.get("published_at") or "",
+                reverse=True,
+            )
+        response["results"].sort(
+            key=lambda job: job["match_score"],
+            reverse=True,
+        )
+        return response
     except JobSpyError as error:
         raise HTTPException(status_code=error.status_code, detail=error.message) from None
 

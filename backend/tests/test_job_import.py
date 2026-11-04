@@ -97,6 +97,21 @@ def test_years_of_experience_set_the_level_when_the_title_does_not():
     assert draft("Intern Developer\n2 years")["experience_level"] == "intern"
 
 
+def test_linkedin_style_job_posting_reads_explicit_title_and_five_to_ten_year_range():
+    posting = """About the job
+Job Title: SQL Data Analyst
+Experience : 5 -10 years
+Location: Hyderabad / Mumbai / Chennai / Bangalore
+Job Description
+As a Senior Data Analyst, you will investigate data with SQL."""
+
+    result = extract_job(posting)
+
+    assert result["draft"]["title"] == "SQL Data Analyst"
+    assert result["draft"]["experience_level"] == "senior"
+    assert result["draft"]["description"] == posting
+
+
 def test_a_sentence_is_not_used_as_the_title_and_missing_fields_are_listed():
     r = extract_job("We are looking for someone who loves cooking and good coffee, lots of it.")
     assert r["draft"]["title"] == ""

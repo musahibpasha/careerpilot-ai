@@ -1,5 +1,5 @@
 /* =========================================================
-   CareerPilot AI — shared design system
+   ThoughtLabs AI — shared design system
    Midnight surfaces, lavender and mint accents.
    All tokens live in :root so every screen shares one look.
    ========================================================= */
@@ -1719,6 +1719,27 @@ body {
 .source-search-results .job-info > p:last-of-type {
   overflow-wrap: anywhere;
 }
+.source-job-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.source-job-title-row h3 { min-width: 0; }
+.source-match-score {
+  flex: none;
+  padding: 4px 8px;
+  border: 1px solid var(--blue-100);
+  border-radius: 999px;
+  color: var(--blue);
+  background: var(--blue-50);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.source-match-score.high { color: var(--good); }
+.source-match-score.mid { color: var(--warn); }
+.source-match-score.low { color: var(--muted); }
 .source-search-results .job-actions { min-width: 0; }
 .saved-matches-card { margin-top: 16px; }
 .job-results-heading {
