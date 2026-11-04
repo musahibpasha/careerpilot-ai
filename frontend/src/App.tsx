@@ -1195,6 +1195,7 @@ function App({
   const [recommendationSourceFailures, setRecommendationSourceFailures] = useState<string[]>([]);
   const [recommendationMessage, setRecommendationMessage] = useState("");
   const recommendationsStarted = useRef(false);
+  const recommendationRequestId = useRef(0);
   const [profile, setProfile] = useState<Profile>(null);
   const [dashboardLoadState, setDashboardLoadState] = useState<
     "loading" | "ready" | "error"
@@ -1505,119 +1506,53 @@ function App({
   }
 
   async function refreshRecommendations() {
-    if (!resumes.some((resume) => resume.is_active)) {
-      setRecommendationMessage("Upload a resume or select an active resume to get recommendations.");
-      return;
-    }
-    const roles = (profile?.target_roles ?? []).map((role) => role.trim()).filter(Boolean);
-    const skills = (profile?.skills ?? []).map((skill) => skill.trim()).filter(Boolean);
-    const what = (roles.length ? roles.slice(0, 3).join(" OR ") : skills.slice(0, 5).join(" "))
-      .slice(0, 100);
-    if (!what) {
-      recommendationsStarted.current = true;
-      setRecommendationMessage("Add target roles or skills to your profile to find relevant jobs.");
-      return;
-    }
-
+    const requestId = ++recommendationRequestId.current;
     recommendationsStarted.current = true;
     setRecommendationLoading(true);
+    setRecommendedJobs([]);
+    setRecommendationLastUpdated(null);
     setRecommendationMessage("");
     setRecommendationSourceFailures([]);
-    const where = preferencesForm.locations.trim() || profile?.location?.trim() || "";
-    const location = where.toLocaleLowerCase();
-    const geo = /\b(canada)\b/.test(location)
-      ? "canada"
-      : /\b(uk|united kingdom)\b/.test(location)
-        ? "uk"
-        : /\b(europe|germany|france|spain|italy|netherlands|ireland|sweden|poland)\b/.test(location)
-          ? "europe"
-          : /\b(usa|united states|us)\b/.test(location)
-            ? "usa"
-            : "apac";
-    const sources = [
-      ...JOB_SEARCH_SOURCES.map((source) => ({
-        id: source.id,
-        label: source.label,
-        url: `${API}/api/jobs/discover/board?${new URLSearchParams({
-          site: source.id,
-          what,
-          where,
-          sort_by: "match",
-        })}`,
-      })),
-      {
-        id: "jobicy",
-        label: "Jobicy",
-        url: `${API}/api/jobs/discover/jobicy?${new URLSearchParams({
-          what,
-          where,
-          geo,
-        })}`,
-      },
-    ];
-
     try {
-      const responses = await Promise.allSettled(
-        sources.map(async (source) => {
-          const response = await fetch(source.url);
-          const data = await response.json().catch(() => null);
-          if (!response.ok) {
-            throw new Error(errorText(data, `HTTP ${response.status}`));
-          }
-          if (!Array.isArray(data?.results)) {
-            throw new Error("The source returned an invalid response.");
-          }
-          return {
-            source: source.id,
-            label: source.label,
-            listings: (data.results as DiscoveredJob[]).map((listing) => ({
-              ...listing,
-              source: source.id,
-            })),
-          };
-        }),
-      );
+      const response = await fetch(`${API}/api/jobs/recommendations`);
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(errorText(data, `HTTP ${response.status}`));
+      }
+      if (
+        !Array.isArray(data?.results) ||
+        !Array.isArray(data?.source_failures) ||
+        !Array.isArray(data?.successful_sources)
+      ) {
+        throw new Error("The recommendation service returned an invalid response.");
+      }
+      if (requestId !== recommendationRequestId.current) return;
 
-      const fulfilled = responses.flatMap((result) =>
-        result.status === "fulfilled" ? [result.value] : [],
-      );
-      const failed = responses.flatMap((result, index) =>
-        result.status === "rejected" ? [sources[index].label] : [],
-      );
-      const seen = new Set<string>();
-      const unique = fulfilled
-        .flatMap((source) => source.listings)
-        .filter((job) => {
-          let key = `${job.source}:${job.source_job_id}`;
-          try {
-            const url = new URL(job.url);
-            key = `${url.hostname.toLocaleLowerCase()}${url.pathname.replace(/\/+$/, "").toLocaleLowerCase()}`;
-          } catch {
-            key = `${job.title.trim().toLocaleLowerCase()}|${job.company.trim().toLocaleLowerCase()}|${job.source}`;
-          }
-          if (seen.has(key)) return false;
-          seen.add(key);
-          return true;
-        })
-        .sort((a, b) => b.match_score - a.match_score)
-        .slice(0, 6);
-
-      setRecommendedJobs(unique);
-      setRecommendationSourceFailures(failed);
-      if (fulfilled.length > 0) setRecommendationLastUpdated(new Date().toISOString());
-      if (fulfilled.length === 0) {
+      const jobs = data.results as DiscoveredJob[];
+      const failures = data.source_failures as string[];
+      const successfulSources = data.successful_sources as string[];
+      setRecommendedJobs(jobs);
+      setRecommendationSourceFailures(failures);
+      if (successfulSources.length > 0) {
+        setRecommendationLastUpdated(
+          typeof data.updated_at === "string" ? data.updated_at : new Date().toISOString(),
+        );
+      }
+      if (successfulSources.length === 0) {
         setRecommendationMessage("Recommendations could not be refreshed because all job sources were unavailable.");
-      } else if (failed.length > 0) {
-        setRecommendationMessage(`Some job sources could not be reached: ${failed.join(", ")}.`);
-      } else if (unique.length === 0) {
+      } else if (jobs.length === 0) {
         setRecommendationMessage("No matching recommendations are available right now. Try Find Jobs.");
       }
     } catch (reason) {
-      setRecommendationMessage(
-        reason instanceof Error ? reason.message : "Could not load recommendations.",
-      );
+      if (requestId === recommendationRequestId.current) {
+        setRecommendationMessage(
+          reason instanceof Error ? reason.message : "Could not load recommendations.",
+        );
+      }
     } finally {
-      setRecommendationLoading(false);
+      if (requestId === recommendationRequestId.current) {
+        setRecommendationLoading(false);
+      }
     }
   }
 
@@ -1811,7 +1746,6 @@ function App({
     if (
       (page === "dashboard" || page === "jobs") &&
       dashboardLoadState === "ready" &&
-      resumes.some((resume) => resume.is_active) &&
       !recommendationsStarted.current
     ) {
       void refreshRecommendations();
@@ -2203,6 +2137,7 @@ function App({
       setShowProfile(false);
       setNotice("Profile saved and job matches recalculated.");
       await load();
+      await refreshRecommendations();
     } catch (e) {
       const message =
         e instanceof Error
@@ -2251,6 +2186,7 @@ function App({
       // The active resume (the first one) fills the profile form. The top
       // upload button asks for the form to be filled whatever happens.
       if (data.is_active || fillForm) await fillProfileFromResume(data);
+      if (data.is_active) await refreshRecommendations();
     } catch (err) {
       setResumeError(
         err instanceof Error ? err.message : "Could not save this resume.",
@@ -2347,7 +2283,10 @@ function App({
       { is_active: true },
       `"${resume.label}" is now your active resume.`,
     );
-    if (ok) await fillProfileFromResume(resume);
+    if (ok) {
+      await fillProfileFromResume(resume);
+      await refreshRecommendations();
+    }
   }
 
   function renameResume(resume: ResumeFile) {
@@ -2370,6 +2309,7 @@ function App({
       }
       setResumeMessage("Resume deleted.");
       await loadResumes();
+      await refreshRecommendations();
     } catch (err) {
       setResumeError(
         err instanceof Error ? err.message : "Could not delete this resume.",
@@ -2448,6 +2388,7 @@ function App({
 
       setShowPreferences(false);
       setNotice("Job preferences saved.");
+      await refreshRecommendations();
     } catch (e) {
       setPreferencesError(
         e instanceof Error
@@ -3298,8 +3239,9 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
           <div>
             <h2>Recommended Jobs</h2>
             <p>
-              Matched against your profile and active resume across LinkedIn, Naukri, Indeed,
-              Glassdoor, and Jobicy.
+              Matched against your saved profile and active resume for Belgium and Germany
+              across LinkedIn, Indeed, Glassdoor, and Jobicy. Naukri's current listing integration
+              is India-only.
               {recommendationLastUpdated &&
                 ` Last updated ${new Date(recommendationLastUpdated).toLocaleString()}.`}
             </p>
@@ -3327,9 +3269,9 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
             {recommendationMessage && (
               <p className="recommendation-message" role="status">{recommendationMessage}</p>
             )}
-            {recommendationSourceFailures.length > 0 && recommendedJobs.length > 0 && (
+            {recommendationSourceFailures.length > 0 && (
               <p className="recommendation-message" role="status">
-                Showing available results; unavailable sources: {recommendationSourceFailures.join(", ")}.
+                Some sources were unavailable: {recommendationSourceFailures.join(", ")}.
               </p>
             )}
             {recommendationLoading && (
@@ -4213,6 +4155,11 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                       : `Search ${JOB_SEARCH_SOURCES.find((source) => source.id === jobSource)?.label} jobs`}
                     <Search size={14} />
                   </button>
+                  {discoveryBusy && (
+                    <p className="source-loading" role="status" aria-live="polite">
+                      Searching {JOB_SEARCH_SOURCES.find((source) => source.id === jobSource)?.label}…
+                    </p>
+                  )}
                   <small>
                     Search results are temporary until you save a listing. Resume details are not sent to the job board.
                   </small>
@@ -4251,11 +4198,6 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
             {renderRecommendedJobsSection("jobs")}
 
             <div className="source-search-output">
-              {discoveryBusy && (
-                <p className="source-loading" role="status" aria-live="polite">
-                  Searching {JOB_SEARCH_SOURCES.find((source) => source.id === jobSource)?.label}…
-                </p>
-              )}
               {discoveryMessage && (
                 <div className={discoveryError ? "source-feedback error" : "source-feedback"} role={discoveryError ? "alert" : "status"}>
                   <span>{discoveryMessage}</span>

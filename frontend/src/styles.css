@@ -1843,6 +1843,12 @@ body {
   border-radius: 8px;
   font-size: 11px;
 }
+.criteria-search-action .source-loading {
+  justify-content: flex-start;
+  margin: 3px 0 0;
+  padding: 7px 9px;
+  font-size: 10px;
+}
 .criteria-search-action small, .criteria-disclaimer {
   color: var(--muted);
   font-size: 9px;
@@ -2148,31 +2154,6 @@ body {
   background:
     radial-gradient(ellipse at 30% 15%, rgba(169, 154, 255, 0.14), transparent 42%),
     var(--bg);
-}
-.auth-account-nav {
-  position: absolute;
-  z-index: 2;
-  top: 18px;
-  right: clamp(16px, 3vw, 36px);
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.auth-account-nav__link {
-  min-height: 38px;
-  padding: 8px 14px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  color: var(--ink-2);
-  background: var(--surface);
-  font-size: 13px;
-  font-weight: 600;
-}
-.auth-account-nav__link:hover,
-.auth-account-nav__link.is-active {
-  border-color: var(--blue-100);
-  color: var(--ink);
-  background: var(--blue-50);
 }
 .auth-layout {
   display: grid;

@@ -326,6 +326,33 @@ def test_newest_sort_orders_matched_results_by_posted_date(monkeypatch):
 def test_indeed_country_infers_supported_location_suffixes():
     assert jobspy_search._indeed_country("Bengaluru, Karnataka, India") == "india"
     assert jobspy_search._indeed_country("London, United Kingdom") == "uk"
+    assert jobspy_search._indeed_country("Brussels, Belgium") == "belgium"
+    assert jobspy_search._indeed_country("Berlin, Germany") == "germany"
+
+
+@pytest.mark.parametrize(
+    ("where", "country", "url"),
+    [
+        ("Brussels, Belgium", "belgium", "https://fr.glassdoor.be/job-listing/123"),
+        ("Berlin, Germany", "germany", "https://www.glassdoor.de/job-listing/123"),
+    ],
+)
+def test_glassdoor_search_uses_the_selected_country(monkeypatch, where, country, url):
+    calls = []
+
+    def fake_scrape_jobs(**kwargs):
+        calls.append(kwargs)
+        return FakeFrame([_job(job_url=url)])
+
+    monkeypatch.setattr(jobspy_search, "scrape_jobs", fake_scrape_jobs)
+    result = jobspy_search.search_jobspy_jobs(
+        site="glassdoor",
+        what="python engineer",
+        where=where,
+    )
+
+    assert len(result["results"]) == 1
+    assert calls[0]["country_indeed"] == country
 
 
 @pytest.mark.parametrize(

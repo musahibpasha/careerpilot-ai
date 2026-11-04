@@ -3,10 +3,12 @@ import json
 import logging
 import re
 import time
+import unicodedata
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import httpx
 import reportlab
@@ -989,6 +991,227 @@ def discover_jobicy_jobs(
         listing.update(score_fields(listing, profile, preferences))
     result["results"].sort(key=lambda listing: listing["match_score"], reverse=True)
     return result
+
+
+_RECOMMENDATION_SITES = ("linkedin", "indeed", "glassdoor")
+_RECOMMENDATION_CITIES = {
+    "Belgium": (
+        "brussels", "bruxelles", "antwerp", "antwerpen", "ghent", "charleroi",
+        "liege", "bruges", "leuven",
+    ),
+    "Germany": (
+        "berlin", "munich", "munchen", "hamburg", "frankfurt", "cologne", "koln",
+        "stuttgart", "dusseldorf", "leipzig", "dresden",
+    ),
+}
+
+
+def _recommendation_country(location: str | None) -> str | None:
+    text = "".join(
+        character
+        for character in unicodedata.normalize("NFKD", (location or "").casefold())
+        if not unicodedata.combining(character)
+    )
+    if re.search(r"\b(belgium|belgie|belgique|belgien)\b", text):
+        return "Belgium"
+    if re.search(r"\b(germany|deutschland)\b", text):
+        return "Germany"
+    for country, cities in _RECOMMENDATION_CITIES.items():
+        if any(re.search(rf"\b{re.escape(city)}\b", text) for city in cities):
+            return country
+    return None
+
+
+def _recommendation_profile(profile: dict | None, extracted: dict) -> dict:
+    matched_profile = dict(profile or {})
+    for key in ("skills", "target_roles"):
+        values = []
+        seen = set()
+        for value in [*(matched_profile.get(key) or []), *(extracted.get(key) or [])]:
+            text = str(value).strip()
+            normalized = text.casefold()
+            if text and normalized not in seen:
+                values.append(text)
+                seen.add(normalized)
+        matched_profile[key] = values
+
+    roles = matched_profile["target_roles"]
+    work_history = [
+        *(matched_profile.get("work_experience") or []),
+        *(extracted.get("work_experience") or []),
+    ]
+    for experience in work_history:
+        title = (
+            str(experience.get("title") or "").strip()
+            if isinstance(experience, dict)
+            else ""
+        )
+        if title and title.casefold() not in {role.casefold() for role in roles}:
+            roles.append(title)
+    if not matched_profile.get("work_experience"):
+        matched_profile["work_experience"] = extracted.get("work_experience") or []
+    return matched_profile
+
+
+async def _stored_resume_extraction(
+    doc: dict,
+    db: Database,
+    *,
+    refresh: bool = False,
+) -> dict:
+    if doc.get("extracted") and not refresh:
+        return {
+            "extracted": doc["extracted"],
+            "cached": True,
+            "extracted_at": doc["extracted_at"],
+        }
+
+    upload = UploadFile(
+        file=BytesIO(bytes(doc["data"])),
+        filename=doc["filename"],
+        headers=Headers({"content-type": "application/pdf"}),
+    )
+    result = await parse_resume(upload, _user_id="recommendations")
+    stamp = now()
+    db.resumes.update_one(
+        {"_id": doc["_id"]},
+        {"$set": {"extracted": result["extracted"], "extracted_at": stamp}},
+    )
+    return {
+        "extracted": result["extracted"],
+        "cached": False,
+        "extracted_at": stamp,
+    }
+
+
+@app.get(
+    "/api/jobs/recommendations",
+    response_model=schemas.JobRecommendationsResponse,
+)
+async def recommended_jobs(db: Database = Depends(get_db)):
+    """Fetch current Belgium/Germany listings and score them against this user's data."""
+    resume = db.resumes.find_one({"is_active": True})
+    if not resume:
+        raise HTTPException(
+            status_code=409,
+            detail="Upload a resume or select an active resume to get recommendations.",
+        )
+
+    try:
+        extraction = await _stored_resume_extraction(resume, db)
+    except HTTPException as error:
+        raise HTTPException(
+            status_code=error.status_code,
+            detail=f"Could not read the active resume for recommendations: {error.detail}",
+        ) from error
+
+    profile = _recommendation_profile(
+        db.profiles.find_one({}),
+        extraction["extracted"],
+    )
+    preferences = db.preferences.find_one({}) or {}
+    roles = profile.get("target_roles") or []
+    skills = profile.get("skills") or []
+    query_roles = [str(role).strip() for role in roles if str(role).strip()][:3]
+    if not query_roles:
+        query_roles = [str(skill).strip() for skill in skills if str(skill).strip()][:3]
+    if not query_roles:
+        raise HTTPException(
+            status_code=422,
+            detail="Add target roles or skills to your profile or active resume to get recommendations.",
+        )
+
+    search_term = " OR ".join(query_roles)[:100]
+    jobicy_terms = query_roles[:3]
+    target_preferences = {
+        **preferences,
+        "locations": ["Belgium", "Germany"],
+    }
+    search_calls = [
+        (site, country)
+        for site in _RECOMMENDATION_SITES
+        for country in ("Belgium", "Germany")
+    ]
+
+    async def search_board(site: str, country: str):
+        return await asyncio.to_thread(
+            search_jobspy_jobs,
+            site=site,
+            what=search_term,
+            where=country,
+            sort_by="match",
+        )
+
+    async def search_jobicy(country: str, term: str):
+        cities = ", ".join(
+            (country, *_RECOMMENDATION_CITIES[country])
+        )
+        return await asyncio.to_thread(
+            jobicy.search_jobicy_jobs,
+            what=term,
+            where=cities,
+            geo="europe",
+        )
+
+    site_labels = {
+        "linkedin": "LinkedIn",
+        "indeed": "Indeed",
+        "glassdoor": "Glassdoor",
+    }
+    calls = [
+        (f"{site_labels[site]} ({country})", site, search_board(site, country))
+        for site, country in search_calls
+    ]
+    calls.extend(
+        (f"Jobicy ({country}, {term})", "jobicy", search_jobicy(country, term))
+        for country in ("Belgium", "Germany")
+        for term in jobicy_terms
+    )
+    responses = await asyncio.gather(
+        *(call for _, _, call in calls),
+        return_exceptions=True,
+    )
+
+    source_failures: list[str] = []
+    successful_sources: set[str] = set()
+    unique_jobs: dict[str, dict] = {}
+    seen_titles: set[str] = set()
+    for (label, source, _), response in zip(calls, responses):
+        if isinstance(response, Exception):
+            logger.warning("Recommendation source failed: %s: %s", label, response)
+            source_failures.append(label)
+            continue
+        successful_sources.add(source)
+        for listing in response["results"]:
+            country = _recommendation_country(listing.get("location"))
+            if country not in {"Belgium", "Germany"}:
+                continue
+            listing["source"] = source
+            listing.update(score_fields(listing, profile, target_preferences))
+            parsed_url = urlsplit(str(listing["url"]))
+            url_key = (
+                f"{(parsed_url.hostname or '').casefold()}"
+                f"{parsed_url.path.rstrip('/').casefold()}"
+            )
+            title_key = "|".join(
+                str(listing.get(field) or "").strip().casefold()
+                for field in ("title", "company", "location")
+            )
+            if url_key in unique_jobs or title_key in seen_titles:
+                continue
+            unique_jobs[url_key] = listing
+            seen_titles.add(title_key)
+
+    ranked_jobs = sorted(
+        unique_jobs.values(),
+        key=lambda listing: -listing["match_score"],
+    )[:6]
+    return {
+        "results": ranked_jobs,
+        "source_failures": source_failures,
+        "successful_sources": sorted(successful_sources),
+        "updated_at": now(),
+    }
 
 
 @app.post("/api/jobs/import-preview", response_model=schemas.JobImportPreview)
@@ -2361,27 +2584,7 @@ async def extract_resume(
     if not doc:
         raise HTTPException(status_code=404, detail="Resume not found.")
 
-    if doc.get("extracted") and not refresh:
-        return {
-            "extracted": doc["extracted"],
-            "cached": True,
-            "extracted_at": doc["extracted_at"],
-        }
-
-    upload = UploadFile(
-        file=BytesIO(bytes(doc["data"])),
-        filename=doc["filename"],
-        headers=Headers({"content-type": "application/pdf"}),
-    )
-    # Raises an HTTP error (nothing is kept) if the AI could not read it.
-    result = await parse_resume(upload)
-
-    stamp = now()
-    db.resumes.update_one(
-        {"_id": oid},
-        {"$set": {"extracted": result["extracted"], "extracted_at": stamp}},
-    )
-    return {"extracted": result["extracted"], "cached": False, "extracted_at": stamp}
+    return await _stored_resume_extraction(doc, db, refresh=refresh)
 
 
 @app.get("/api/resumes/{resume_id}/file")

@@ -186,6 +186,17 @@ class JobicyDiscoveryResponse(BaseModel):
     next_cursor: str | None = None
 
 
+class JobRecommendation(JobDiscoveryListing):
+    source: Literal["linkedin", "indeed", "glassdoor", "jobicy"]
+
+
+class JobRecommendationsResponse(BaseModel):
+    results: list[JobRecommendation]
+    source_failures: list[str] = Field(default_factory=list)
+    successful_sources: list[str] = Field(default_factory=list)
+    updated_at: datetime
+
+
 class JobApplicationPlan(BaseModel):
     job_id: str
     title: str

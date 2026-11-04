@@ -29,6 +29,7 @@ _SITE_DOMAINS = {
         "indeed.co.uk",
         "indeed.ca",
         "indeed.com.au",
+        "indeed.be",
         "indeed.fr",
         "indeed.de",
         "indeed.nl",
@@ -45,6 +46,7 @@ _SITE_DOMAINS = {
         "glassdoor.co.uk",
         "glassdoor.ca",
         "glassdoor.com.au",
+        "glassdoor.be",
         "glassdoor.de",
         "glassdoor.fr",
         "glassdoor.nl",
@@ -174,8 +176,7 @@ def _title_matches_search(title: str, search_term: str) -> bool:
     return bool(terms) and all(term in title_terms for term in terms)
 
 
-def _indeed_country(where: str) -> str:
-    """Use a country suffix from the location, defaulting to CareerPilot's India market."""
+def _country_from_location(where: str) -> str | None:
     countries = {country.value.casefold(): country.value for country in Country}
     aliases = {
         "united kingdom": "uk",
@@ -187,7 +188,13 @@ def _indeed_country(where: str) -> str:
         country = aliases.get(fragment, fragment)
         if country in countries:
             return countries[country]
-    return countries["india"]
+    return None
+
+
+def _indeed_country(where: str) -> str:
+    """Use a country suffix from the location, defaulting to CareerPilot's India market."""
+    countries = {country.value.casefold(): country.value for country in Country}
+    return _country_from_location(where) or countries["india"]
 
 
 _LEVEL_FILTERS = {
@@ -342,6 +349,8 @@ def search_jobspy_jobs(
     }
     if site == "indeed":
         search_options["country_indeed"] = _indeed_country(where)
+    elif site == "glassdoor" and (country := _country_from_location(where)):
+        search_options["country_indeed"] = country
 
     results_by_alternative = []
     for alternative in alternatives:
