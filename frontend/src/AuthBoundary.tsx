@@ -181,13 +181,13 @@ export default function AuthBoundary({ children }: { children?: ReactNode }) {
   if (user && user.emailVerified) {
     return (
       <div className="authenticated-shell">
-        <header className="auth-session-bar">
-          <span>{user.email}</span>
-          <button type="button" className="secondary-button" disabled={busy} onClick={logout}>
-            Log out
-          </button>
-        </header>
-        {children ?? <App />}
+        {children ?? (
+          <App
+            accountName={user.displayName ?? ""}
+            accountEmail={user.email ?? ""}
+            onLogout={() => { void logout(); }}
+          />
+        )}
       </div>
     );
   }

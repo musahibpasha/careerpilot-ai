@@ -78,6 +78,26 @@ def _listing_url(value: object) -> str:
     return value
 
 
+def _company_logo_url(value: object) -> str | None:
+    if not isinstance(value, str) or len(value) > 2000:
+        return None
+    try:
+        parts = urlsplit(value)
+        port = parts.port
+    except ValueError:
+        return None
+    if (
+        parts.scheme.lower() != "https"
+        or not parts.hostname
+        or parts.username is not None
+        or parts.password is not None
+        or port not in (None, 443)
+        or any(char.isspace() or ord(char) < 0x20 for char in value)
+    ):
+        return None
+    return value
+
+
 def _experience_level(value: object) -> str:
     if not isinstance(value, str):
         return ""
@@ -167,6 +187,9 @@ def _map_listing(item: object) -> dict | None:
         "source_job_id": str(job_id).strip()[:100],
         "title": title.strip()[:250],
         "company": company.strip()[:250],
+        "company_logo_url": _company_logo_url(
+            item.get("companyLogo") or item.get("companyLogoUrl")
+        ),
         "location": location,
         "url": url,
         "description": description,

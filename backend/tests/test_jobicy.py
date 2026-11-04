@@ -55,6 +55,7 @@ def _job(**overrides):
         "url": "https://jobicy.com/jobs/123-python-engineer",
         "jobTitle": "Python Engineer",
         "companyName": "Example Ltd",
+        "companyLogo": "https://cdn.example.test/company.png",
         "jobGeo": "India",
         "jobType": ["Full-Time", "Remote"],
         "jobLevel": "Entry",
@@ -96,6 +97,7 @@ def test_search_maps_recent_listings_and_uses_public_api(monkeypatch):
     assert listing["source_job_id"] == "123"
     assert listing["title"] == "Python Engineer"
     assert listing["company"] == "Example Ltd"
+    assert listing["company_logo_url"] == "https://cdn.example.test/company.png"
     assert listing["location"] == "India"
     assert listing["url"] == "https://jobicy.com/jobs/123-python-engineer"
     assert listing["description"] == "Python Engineer Build Python and React services."
@@ -160,6 +162,24 @@ def test_invalid_source_links_and_unknown_locations_are_not_returned():
     )
 
     assert result["results"] == []
+
+
+def test_invalid_company_logo_urls_are_omitted():
+    FakeClient.response = FakeResponse(
+        payload={
+            "jobs": [_job(companyLogo="http://127.0.0.1/logo.png")],
+            "hasMore": False,
+            "nextCursor": None,
+        }
+    )
+
+    result = jobicy.search_jobicy_jobs(
+        what="engineer",
+        where="India",
+        geo="apac",
+    )
+
+    assert result["results"][0]["company_logo_url"] is None
 
 
 def test_remote_jobs_stay_when_the_source_location_is_broad():

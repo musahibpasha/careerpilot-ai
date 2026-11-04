@@ -5,6 +5,7 @@ import { apiFetch as fetch } from "./api";
 import {
   Activity,
   ArrowUpRight,
+  Bookmark,
   Bot,
   BriefcaseBusiness,
   CheckCircle2,
@@ -17,6 +18,7 @@ import {
   Lightbulb,
   List,
   Lock,
+  LogOut,
   MapPin,
   Menu,
   Plus,
@@ -27,6 +29,7 @@ import {
   ShieldCheck,
   Sparkles,
   Target,
+  Trash2,
   Upload,
   User,
   X,
@@ -48,6 +51,24 @@ const STATUS_LABELS: Record<string, string> = {
   rejected: "Rejected",
   withdrawn: "Withdrawn",
 };
+const APPLY_STATUS_LABELS: Record<string, string> = {
+  not_applied: "Not Applied",
+  applied: "Applied",
+  interview: "Interview",
+  assessment: "Assessment",
+  rejected: "Rejected",
+  offer_received: "Offer Received",
+  withdrawn: "Withdrawn",
+};
+const APPLY_BOARD_STATUSES = [
+  "not_applied",
+  "applied",
+  "interview",
+  "assessment",
+  "rejected",
+  "offer_received",
+  "withdrawn",
+] as const;
 
 const KANBAN_STATUSES = Object.keys(STATUS_LABELS);
 
@@ -56,6 +77,14 @@ function statusLabel(status: string | null): string {
   return (
     STATUS_LABELS[status] ??
     status.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase())
+  );
+}
+
+function hasConfirmedApplication(application: Application): boolean {
+  return (
+    application.apply_status !== "not_applied" ||
+    application.applied_at !== null ||
+    application.apply_status_history.some((entry) => entry.to_status === "applied")
   );
 }
 
@@ -92,11 +121,12 @@ function saveSetting(key: string, value: string) {
   }
 }
 
-type Page = "dashboard" | "jobs" | "applications" | "copilot";
+type Page = "dashboard" | "jobs" | "saved" | "applications" | "copilot";
 
 const PAGE_HASH: Record<Page, string> = {
   dashboard: "#/",
   jobs: "#/jobs",
+  saved: "#/saved",
   applications: "#/applications",
   copilot: "#/copilot",
 };
@@ -106,6 +136,7 @@ const PAGE_HASH: Record<Page, string> = {
 function pageFromHash(): Page {
   const h = window.location.hash;
   if (h.startsWith("#/jobs")) return "jobs";
+  if (h.startsWith("#/saved")) return "saved";
   if (h.startsWith("#/applications")) return "applications";
   if (h.startsWith("#/copilot")) return "copilot";
   return "dashboard";
@@ -126,6 +157,8 @@ export type Job = {
   id: string;
   title: string;
   company: string;
+  is_saved?: boolean;
+  created_at?: string;
   location: string | null;
   source: string;
   source_job_id?: string | null;
@@ -204,6 +237,7 @@ type DiscoveredJob = {
   source_job_id: string;
   title: string;
   company: string;
+  company_logo_url?: string | null;
   location: string | null;
   url: string;
   application_url?: string | null;
@@ -299,6 +333,7 @@ function MatchAnalysis({
   plan,
   planLoading,
   onLoadPlan,
+  isSaved = true,
   materials,
   materialsLoading,
   onGenerateMaterials,
@@ -314,6 +349,7 @@ function MatchAnalysis({
   plan?: ApplicationPlan | null;
   planLoading?: boolean;
   onLoadPlan?: () => void;
+  isSaved?: boolean;
   materials?: ApplicationMaterials | null;
   materialsLoading?: boolean;
   onGenerateMaterials?: () => void;
@@ -366,7 +402,7 @@ function MatchAnalysis({
     >
       <div className="analysis" role="dialog" aria-modal="true" aria-label={`Match analysis for ${job.title}`}>
         <div className="analysis-top">
-          <div className="company-logo">{job.company.slice(0, 1).toUpperCase()}</div>
+          <div className="company-logo" aria-label={`${job.company} logo placeholder`}>{companyInitials(job.company)}</div>
           <div>
             <h2>{job.title}</h2>
             <p>
@@ -677,34 +713,42 @@ function MatchAnalysis({
           </>
         ) : (
           <p className="analysis-note">
-            Generate a job-specific cover letter and resume wording from your confirmed profile.
+            {isSaved
+              ? "Generate a job-specific cover letter and resume wording from your confirmed profile."
+              : "Save this job first to generate tailored documents from your confirmed profile."}
           </p>
         )}
 
         <div className="analysis-actions">
-          <button
-            type="button"
-            className="secondary-button"
-            onClick={() => onLoadPlan?.()}
-            disabled={planLoading || busy}
-          >
-            {planLoading ? "Loading plan..." : plan ? "Refresh plan" : "Build application plan"}
-          </button>
-          <button
-            type="button"
-            className="secondary-button"
-            onClick={() => onGenerateMaterials?.()}
-            disabled={materialsLoading || busy}
-          >
-            {materialsLoading
-              ? "Generating AI drafts..."
-              : materials
-              ? "Regenerate cover letter and resume drafts"
-              : "Generate cover letter and resume drafts"}
-          </button>
-          <button className="primary-button" onClick={onTrack} disabled={busy}>
-            Track job
-          </button>
+          {isSaved ? (
+            <>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => onLoadPlan?.()}
+                disabled={planLoading || busy}
+              >
+                {planLoading ? "Loading plan..." : plan ? "Refresh plan" : "Build application plan"}
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => onGenerateMaterials?.()}
+                disabled={materialsLoading || busy}
+              >
+                {materialsLoading
+                  ? "Generating AI drafts..."
+                  : materials
+                  ? "Regenerate cover letter and resume drafts"
+                  : "Generate cover letter and resume drafts"}
+              </button>
+              <button className="primary-button" onClick={onTrack} disabled={busy}>
+                Track job
+              </button>
+            </>
+          ) : (
+            <p className="analysis-note">Save this job to open its application plan and document tools.</p>
+          )}
           {job.url && (
             <a className="secondary-button" href={job.url} target="_blank" rel="noreferrer">
               Open posting <ArrowUpRight size={14} />
@@ -1078,6 +1122,11 @@ function numberOrNull(v: string): number | null {
   return v.trim() === "" ? null : Number(v);
 }
 
+function companyInitials(company: string): string {
+  const initials = company.trim().split(/\s+/).slice(0, 2).map((part) => part[0] ?? "").join("");
+  return initials.toUpperCase() || "?";
+}
+
 function emptyJobForm() {
   return {
     title: "",
@@ -1128,9 +1177,24 @@ function MatchReasons({ reasons }: { reasons: string[] }) {
   );
 }
 
-function App() {
+function App({
+  accountName = "",
+  accountEmail = "",
+  onLogout,
+}: {
+  accountName?: string;
+  accountEmail?: string;
+  onLogout?: () => void;
+}) {
   const [jobs, setJobs] = useState<Job[]>([]);
+  const [savedJobs, setSavedJobs] = useState<Job[]>([]);
   const [applications, setApplications] = useState<Application[]>([]);
+  const [recommendedJobs, setRecommendedJobs] = useState<DiscoveredJob[]>([]);
+  const [recommendationLoading, setRecommendationLoading] = useState(false);
+  const [recommendationLastUpdated, setRecommendationLastUpdated] = useState<string | null>(null);
+  const [recommendationSourceFailures, setRecommendationSourceFailures] = useState<string[]>([]);
+  const [recommendationMessage, setRecommendationMessage] = useState("");
+  const recommendationsStarted = useRef(false);
   const [profile, setProfile] = useState<Profile>(null);
   const [dashboardLoadState, setDashboardLoadState] = useState<
     "loading" | "ready" | "error"
@@ -1140,10 +1204,18 @@ function App() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [minMatch, setMinMatch] = useState(0);
   const [sourceFilter, setSourceFilter] = useState("all");
+  const [locationFilter, setLocationFilter] = useState("all");
   const [sortBy, setSortBy] = useState<"best" | "newest" | "company">("best");
+  const [applicationQuery, setApplicationQuery] = useState("");
+  const [applicationStatusFilter, setApplicationStatusFilter] = useState("all");
+  const [applicationCompanyFilter, setApplicationCompanyFilter] = useState("all");
+  const [applicationDateFilter, setApplicationDateFilter] = useState("all");
   // Application tracker: board (Kanban) or list, remembered between visits.
   const [trackerView, setTrackerView] = useState<"board" | "list">(() =>
     readSetting("cp-tracker-view", "board", ["board", "list"]),
+  );
+  const [applicationBoardMode, setApplicationBoardMode] = useState<"application" | "workflow">(() =>
+    readSetting("cp-application-board-mode", "application", ["application", "workflow"]),
   );
   const [hideEmpty, setHideEmpty] = useState<boolean>(
     () => readSetting("cp-hide-empty", "no", ["yes", "no"]) === "yes",
@@ -1172,6 +1244,9 @@ function App() {
   const [discoveryError, setDiscoveryError] = useState(false);
   const discoveryRequestId = useRef(0);
   const [savingDiscoveryId, setSavingDiscoveryId] = useState<string | null>(null);
+  const [dismissedDiscoveryIds, setDismissedDiscoveryIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [pasteText, setPasteText] = useState("");
   const [pasteOpen, setPasteOpen] = useState(true);
   const [importing, setImporting] = useState(false);
@@ -1277,12 +1352,14 @@ function App() {
 
     const [
       jobsResult,
+      savedJobsResult,
       applicationsResult,
       profileResult,
       preferencesResult,
       resumesResult,
     ] = await Promise.allSettled([
       get("/api/jobs"),
+      get("/api/jobs/saved"),
       get("/api/applications"),
       get("/api/profile"),
       get("/api/preferences"),
@@ -1293,6 +1370,9 @@ function App() {
 
     if (jobsResult.status === "fulfilled") setJobs(jobsResult.value);
     else problems.push(String(jobsResult.reason?.message ?? "jobs failed"));
+
+    if (savedJobsResult.status === "fulfilled") setSavedJobs(savedJobsResult.value);
+    else problems.push(String(savedJobsResult.reason?.message ?? "saved jobs failed"));
 
     if (applicationsResult.status === "fulfilled")
       setApplications(applicationsResult.value);
@@ -1424,6 +1504,123 @@ function App() {
     }
   }
 
+  async function refreshRecommendations() {
+    if (!resumes.some((resume) => resume.is_active)) {
+      setRecommendationMessage("Upload a resume or select an active resume to get recommendations.");
+      return;
+    }
+    const roles = (profile?.target_roles ?? []).map((role) => role.trim()).filter(Boolean);
+    const skills = (profile?.skills ?? []).map((skill) => skill.trim()).filter(Boolean);
+    const what = (roles.length ? roles.slice(0, 3).join(" OR ") : skills.slice(0, 5).join(" "))
+      .slice(0, 100);
+    if (!what) {
+      recommendationsStarted.current = true;
+      setRecommendationMessage("Add target roles or skills to your profile to find relevant jobs.");
+      return;
+    }
+
+    recommendationsStarted.current = true;
+    setRecommendationLoading(true);
+    setRecommendationMessage("");
+    setRecommendationSourceFailures([]);
+    const where = preferencesForm.locations.trim() || profile?.location?.trim() || "";
+    const location = where.toLocaleLowerCase();
+    const geo = /\b(canada)\b/.test(location)
+      ? "canada"
+      : /\b(uk|united kingdom)\b/.test(location)
+        ? "uk"
+        : /\b(europe|germany|france|spain|italy|netherlands|ireland|sweden|poland)\b/.test(location)
+          ? "europe"
+          : /\b(usa|united states|us)\b/.test(location)
+            ? "usa"
+            : "apac";
+    const sources = [
+      ...JOB_SEARCH_SOURCES.map((source) => ({
+        id: source.id,
+        label: source.label,
+        url: `${API}/api/jobs/discover/board?${new URLSearchParams({
+          site: source.id,
+          what,
+          where,
+          sort_by: "match",
+        })}`,
+      })),
+      {
+        id: "jobicy",
+        label: "Jobicy",
+        url: `${API}/api/jobs/discover/jobicy?${new URLSearchParams({
+          what,
+          where,
+          geo,
+        })}`,
+      },
+    ];
+
+    try {
+      const responses = await Promise.allSettled(
+        sources.map(async (source) => {
+          const response = await fetch(source.url);
+          const data = await response.json().catch(() => null);
+          if (!response.ok) {
+            throw new Error(errorText(data, `HTTP ${response.status}`));
+          }
+          if (!Array.isArray(data?.results)) {
+            throw new Error("The source returned an invalid response.");
+          }
+          return {
+            source: source.id,
+            label: source.label,
+            listings: (data.results as DiscoveredJob[]).map((listing) => ({
+              ...listing,
+              source: source.id,
+            })),
+          };
+        }),
+      );
+
+      const fulfilled = responses.flatMap((result) =>
+        result.status === "fulfilled" ? [result.value] : [],
+      );
+      const failed = responses.flatMap((result, index) =>
+        result.status === "rejected" ? [sources[index].label] : [],
+      );
+      const seen = new Set<string>();
+      const unique = fulfilled
+        .flatMap((source) => source.listings)
+        .filter((job) => {
+          let key = `${job.source}:${job.source_job_id}`;
+          try {
+            const url = new URL(job.url);
+            key = `${url.hostname.toLocaleLowerCase()}${url.pathname.replace(/\/+$/, "").toLocaleLowerCase()}`;
+          } catch {
+            key = `${job.title.trim().toLocaleLowerCase()}|${job.company.trim().toLocaleLowerCase()}|${job.source}`;
+          }
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        })
+        .sort((a, b) => b.match_score - a.match_score)
+        .slice(0, 6);
+
+      setRecommendedJobs(unique);
+      setRecommendationSourceFailures(failed);
+      if (fulfilled.length > 0) setRecommendationLastUpdated(new Date().toISOString());
+      if (fulfilled.length === 0) {
+        setRecommendationMessage("Recommendations could not be refreshed because all job sources were unavailable.");
+      } else if (failed.length > 0) {
+        setRecommendationMessage(`Some job sources could not be reached: ${failed.join(", ")}.`);
+      } else if (unique.length === 0) {
+        setRecommendationMessage("No matching recommendations are available right now. Try Find Jobs.");
+      }
+    } catch (reason) {
+      setRecommendationMessage(
+        reason instanceof Error ? reason.message : "Could not load recommendations.",
+      );
+    } finally {
+      setRecommendationLoading(false);
+    }
+  }
+
   function selectJobSource(source: JobSearchSource) {
     if (source !== jobSource) clearDiscoveryResults();
     setJobSource(source);
@@ -1469,14 +1666,21 @@ function App() {
     }
   }
 
-  async function saveDiscoveredJob(job: DiscoveredJob) {
+  async function saveDiscoveredJob(job: DiscoveredJob): Promise<Job | null> {
     setSavingDiscoveryId(job.source_job_id);
     setDiscoveryMessage("");
     try {
-      const response = await fetch(`${API}/api/jobs`, {
-        method: "POST",
+      const existing = jobs.find(
+        (saved) =>
+          saved.source === job.source &&
+          saved.source_job_id === job.source_job_id,
+      );
+      const response = await fetch(
+        existing ? `${API}/api/jobs/${existing.id}/saved` : `${API}/api/jobs`,
+        {
+        method: existing ? "PUT" : "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+        body: JSON.stringify(existing ? { saved: true } : {
           title: job.title,
           company: job.company,
           location: job.location,
@@ -1500,19 +1704,97 @@ function App() {
       const data = await response.json().catch(() => null);
       if (response.status === 409) {
         setDiscoveryMessage("This listing is already saved.");
-        return;
+        return existing && existing.is_saved !== false ? existing : null;
       }
       if (!response.ok) {
         throw new Error(errorText(data, `Could not save this listing (HTTP ${response.status}).`));
       }
       setJobs((current) => [data, ...current.filter((saved) => saved.id !== data.id)]);
+      if (!applications.some((application) =>
+        application.job_id === data.id && hasConfirmedApplication(application),
+      )) {
+        setSavedJobs((current) => [data, ...current.filter((saved) => saved.id !== data.id)]);
+      }
       setNotice(`Saved ${job.title} and calculated its match score.`);
-      setDiscoveryMessage("Listing saved to Find Jobs.");
+      setDiscoveryMessage("Listing saved to Saved Jobs.");
+      return data as Job;
     } catch (e) {
       setDiscoveryMessage(e instanceof Error ? e.message : "Could not save this listing.");
+      setNotice(e instanceof Error ? e.message : "Could not save this listing.");
+      return null;
     } finally {
       setSavingDiscoveryId(null);
     }
+  }
+
+  async function removeSavedJob(job: Job) {
+    try {
+      const response = await fetch(`${API}/api/jobs/${job.id}/saved`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ saved: false }),
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(errorText(data, "Could not remove this job from Saved Jobs."));
+      }
+      setJobs((current) => current.map((item) => item.id === job.id ? data : item));
+      setSavedJobs((current) => current.filter((item) => item.id !== job.id));
+      setNotice(`${job.title} removed from Saved Jobs.`);
+    } catch (reason) {
+      setNotice(reason instanceof Error ? reason.message : "Could not remove this job from Saved Jobs.");
+    }
+  }
+
+  function applicationForListing(job: Job | DiscoveredJob): Application | undefined {
+    const savedJob = jobs.find(
+      (item) => item.source === job.source && item.source_job_id === job.source_job_id,
+    );
+    const persistedId =
+      "id" in job && !job.id.startsWith("discovery:")
+        ? job.id
+        : savedJob?.id;
+    return persistedId
+      ? applications.find((application) => application.job_id === persistedId)
+      : undefined;
+  }
+
+  function discoveryListingFromJob(job: Job): DiscoveredJob | null {
+    if (!job.source_job_id || !job.url) return null;
+    return {
+      source: job.source,
+      source_job_id: job.source_job_id,
+      title: job.title,
+      company: job.company,
+      location: job.location,
+      url: job.url,
+      application_url: job.application_url,
+      description: job.description,
+      skills: job.skills,
+      nice_to_have_skills: job.nice_to_have_skills ?? [],
+      employment_types: job.employment_types ?? [],
+      published_at: job.published_at ?? null,
+      work_arrangement: job.work_arrangement ?? "",
+      experience_level: job.experience_level ?? "",
+      salary_min: job.salary_min ?? null,
+      salary_max: job.salary_max ?? null,
+      salary_currency: job.salary_currency ?? "",
+      salary_period: job.salary_period ?? "year",
+      match_score: job.match_score,
+      match_reasons: job.match_reasons,
+      match_confidence: job.match_confidence ?? "",
+      match_breakdown: job.match_breakdown ?? [],
+    };
+  }
+
+  async function applyToDiscoveredJob(job: DiscoveredJob) {
+    const existing = jobs.find(
+      (item) => item.source === job.source && item.source_job_id === job.source_job_id,
+    );
+    const persisted = existing && existing.is_saved !== false
+      ? existing
+      : await saveDiscoveredJob(job);
+    if (persisted) await openApplyWorkflow(persisted);
   }
 
   useEffect(() => {
@@ -1524,6 +1806,17 @@ function App() {
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
+
+  useEffect(() => {
+    if (
+      (page === "dashboard" || page === "jobs") &&
+      dashboardLoadState === "ready" &&
+      resumes.some((resume) => resume.is_active) &&
+      !recommendationsStarted.current
+    ) {
+      void refreshRecommendations();
+    }
+  }, [page, dashboardLoadState, resumes]);
 
   useEffect(() => {
     setFormError("");
@@ -1566,7 +1859,7 @@ function App() {
     );
     const text = query.toLowerCase();
 
-    const list = jobs.filter((j) => {
+    const list = savedJobs.filter((j) => {
       const matchesText = `${j.title} ${j.company} ${j.location || ""}`
         .toLowerCase()
         .includes(text);
@@ -1576,24 +1869,60 @@ function App() {
         matchesText &&
         j.match_score >= minMatch &&
         (sourceFilter === "all" || j.source === sourceFilter) &&
+        (locationFilter === "all" || (j.location || "Not specified") === locationFilter) &&
         (statusFilter === "all" || status === statusFilter)
       );
     });
 
-    // `jobs` arrives newest-first from the API, so "newest" keeps that order.
     if (sortBy === "best") {
       list.sort((a, b) => b.match_score - a.match_score);
+    } else if (sortBy === "newest") {
+      list.sort((a, b) => new Date(b.created_at ?? 0).getTime() - new Date(a.created_at ?? 0).getTime());
     } else if (sortBy === "company") {
       list.sort((a, b) => a.company.localeCompare(b.company));
     }
     return list;
-  }, [jobs, applications, query, statusFilter, minMatch, sourceFilter, sortBy]);
+  }, [savedJobs, applications, query, statusFilter, minMatch, sourceFilter, locationFilter, sortBy]);
 
-  const appliedCount = applications.filter((a) =>
-    ["submitted", "interview", "offer", "rejected"].includes(a.status),
-  ).length;
+  const confirmedApplications = useMemo(
+    () => applications.filter(hasConfirmedApplication),
+    [applications],
+  );
+  const filteredApplications = useMemo(() => {
+    const text = applicationQuery.trim().toLocaleLowerCase();
+    const cutoff = applicationDateFilter === "all"
+      ? null
+      : Date.now() - ({
+          week: 7,
+          month: 30,
+          year: 365,
+        }[applicationDateFilter] ?? 0) * 24 * 60 * 60 * 1000;
+    return confirmedApplications
+      .filter((application) => {
+        const appliedAt = application.applied_at || application.apply_updated_at;
+        const appliedTime = appliedAt ? new Date(appliedAt).getTime() : Number.NaN;
+        return (
+          `${application.job_title} ${application.company}`.toLocaleLowerCase().includes(text) &&
+          (applicationStatusFilter === "all" || application.apply_status === applicationStatusFilter) &&
+          (applicationCompanyFilter === "all" || application.company === applicationCompanyFilter) &&
+          (cutoff === null || (Number.isFinite(appliedTime) && appliedTime >= cutoff))
+        );
+      })
+      .sort((a, b) => {
+        const aTime = new Date(a.applied_at || a.apply_updated_at || 0).getTime();
+        const bTime = new Date(b.applied_at || b.apply_updated_at || 0).getTime();
+        return bTime - aTime;
+      });
+  }, [
+    confirmedApplications,
+    applicationQuery,
+    applicationStatusFilter,
+    applicationCompanyFilter,
+    applicationDateFilter,
+  ]);
+  const appliedCount = confirmedApplications.length;
 
-  const reviewCount = applications.filter(
+  const reviewCount = confirmedApplications.filter(
     (a) => ["under_review", "ready_for_approval"].includes(a.status),
   ).length;
 
@@ -1614,6 +1943,7 @@ function App() {
         throw new Error(errorText(data, "Could not save your choice."));
       }
       setJobs((list) => list.map((j) => (j.id === job.id ? data : j)));
+      setSavedJobs((list) => list.map((j) => (j.id === job.id ? data : j)));
       setDismissingId(null);
     } catch (e) {
       setNotice(e instanceof Error ? e.message : "Could not save your choice.");
@@ -2131,14 +2461,20 @@ function App() {
   }
 
   async function trackJob(job: Job) {
+    if (job.id.startsWith("discovery:")) {
+      const listing = discoveryListingFromJob(job);
+      if (!listing) {
+        setNotice("This search listing cannot be saved for tracking.");
+        return;
+      }
+      const persisted = await saveDiscoveredJob(listing);
+      if (persisted) await trackJob(persisted);
+      return;
+    }
+
     // Prevent creating a duplicate application for the same job.
     const existingApplication = applications.find(
-      (application) =>
-        String(application.job_id).trim() === String(job.id).trim() ||
-        (application.job_title.trim().toLowerCase() ===
-          job.title.trim().toLowerCase() &&
-          application.company.trim().toLowerCase() ===
-            job.company.trim().toLowerCase()),
+      (application) => application.job_id === job.id,
     );
 
     if (existingApplication) {
@@ -2183,6 +2519,15 @@ function App() {
   }
 
   async function openApplyWorkflow(job: Job) {
+    const knownApplication = applications.find(
+      (candidate) => candidate.job_id === job.id,
+    );
+    if (knownApplication && hasConfirmedApplication(knownApplication)) {
+      setNotice("You have already confirmed this application.");
+      goTo("applications");
+      return;
+    }
+
     setBusy(true);
     setNotice("");
     try {
@@ -2199,12 +2544,11 @@ function App() {
         if (!response.ok) {
           throw new Error(errorText(data, "Could not open the application workflow."));
         }
-        application = data as Application;
-        setApplications((current) =>
-          current.some((item) => item.id === application?.id)
-            ? current
-            : [application as Application, ...current],
-        );
+          application = data as Application;
+          setApplications((current) => [
+            application as Application,
+            ...current.filter((item) => item.id !== application?.id),
+          ]);
       }
       setApplySelection({ job, application });
     } catch (reason) {
@@ -2279,6 +2623,11 @@ function App() {
     saveSetting("cp-tracker-view", view);
   }
 
+  function chooseApplicationBoardMode(mode: "application" | "workflow") {
+    setApplicationBoardMode(mode);
+    saveSetting("cp-application-board-mode", mode);
+  }
+
   function toggleHideEmpty(value: boolean) {
     setHideEmpty(value);
     saveSetting("cp-hide-empty", value ? "yes" : "no");
@@ -2334,25 +2683,31 @@ function App() {
   }
 
   const firstName = profile?.full_name?.trim().split(/\s+/)[0] ?? "";
+  const savedJobCount = savedJobs.length;
 
   const pageTitle: Record<Page, { eyebrow: string; title: string; sub: string }> = {
     dashboard: {
       eyebrow: "DASHBOARD",
       title: firstName ? `Welcome back, ${firstName}` : "Welcome back",
       sub:
-        jobs.length === 0
-          ? "Add your first job to start scoring opportunities."
-          : `${jobs.length} job${jobs.length === 1 ? "" : "s"} saved · ${reviewCount} awaiting your review`,
+        savedJobCount === 0
+          ? "Search job boards and save opportunities that interest you."
+          : `${savedJobCount} saved job${savedJobCount === 1 ? "" : "s"} · ${appliedCount} confirmed application${appliedCount === 1 ? "" : "s"}`,
     },
     jobs: {
       eyebrow: "FIND JOBS",
       title: "Find jobs",
       sub: "Discover, match, and save opportunities.",
     },
+    saved: {
+      eyebrow: "YOUR OPPORTUNITIES",
+      title: "Saved Jobs",
+      sub: "Only opportunities you explicitly saved appear here.",
+    },
     applications: {
       eyebrow: "YOUR PIPELINE",
       title: "Applications",
-      sub: "Drag a card to another column, or use its Move to menu.",
+      sub: "Applications you confirmed submitting, with status and notes.",
     },
     copilot: {
       eyebrow: "AI COPILOT",
@@ -2387,6 +2742,7 @@ function App() {
     statusFilter !== "all",
     minMatch > 0,
     sourceFilter !== "all",
+    locationFilter !== "all",
     sortBy !== "best",
   ].filter(Boolean).length;
 
@@ -2415,7 +2771,7 @@ function App() {
   }
 
   useEffect(() => {
-    if (!analysisJob) return;
+    if (!analysisJob || analysisJob.id.startsWith("discovery:")) return;
     void loadApplicationPlan(analysisJob);
   }, [analysisJob?.id]);
 
@@ -2740,7 +3096,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
   }
 
   function runQuickAction(key: string) {
-    const activeJobs = jobs.filter((j) => j.feedback !== "not_interested");
+    const activeJobs = savedJobs.filter((j) => j.feedback !== "not_interested");
 
     if (key === "top") {
       say({ role: "user", text: "Show my best matches" });
@@ -2751,14 +3107,14 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
         role: "assistant",
         text: top.length
           ? "These saved jobs currently score highest against your profile:"
-          : "You have no saved jobs yet. Add one and I can score it against your profile.",
+          : "You have no saved jobs yet. Search for a job and save it to see its match score.",
         lines: top.map(
           (j) => `${j.title} at ${j.company} — ${Math.round(j.match_score)}% match`,
         ),
         derived: true,
         cta: top.length
-          ? { label: "Open Find jobs", run: () => goTo("jobs") }
-          : { label: "Add a job", run: () => setShowJobForm(true) },
+          ? { label: "Open Saved Jobs", run: () => goTo("saved") }
+          : { label: "Find jobs", run: () => goTo("jobs") },
       });
     } else if (key === "gaps") {
       say({ role: "user", text: "What skills am I missing?" });
@@ -2824,20 +3180,189 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
           derived: true,
         }),
       );
-    } else if (key === "add") {
-      say({ role: "user", text: "Add a job from a posting" });
-      say({
-        role: "assistant",
-        text: "Paste the posting into Add job and I will fill the form for you to review. Nothing is saved until you confirm.",
-        cta: { label: "Add a job", run: () => setShowJobForm(true) },
-      });
     }
+  }
+
+  function renderRecommendationCard(job: DiscoveredJob) {
+    const application = applicationForListing(job);
+    const alreadyApplied = Boolean(application && hasConfirmedApplication(application));
+    const id = `discovery:${job.source}:${job.source_job_id}`;
+    const score = Math.round(job.match_score);
+    const saved = jobs.some((existing) =>
+      existing.source === job.source &&
+      existing.source_job_id === job.source_job_id &&
+      existing.is_saved !== false,
+    );
+    return (
+      <article className="job-card recommendation-card" key={`${job.source}:${job.source_job_id}`}>
+        <div className="recommendation-card-top">
+          <div className="company-logo" aria-label={`${job.company} logo`}>
+            {companyInitials(job.company)}
+            {job.company_logo_url && (
+              <img
+                src={job.company_logo_url}
+                alt=""
+                loading="lazy"
+                referrerPolicy="no-referrer"
+                onError={(event) => event.currentTarget.remove()}
+              />
+            )}
+          </div>
+          <span className={`source-match-score ${scoreClass(job.match_score)}`}>{score}% match</span>
+        </div>
+        <div className="job-info">
+          <h3>{job.title}</h3>
+          <p className="recommendation-company">{job.company}</p>
+        </div>
+        <div className="recommendation-details">
+          {job.location && <span><MapPin size={13} />{job.location}</span>}
+          {job.work_arrangement && <span>{job.work_arrangement}</span>}
+          {job.employment_types.slice(0, 2).map((type) => <span key={type}>{type}</span>)}
+          {(job.salary_min != null || job.salary_max != null) && (
+            <span>
+              {job.salary_currency ? `${job.salary_currency} ` : ""}
+              {job.salary_min != null ? job.salary_min.toLocaleString() : "—"}
+              –{job.salary_max != null ? job.salary_max.toLocaleString() : "—"}
+              {" / "}{job.salary_period}
+            </span>
+          )}
+          <span className="recommendation-source">
+            {JOB_SEARCH_SOURCES.find((source) => source.id === job.source)?.label ?? job.source}
+            {job.published_at && !Number.isNaN(new Date(job.published_at).getTime())
+              ? ` · ${new Date(job.published_at).toLocaleDateString()}`
+              : ""}
+          </span>
+        </div>
+        <div className="job-actions">
+          <button
+            type="button"
+            className="secondary-button analyze-button"
+            onClick={() => setAnalysisJob({ ...job, id, is_saved: false })}
+          >
+            <Sparkles size={14} /> Match Analysis
+          </button>
+          {alreadyApplied ? (
+            <>
+              <span className="applied-indicator">Applied</span>
+              <button type="button" className="secondary-button" onClick={() => goTo("applications")}>
+                View Application
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                className="secondary-button"
+                disabled={saved}
+                onClick={() => void saveDiscoveredJob(job)}
+              >
+                <Bookmark size={14} /> {saved ? "Saved" : "Save Job"}
+              </button>
+              <button
+                type="button"
+                className="primary-button"
+                disabled={busy}
+                onClick={() => void applyToDiscoveredJob(job)}
+              >
+                Apply
+              </button>
+            </>
+          )}
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={() => setRecommendedJobs((current) =>
+              current.filter((item) => item.source !== job.source || item.source_job_id !== job.source_job_id),
+            )}
+          >
+            <EyeOff size={14} /> Not interested
+          </button>
+          <a href={job.url} target="_blank" rel="noreferrer" className="secondary-button">
+            Open Original Listing <ArrowUpRight size={14} />
+          </a>
+        </div>
+      </article>
+    );
+  }
+
+  function renderRecommendedJobsSection(placement: "dashboard" | "jobs") {
+    const hasActiveResume = resumes.some((resume) => resume.is_active);
+    return (
+      <section
+        className={`panel recommended-jobs recommended-jobs--${placement} ${
+          placement === "dashboard" ? "dashboard-section-enter" : ""
+        }`}
+        aria-label="Recommended jobs"
+      >
+        <div className="panel-head recommended-jobs-head">
+          <div>
+            <h2>Recommended Jobs</h2>
+            <p>
+              Matched against your profile and active resume across LinkedIn, Naukri, Indeed,
+              Glassdoor, and Jobicy.
+              {recommendationLastUpdated &&
+                ` Last updated ${new Date(recommendationLastUpdated).toLocaleString()}.`}
+            </p>
+          </div>
+          <button
+            type="button"
+            className="secondary-button recommendation-refresh"
+            onClick={() => void refreshRecommendations()}
+            disabled={recommendationLoading}
+            aria-label="Refresh recommended jobs"
+          >
+            <RotateCcw size={14} className={recommendationLoading ? "recommendation-spinning" : ""} />
+            {recommendationLoading ? "Refreshing…" : "Refresh"}
+          </button>
+        </div>
+        {!hasActiveResume ? (
+          <div className="recommendation-empty">
+            <p>Upload or select an active resume to see jobs matched to your experience.</p>
+            <button type="button" className="secondary-button" onClick={() => openProfile("my-resumes")}>
+              <Upload size={14} /> Open Resumes
+            </button>
+          </div>
+        ) : (
+          <>
+            {recommendationMessage && (
+              <p className="recommendation-message" role="status">{recommendationMessage}</p>
+            )}
+            {recommendationSourceFailures.length > 0 && recommendedJobs.length > 0 && (
+              <p className="recommendation-message" role="status">
+                Showing available results; unavailable sources: {recommendationSourceFailures.join(", ")}.
+              </p>
+            )}
+            {recommendationLoading && (
+              <p className="recommendation-message" role="status">Searching all supported job sources…</p>
+            )}
+            {recommendedJobs.length > 0 ? (
+              <div className="jobs-list recommendation-grid">
+                {recommendedJobs.map(renderRecommendationCard)}
+              </div>
+            ) : !recommendationLoading && !recommendationMessage ? (
+              <div className="recommendation-empty">
+                <p>No recommendations are available yet. Refresh to search supported job boards.</p>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => void refreshRecommendations()}
+                >
+                  <Search size={14} /> Find recommendations
+                </button>
+              </div>
+            ) : null}
+          </>
+        )}
+      </section>
+    );
   }
 
   // One job card, used by Find jobs (full) and the dashboard (compact).
   function renderJobCard(job: Job, compact = false) {
     const score = Math.round(job.match_score);
     const cls = scoreClass(job.match_score);
+    const application = applicationForListing(job);
+    const alreadyApplied = Boolean(application && hasConfirmedApplication(application));
     const skillsFactor = job.match_breakdown?.find((f) => f.key === "skills");
     const missing = skillsFactor?.details?.missing_must_have ?? [];
 
@@ -2855,7 +3380,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
     if (compact) {
       return (
         <article className="job-card compact-job" key={job.id}>
-          <div className="company-logo">{job.company.slice(0, 1).toUpperCase()}</div>
+          <div className="company-logo" aria-label={`${job.company} logo placeholder`}>{companyInitials(job.company)}</div>
           <div className="job-info">
             <div className="job-title-row">
               <h3>{job.title}</h3>
@@ -2891,7 +3416,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
 
     return (
       <article className="job-card" key={job.id}>
-        <div className="company-logo">{job.company.slice(0, 1).toUpperCase()}</div>
+        <div className="company-logo">{companyInitials(job.company)}</div>
 
         <div className="job-info">
           <div className="job-title-row">
@@ -2913,6 +3438,9 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
             ))}
             {job.published_at && !Number.isNaN(new Date(job.published_at).getTime()) && (
               <span>Posted {new Date(job.published_at).toLocaleDateString()}</span>
+            )}
+            {page === "saved" && job.created_at && !Number.isNaN(new Date(job.created_at).getTime()) && (
+              <span>Saved {new Date(job.created_at).toLocaleDateString()}</span>
             )}
             <span>Source: {job.source}</span>
           </div>
@@ -2966,13 +3494,27 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
           >
             <Bot size={14} /> Automate
           </button>
-          <button
-            className="primary-button"
-            onClick={() => void openApplyWorkflow(job)}
-            disabled={busy}
-          >
-            Apply
-          </button>
+          {alreadyApplied ? (
+            <>
+              <span className="applied-indicator">Applied</span>
+              <button type="button" className="secondary-button" onClick={() => goTo("applications")}>
+                View Application
+              </button>
+            </>
+          ) : (
+            <button
+              className="primary-button"
+              onClick={() => void openApplyWorkflow(job)}
+              disabled={busy}
+            >
+              Apply
+            </button>
+          )}
+          {page === "saved" && (
+            <button type="button" className="ghost-button" onClick={() => void removeSavedJob(job)}>
+              <Trash2 size={14} /> Remove saved
+            </button>
+          )}
           <div className="row">
             <button
               type="button"
@@ -2999,11 +3541,14 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
     );
   }
 
+  const applicationBoardStatuses =
+    applicationBoardMode === "application" ? APPLY_BOARD_STATUSES : KANBAN_STATUSES;
+
   const pipelineCounts = KANBAN_STATUSES.map(
-    (s) => [s, applications.filter((a) => a.status === s).length] as const,
+    (s) => [s, confirmedApplications.filter((a) => a.status === s).length] as const,
   ).filter(([, n]) => n > 0);
 
-  const recentApplications = [...applications]
+  const recentApplications = [...confirmedApplications]
     .sort((a, b) => {
       const timestamp = (application: Application) => {
         const value = Date.parse(application.updated_at);
@@ -3013,16 +3558,11 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
     })
     .slice(0, 4);
 
-  const recommended = [...jobs]
-    .filter((j) => j.feedback !== "not_interested")
-    .sort((a, b) => b.match_score - a.match_score)
-    .slice(0, 3);
-
   const setup = [
     { label: "Add skills to your profile", done: !!profile?.skills?.length },
     { label: "Upload a resume and set one active", done: resumes.some((r) => r.is_active) },
-    { label: "Save at least one job", done: jobs.length > 0 },
-    { label: "Track an application", done: applications.length > 0 },
+    { label: "Save at least one job", done: savedJobCount > 0 },
+    { label: "Confirm an application", done: confirmedApplications.length > 0 },
   ];
 
   const navItems: {
@@ -3035,8 +3575,9 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
   }[] = [
     { key: "dashboard", label: "Dashboard", icon: <LayoutDashboard size={18} />, page: "dashboard" },
     { key: "jobs", label: "Find Jobs", icon: <Search size={18} />, page: "jobs" },
+    { key: "saved", label: "Saved Jobs", icon: <Bookmark size={18} />, page: "saved", count: savedJobCount },
     { key: "resume", label: "Resume", icon: <FileText size={18} />, onClick: () => openProfile("my-resumes") },
-    { key: "applications", label: "Applications", icon: <Kanban size={18} />, page: "applications", count: applications.length },
+    { key: "applications", label: "Applications", icon: <Kanban size={18} />, page: "applications", count: appliedCount },
     { key: "copilot", label: "AI Copilot", icon: <Bot size={18} />, page: "copilot" },
     { key: "profile", label: "Profile", icon: <User size={18} />, onClick: () => openProfile() },
     { key: "settings", label: "Settings", icon: <Settings size={18} />, onClick: openPreferences },
@@ -3128,17 +3669,20 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
           </div>
 
           <div className="topbar-right">
-            {(page === "dashboard" || page === "jobs") && (
-              <button className="primary-button" onClick={() => setShowJobForm(true)}>
-                <Plus size={16} /> Add job
-              </button>
-            )}
             <button className="profile-button" onClick={() => openProfile()}>
               <span className="avatar">
-                {profile?.full_name ? profile.full_name.slice(0, 1).toUpperCase() : "Y"}
+                {(accountName || profile?.full_name || accountEmail || "Y").trim().slice(0, 1).toUpperCase()}
               </span>
-              <span>{profile?.full_name || "Your profile"}</span>
+              <span className="account-identity">
+                <strong>{accountName || profile?.full_name || "Your profile"}</strong>
+                {accountEmail && <small>{accountEmail}</small>}
+              </span>
             </button>
+            {onLogout && (
+              <button type="button" className="secondary-button account-logout" onClick={onLogout} aria-label="Log out">
+                <LogOut size={15} /> <span>Log out</span>
+              </button>
+            )}
           </div>
         </header>
 
@@ -3235,9 +3779,9 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                 className="stat-card clickable"
                 role="button"
                 tabIndex={0}
-                onClick={() => goTo("jobs")}
+                onClick={() => goTo("saved")}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") goTo("jobs");
+                  if (e.key === "Enter" || e.key === " ") goTo("saved");
                 }}
               >
                 <div className="stat-top">
@@ -3246,8 +3790,8 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                     <BriefcaseBusiness size={18} />
                   </span>
                 </div>
-                <strong>{jobs.length}</strong>
-                <small>In your opportunity list</small>
+                <strong>{savedJobCount}</strong>
+                <small>Saved by you</small>
               </div>
 
               <div
@@ -3260,13 +3804,13 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                 }}
               >
                 <div className="stat-top">
-                  <span>Applications tracked</span>
+                  <span>Applications</span>
                   <span className="stat-icon blue">
                     <Activity size={18} />
                   </span>
                 </div>
-                <strong>{applications.length}</strong>
-                <small>{appliedCount} submitted or progressed</small>
+                <strong>{appliedCount}</strong>
+                <small>Confirmed by you</small>
               </div>
 
               <div className="stat-card">
@@ -3297,41 +3841,9 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
             </section>
 
             <div className="dash-grid dashboard-section-enter dashboard-section-enter--2" style={{ marginTop: 20 }}>
-              <section className="panel">
-                <div className="panel-head">
-                  <div>
-                    <h2>Recommended for you</h2>
-                    <p>Your highest-scoring saved jobs. Scores are calculated from your profile and preferences.</p>
-                  </div>
-                  <button className="link-button" onClick={() => goTo("jobs")}>
-                    View all <ArrowUpRight size={14} />
-                  </button>
-                </div>
-
-                {!profile?.skills?.length && (
-                  <div className="rescore-banner">
-                    <span>Your profile has no skills yet, so scores are low confidence.</span>
-                    <button className="secondary-button" onClick={() => openProfile()}>
-                      Add skills
-                    </button>
-                  </div>
-                )}
-
-                {recommended.length === 0 ? (
-                  <div className="empty-state">
-                    <div className="empty-icon">
-                      <BriefcaseBusiness size={25} />
-                    </div>
-                    <h3>Your next opportunity starts here</h3>
-                    <p>Add a job posting to score it against your profile.</p>
-                    <button className="primary-button" onClick={() => setShowJobForm(true)}>
-                      <Plus size={16} /> Add your first job
-                    </button>
-                  </div>
-                ) : (
-                  <div className="jobs-list">{recommended.map((j) => renderJobCard(j, true))}</div>
-                )}
-              </section>
+              <div className="dash-main">
+                {renderRecommendedJobsSection("dashboard")}
+              </div>
 
               <aside className="dash-side">
                 <section className="panel approval-card">
@@ -3369,11 +3881,11 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                         <span
                           className="pipeline-track"
                           role="img"
-                          aria-label={`${n} of ${applications.length} applications are ${statusLabel(s)}`}
+                          aria-label={`${n} of ${confirmedApplications.length} confirmed applications are ${statusLabel(s)}`}
                         >
                           <span
                             style={{
-                              width: `${Math.round((n / applications.length) * 100)}%`,
+                              width: `${confirmedApplications.length ? Math.round((n / confirmedApplications.length) * 100) : 0}%`,
                             }}
                           />
                         </span>
@@ -3476,8 +3988,10 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
           </div>
         )}
 
-        {page === "jobs" && (
+        {(page === "jobs" || page === "saved") && (
           <div className="page-view jobs-page">
+            {page === "jobs" && (
+              <>
             <section className="job-source-card" aria-label="Job source">
               <div className="job-source-heading">
                 <span className="job-source-icon">
@@ -3708,6 +4222,11 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
               <small className="criteria-disclaimer">
                 CareerPilot applies filters using board data and job descriptions where available. Listings missing details needed by a selected filter may be excluded; confirm details on the original posting.
               </small>
+            </section>
+
+            {renderRecommendedJobsSection("jobs")}
+
+            <div className="source-search-output">
               {discoveryBusy && (
                 <p className="source-loading" role="status" aria-live="polite">
                   Searching {JOB_SEARCH_SOURCES.find((source) => source.id === jobSource)?.label}…
@@ -3735,18 +4254,23 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                     <span>{discoveryResults.length} listing{discoveryResults.length === 1 ? "" : "s"}</span>
                   </div>
                   <section className="jobs-list source-search-results">
-                    {discoveryResults.map((job) => {
+                    {discoveryResults
+                      .filter((job) => !dismissedDiscoveryIds.has(`${job.source}:${job.source_job_id}`))
+                      .map((job) => {
                       const saved = jobs.some(
                         (existing) =>
                           existing.source === job.source &&
-                          existing.source_job_id === job.source_job_id,
+                          existing.source_job_id === job.source_job_id &&
+                          existing.is_saved !== false,
                       );
+                      const application = applicationForListing(job);
+                      const alreadyApplied = Boolean(application && hasConfirmedApplication(application));
                       const publishedDate = job.published_at
                         ? new Date(job.published_at)
                         : null;
                       return (
                         <article className="job-card" key={`${job.source}-${job.source_job_id}`}>
-                          <div className="company-logo">{job.company.slice(0, 1).toUpperCase()}</div>
+                          <div className="company-logo" aria-label={`${job.company} logo placeholder`}>{companyInitials(job.company)}</div>
                           <div className="job-info">
                             <div className="source-job-title-row">
                               <h3>{job.title}</h3>
@@ -3786,20 +4310,66 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                           </div>
                           <div className="job-actions">
                             <button
-                              className="primary-button"
+                              className="secondary-button analyze-button"
                               type="button"
-                              disabled={saved || savingDiscoveryId === job.source_job_id}
-                              onClick={() => void saveDiscoveredJob(job)}
+                              onClick={() => {
+                                const savedJob = jobs.find(
+                                  (item) => item.source === job.source &&
+                                    item.source_job_id === job.source_job_id &&
+                                    item.is_saved !== false,
+                                );
+                                setAnalysisJob(savedJob ?? {
+                                  ...job,
+                                  id: `discovery:${job.source}:${job.source_job_id}`,
+                                });
+                              }}
                             >
-                              {saved
-                                ? "Saved"
-                                : savingDiscoveryId === job.source_job_id
-                                  ? "Saving..."
-                                  : "Save job"}
+                              <Sparkles size={14} /> Match analysis
                             </button>
+                            {!alreadyApplied && (
+                              <button
+                                className="primary-button"
+                                type="button"
+                                disabled={saved || savingDiscoveryId === job.source_job_id}
+                                onClick={() => void saveDiscoveredJob(job)}
+                              >
+                                {saved
+                                  ? "Saved"
+                                  : savingDiscoveryId === job.source_job_id
+                                    ? "Saving..."
+                                    : "Save job"}
+                              </button>
+                            )}
+                            {alreadyApplied ? (
+                              <>
+                                <span className="applied-indicator">Applied</span>
+                                <button type="button" className="secondary-button" onClick={() => goTo("applications")}>
+                                  View application
+                                </button>
+                              </>
+                            ) : (
+                              <button
+                                type="button"
+                                className="secondary-button"
+                                disabled={busy}
+                                onClick={() => void applyToDiscoveredJob(job)}
+                              >
+                                Apply
+                              </button>
+                            )}
                             <a href={job.url} target="_blank" rel="noreferrer" className="secondary-button">
                               Original posting <ArrowUpRight size={14} />
                             </a>
+                            <button
+                              type="button"
+                              className="ghost-button"
+                              onClick={() => {
+                                setDismissedDiscoveryIds((current) => new Set(current).add(`${job.source}:${job.source_job_id}`));
+                                setDiscoveryMessage("Listing hidden from these search results.");
+                              }}
+                            >
+                              <EyeOff size={14} /> Not interested
+                            </button>
                           </div>
                         </article>
                       );
@@ -3807,19 +4377,22 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                   </section>
                 </>
               )}
-            </section>
+            </div>
             </>
+              </>
+            )}
 
+            {page === "saved" && (
             <section className="panel search-card saved-matches-card">
               <div className="job-results-heading">
                 <div>
-                  <h2><Sparkles size={18} /> Job matches</h2>
+                  <h2><Bookmark size={18} /> Saved Jobs</h2>
                   <p>
-                    {visibleJobs.length} saved job{visibleJobs.length === 1 ? "" : "s"} matching your profile and preferences
+                    Saved Jobs: {savedJobCount}
                     {activeSavedFilterCount ? ` · ${activeSavedFilterCount} filter${activeSavedFilterCount === 1 ? "" : "s"} active` : ""}
                   </p>
                 </div>
-                <span className="match-count-badge">{visibleJobs.length}</span>
+                <span className="match-count-badge">{savedJobCount}</span>
               </div>
               <div className="saved-job-search-controls">
               <label className="searchbox">
@@ -3876,6 +4449,16 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                   </label>
 
                   <label>
+                    Location
+                    <select value={locationFilter} onChange={(e) => setLocationFilter(e.target.value)}>
+                      <option value="all">All locations</option>
+                      {[...new Set(savedJobs.map((job) => job.location || "Not specified"))]
+                        .sort((a, b) => a.localeCompare(b))
+                        .map((location) => <option key={location} value={location}>{location}</option>)}
+                    </select>
+                  </label>
+
+                  <label>
                     Sort by
                     <select
                       value={sortBy}
@@ -3904,23 +4487,18 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
             )}
 
             <section className="jobs-list saved-job-results-list">
-              {visibleJobs.length === 0 ? (
+              {savedJobCount === 0 || visibleJobs.length === 0 ? (
                 <div className="empty-state">
                   <div className="empty-icon">
-                    <BriefcaseBusiness size={25} />
+                    <Bookmark size={25} />
                   </div>
-                  <h3>{jobs.length === 0 ? "Your next opportunity starts here" : "No jobs match these filters"}</h3>
-                  <p>
-                    {jobs.length === 0
-                      ? "Search a job board or add a posting to start scoring opportunities against your profile."
-                      : "Try clearing the search or lowering the minimum match."}
-                  </p>
-                  {jobs.length === 0 && (
-                    <button className="primary-button" onClick={() => setShowJobForm(true)}>
-                      <Plus size={16} /> Add your first job
+                  <h3>{savedJobCount === 0 ? "No saved jobs yet" : "No saved jobs match these filters"}</h3>
+                  <p>{savedJobCount === 0 ? "Search a job board and save an opportunity to keep it here." : "Try clearing or adjusting your filters."}</p>
+                  {savedJobCount === 0 ? (
+                    <button className="primary-button" onClick={() => goTo("jobs")}>
+                      <Search size={16} /> Find jobs
                     </button>
-                  )}
-                  {jobs.length > 0 && (
+                  ) : (
                     <button
                       type="button"
                       className="secondary-button"
@@ -3929,6 +4507,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                         setStatusFilter("all");
                         setMinMatch(0);
                         setSourceFilter("all");
+                        setLocationFilter("all");
                         setSortBy("best");
                       }}
                     >
@@ -3941,8 +4520,9 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
               )}
             </section>
             </section>
+            )}
 
-            {dismissTip && (
+            {page === "saved" && dismissTip && (
               <div className="rescore-banner" style={{ marginTop: 16 }}>
                 <span>
                   You passed on {dismissTip.count} jobs because of “{dismissTip.label.toLowerCase()}
@@ -3960,7 +4540,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
               </div>
             )}
 
-            {dismissedJobs.length > 0 && (
+            {page === "saved" && dismissedJobs.length > 0 && (
               <details className="dismissed">
                 <summary>Not interested ({dismissedJobs.length})</summary>
                 {dismissedJobs.map((job) => (
@@ -4054,9 +4634,6 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                 <button className="chip" onClick={() => runQuickAction("rescore")} disabled={busy}>
                   <RotateCcw size={14} /> Re-score jobs
                 </button>
-                <button className="chip" onClick={() => runQuickAction("add")}>
-                  <Plus size={14} /> Add a job
-                </button>
               </div>
 
               <form className="composer" onSubmit={(e) => e.preventDefault()}>
@@ -4082,11 +4659,11 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                 </div>
                 <div className="pipeline-row">
                   <span>Saved jobs</span>
-                  <strong>{jobs.length}</strong>
+                  <strong>{savedJobCount}</strong>
                 </div>
                 <div className="pipeline-row">
                   <span>Applications</span>
-                  <strong>{applications.length}</strong>
+                  <strong>{confirmedApplications.length}</strong>
                 </div>
                 <div className="pipeline-row">
                   <span>Profile skills</span>
@@ -4117,13 +4694,60 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
 
         {page === "applications" && (
           <div className="page-view">
-        {applications.length > 0 && (
+        <section className="application-filters panel">
+          <label>
+            <span>Search applications</span>
+            <input
+              type="search"
+              value={applicationQuery}
+              onChange={(event) => setApplicationQuery(event.target.value)}
+              placeholder="Job title or company"
+            />
+          </label>
+          <label>
+            <span>Application status</span>
+            <select
+              value={applicationStatusFilter}
+              onChange={(event) => setApplicationStatusFilter(event.target.value)}
+            >
+              <option value="all">All statuses</option>
+              {Object.entries(APPLY_STATUS_LABELS).map(([value, label]) => (
+                <option key={value} value={value}>{label}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Company</span>
+            <select
+              value={applicationCompanyFilter}
+              onChange={(event) => setApplicationCompanyFilter(event.target.value)}
+            >
+              <option value="all">All companies</option>
+              {[...new Set(confirmedApplications.map((application) => application.company))]
+                .sort((a, b) => a.localeCompare(b))
+                .map((company) => <option key={company} value={company}>{company}</option>)}
+            </select>
+          </label>
+          <label>
+            <span>Applied</span>
+            <select
+              value={applicationDateFilter}
+              onChange={(event) => setApplicationDateFilter(event.target.value)}
+            >
+              <option value="all">Any time</option>
+              <option value="week">Past week</option>
+              <option value="month">Past month</option>
+              <option value="year">Past year</option>
+            </select>
+          </label>
+        </section>
+        {confirmedApplications.length > 0 && (
           <section className="kb-toolbar page-toolbar">
             <span className="kb-summary">
-              {applications.length} tracked ·{" "}
+              {filteredApplications.length} shown · {confirmedApplications.length} confirmed ·{" "}
               {
-                applications.filter(
-                  (a) => !["rejected", "withdrawn"].includes(a.status),
+                filteredApplications.filter(
+                (a) => !["rejected", "withdrawn"].includes(a.apply_status),
                 ).length
               }{" "}
               in progress
@@ -4140,10 +4764,12 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                   Hide empty columns
                 </label>
 
-                <span className="kb-legend">
-                  <Lock size={12} /> Approved and Submitted unlock with the
-                  approval workflow
-                </span>
+                {applicationBoardMode === "workflow" && (
+                  <span className="kb-legend">
+                    <Lock size={12} /> Approved and Submitted unlock with the
+                    approval workflow
+                  </span>
+                )}
               </>
             )}
 
@@ -4165,45 +4791,89 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                 <List size={15} /> List
               </button>
             </div>
+            {trackerView === "board" && (
+              <div className="kb-view-toggle" role="group" aria-label="Board status grouping">
+                <button
+                  type="button"
+                  className={applicationBoardMode === "application" ? "active" : ""}
+                  aria-pressed={applicationBoardMode === "application"}
+                  onClick={() => chooseApplicationBoardMode("application")}
+                >
+                  Application status
+                </button>
+                <button
+                  type="button"
+                  className={applicationBoardMode === "workflow" ? "active" : ""}
+                  aria-pressed={applicationBoardMode === "workflow"}
+                  onClick={() => chooseApplicationBoardMode("workflow")}
+                >
+                  Approval workflow
+                </button>
+              </div>
+            )}
           </section>
         )}
 
-        {applications.length === 0 ? (
+        {confirmedApplications.length === 0 ? (
           <section className="empty-state">
             <div className="empty-icon">
               <Kanban size={25} />
             </div>
             <h3>No applications yet</h3>
             <p>
-              Track a job from the opportunity feed and it will appear here as
-              a card you can move across the board.
+              After applying on the company website, confirm the application in
+              Apply Manually to see it here.
             </p>
             <button className="primary-button" onClick={() => goTo("jobs")}>
               Find jobs
             </button>
           </section>
+        ) : filteredApplications.length === 0 ? (
+          <section className="empty-state">
+            <div className="empty-icon"><BriefcaseBusiness size={25} /></div>
+            <h3>No matching applications</h3>
+            <p>Try changing or clearing the application filters.</p>
+            <button
+              className="secondary-button"
+              onClick={() => {
+                setApplicationQuery("");
+                setApplicationStatusFilter("all");
+                setApplicationCompanyFilter("all");
+                setApplicationDateFilter("all");
+              }}
+            >
+              Clear filters
+            </button>
+          </section>
         ) : trackerView === "board" ? (
           <section className="kanban-board full" aria-label="Application board">
-            {KANBAN_STATUSES.filter(
+            {applicationBoardStatuses.filter(
               (statusKey) =>
                 !hideEmpty ||
-                draggedAppId !== null ||
-                applications.some((a) => a.status === statusKey),
+                (applicationBoardMode === "workflow" && draggedAppId !== null) ||
+                filteredApplications.some((a) =>
+                  (applicationBoardMode === "application" ? a.apply_status : a.status) === statusKey,
+                ),
             ).map((statusKey) => {
-              const columnApps = applications.filter(
-                (a) => a.status === statusKey,
+              const columnApps = filteredApplications.filter(
+                (a) => (applicationBoardMode === "application" ? a.apply_status : a.status) === statusKey,
               );
-              const isLocked = LOCKED_STATUSES.includes(statusKey);
-              const isCurrent = draggedApplication?.status === statusKey;
+              const isLocked =
+                applicationBoardMode === "workflow" && LOCKED_STATUSES.includes(statusKey);
+              const isCurrent =
+                applicationBoardMode === "workflow" && draggedApplication?.status === statusKey;
               const isAllowedDrop =
+                applicationBoardMode === "workflow" &&
                 draggedApplication != null &&
                 !isCurrent &&
                 (draggedApplication.allowed_next ?? []).includes(statusKey);
               const isGatedDrop =
+                applicationBoardMode === "workflow" &&
                 draggedApplication != null &&
                 !isCurrent &&
                 (draggedApplication.gated_next ?? []).includes(statusKey);
               const isBlockedDrop =
+                applicationBoardMode === "workflow" &&
                 draggedApplication != null &&
                 !isCurrent &&
                 !isAllowedDrop &&
@@ -4225,15 +4895,19 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                   key={statusKey}
                   className={columnClass}
                   data-status={statusKey}
-                  onDragOver={(e) => handleColumnDragOver(e, statusKey)}
+                  onDragOver={applicationBoardMode === "workflow" ? (e) => handleColumnDragOver(e, statusKey) : undefined}
                   onDragLeave={() => {
                     if (dragOverStatus === statusKey) setDragOverStatus(null);
                   }}
-                  onDrop={(e) => void handleColumnDrop(e, statusKey)}
+                  onDrop={applicationBoardMode === "workflow" ? (e) => void handleColumnDrop(e, statusKey) : undefined}
                 >
                   <div className="kanban-column-head">
                     <span className="kanban-dot" />
-                    <h3>{statusLabel(statusKey)}</h3>
+                    <h3>
+                      {applicationBoardMode === "application"
+                        ? APPLY_STATUS_LABELS[statusKey] ?? statusKey
+                        : statusLabel(statusKey)}
+                    </h3>
                     {isLocked && (
                       <Lock
                         size={12}
@@ -4274,11 +4948,11 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                               ? "status-transitioned"
                               : ""
                           }`}
-                          draggable={!updatingApplicationIds.has(application.id)}
-                          onDragStart={(e) =>
-                            handleCardDragStart(e, application.id)
-                          }
-                          onDragEnd={handleCardDragEnd}
+                          draggable={applicationBoardMode === "workflow" && !updatingApplicationIds.has(application.id)}
+                          onDragStart={applicationBoardMode === "workflow"
+                            ? (e) => handleCardDragStart(e, application.id)
+                            : undefined}
+                          onDragEnd={applicationBoardMode === "workflow" ? handleCardDragEnd : undefined}
                         >
                           <div className="kanban-card-top">
                             <div className="kanban-card-title">
@@ -4306,8 +4980,11 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                             )}
                           </div>
 
-                          {(application.resume_label || age) && (
+                          {(application.resume_label || age || applicationBoardMode === "application") && (
                             <div className="kanban-meta">
+                              {applicationBoardMode === "application" && (
+                                <span>Approval workflow: {statusLabel(application.status)}</span>
+                              )}
                               {application.resume_label && (
                                 <span title="Resume used">
                                   {application.resume_label}
@@ -4316,6 +4993,14 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                               {age && <span>In stage: {age}</span>}
                             </div>
                           )}
+                          <div className="application-confirmation-meta">
+                            <span className={`status status-${application.apply_status}`}>
+                              {APPLY_STATUS_LABELS[application.apply_status] ?? application.apply_status}
+                            </span>
+                            <span>
+                              Updated {new Date(application.apply_updated_at || application.applied_at || application.updated_at).toLocaleDateString()}
+                            </span>
+                          </div>
 
                           <div className="kanban-card-controls">
                             <select
@@ -4398,7 +5083,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
           </section>
         ) : (
           <section className="application-list">
-            {applications.map((application) => {
+            {filteredApplications.map((application) => {
               const nextStatuses = application.allowed_next ?? [];
 
               return (
@@ -4417,6 +5102,11 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                   <div className="application-name">
                     <strong>{application.job_title}</strong>
                     <span>{application.company}</span>
+                    <small className="muted-note">
+                      {APPLY_STATUS_LABELS[application.apply_status] ?? application.apply_status}
+                      {" · Updated "}
+                      {new Date(application.apply_updated_at || application.applied_at || application.updated_at).toLocaleDateString()}
+                    </small>
                     {application.resume_label && (
                       <small className="muted-note">
                         Resume: {application.resume_label}
@@ -4424,9 +5114,10 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                     )}
                   </div>
 
-                  <span className={`status status-${application.status}`}>
-                    {statusLabel(application.status)}
+                  <span className={`status status-${application.apply_status}`}>
+                    {APPLY_STATUS_LABELS[application.apply_status] ?? application.apply_status}
                   </span>
+                  <small className="muted-note">Workflow: {statusLabel(application.status)}</small>
 
                   <select
                     value=""
@@ -4555,12 +5246,26 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
               current.map((item) => item.id === updated.id ? updated : item),
             );
           }}
+          onSaved={(updated) => {
+            setApplications((current) => [
+              updated,
+              ...current.filter((item) => item.id !== updated.id),
+            ]);
+            if (hasConfirmedApplication(updated)) {
+              setSavedJobs((current) => current.filter((job) => job.id !== updated.job_id));
+            }
+            setApplySelection(null);
+            setNotice("Application status and notes saved.");
+            goTo("applications");
+            void load();
+          }}
         />
       )}
 
       {analysisJob && (
         <MatchAnalysis
           job={jobsById.get(String(analysisJob.id)) ?? analysisJob}
+          isSaved={!analysisJob.id.startsWith("discovery:")}
           busy={busy}
           onClose={() => setAnalysisJob(null)}
           onTrack={() => {
@@ -4593,7 +5298,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
         />
       )}
 
-      {showJobForm && (
+      {false && showJobForm && (
         <div
           className="modal-backdrop"
           onMouseDown={(e) => {

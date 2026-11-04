@@ -38,7 +38,7 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 from starlette.datastructures import Headers
 from xml.sax.saxutils import escape
 
-from app import schemas
+from app import jobicy, schemas
 from app.auth import get_current_user_id
 from app.config import settings
 from app.database import ensure_indexes, get_base_db, get_db
@@ -156,6 +156,7 @@ def job_out(d: dict) -> dict:
         "id": str(d["_id"]),
         "title": d["title"],
         "company": d["company"],
+        "is_saved": d.get("is_saved", True),
         "location": d.get("location"),
         "source": d.get("source", "manual"),
         "source_job_id": d.get("source_job_id"),
@@ -852,6 +853,32 @@ def list_jobs(
     ]
 
 
+@app.get("/api/jobs/saved", response_model=list[schemas.JobRead])
+def list_saved_jobs(db: Database = Depends(get_db)):
+    """Return explicitly saved jobs without any application already confirmed."""
+    applied_job_ids = db.applications.distinct(
+        "job_id",
+        {
+            "$or": [
+                {"apply_status": {"$exists": True, "$ne": "not_applied"}},
+                {"apply_status_history.to_status": "applied"},
+                {"applied_at": {"$ne": None}},
+            ]
+        },
+    )
+    query = {
+        "_id": {"$nin": applied_job_ids},
+        "$or": [
+            {"is_saved": True},
+            {"is_saved": {"$exists": False}},
+        ],
+    }
+    return [
+        job_out(job)
+        for job in db.jobs.find(query).sort("created_at", -1).limit(500)
+    ]
+
+
 @app.get("/api/jobs/discover/board", response_model=schemas.JobSpyDiscoveryResponse)
 def discover_board_jobs(
     site: str = Query(..., min_length=2, max_length=30),
@@ -932,6 +959,36 @@ def discover_board_jobs(
         return response
     except JobSpyError as error:
         raise HTTPException(status_code=error.status_code, detail=error.message) from None
+
+
+@app.get(
+    "/api/jobs/discover/jobicy",
+    response_model=schemas.JobicyDiscoveryResponse,
+)
+def discover_jobicy_jobs(
+    what: str = Query(..., min_length=2, max_length=100),
+    where: str = Query(default="", max_length=100),
+    geo: str = Query(default="apac", pattern=r"^(apac|europe|usa|canada|uk)$"),
+    cursor: str = Query(default="", max_length=200),
+    db: Database = Depends(get_db),
+):
+    """Search Jobicy's existing public integration and score results for this user."""
+    try:
+        result = jobicy.search_jobicy_jobs(
+            what=what.strip(),
+            where=where.strip(),
+            geo=geo,
+            cursor=cursor,
+        )
+    except jobicy.JobicyError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.message) from None
+
+    profile = db.profiles.find_one({})
+    preferences = db.preferences.find_one({})
+    for listing in result["results"]:
+        listing.update(score_fields(listing, profile, preferences))
+    result["results"].sort(key=lambda listing: listing["match_score"], reverse=True)
+    return result
 
 
 @app.post("/api/jobs/import-preview", response_model=schemas.JobImportPreview)
@@ -1763,6 +1820,7 @@ def create_job(
     doc = {
         "title": payload.title.strip(),
         "company": payload.company.strip(),
+        "is_saved": True,
         "location": payload.location,
         "source": payload.source,
         "source_job_id": payload.source_job_id,
@@ -1792,6 +1850,21 @@ def create_job(
         )
 
     return job_out(doc)
+
+
+@app.put(
+    "/api/jobs/{job_id}/saved",
+    response_model=schemas.JobRead,
+)
+def update_job_saved_state(
+    job_id: str,
+    payload: schemas.JobSavedUpdate,
+    db: Database = Depends(get_db),
+):
+    oid = to_oid(job_id, "Job")
+    if db.jobs.update_one({"_id": oid}, {"$set": {"is_saved": payload.saved}}).matched_count == 0:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    return job_out(db.jobs.find_one({"_id": oid}))
 
 
 # ---------------------------------------------------------
@@ -1892,7 +1965,14 @@ def create_application(
         "updated_at": timestamp,
     }
 
-    doc["_id"] = db.applications.insert_one(doc).inserted_id
+    try:
+        doc["_id"] = db.applications.insert_one(doc).inserted_id
+    except DuplicateKeyError:
+        existing = db.applications.find_one({"job_id": job["_id"]})
+        if existing is None:
+            raise
+        response.status_code = 200
+        return app_out(existing, job)
 
     return app_out(doc, job)
 
@@ -1926,7 +2006,7 @@ def update_application_apply_details(
         "apply_updated_at": timestamp,
         "updated_at": timestamp,
     }
-    if payload.status == "applied" and not current.get("applied_at"):
+    if payload.status != "not_applied" and not current.get("applied_at"):
         update_fields["applied_at"] = timestamp
     if payload.apply_documents is not None:
         update_fields["apply_documents"] = payload.apply_documents.model_dump()

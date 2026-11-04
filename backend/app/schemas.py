@@ -60,6 +60,7 @@ class JobRead(BaseModel):
     id: str
     title: str
     company: str
+    is_saved: bool = True
     location: str | None
     source: str
     source_job_id: str | None
@@ -85,6 +86,10 @@ class JobRead(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class JobSavedUpdate(BaseModel):
+    saved: bool
 
 
 FeedbackReason = Literal["", "role", "skills", "location", "salary", "experience", "company", "other"]
@@ -142,6 +147,7 @@ class JobDiscoveryListing(BaseModel):
     source_job_id: str
     title: str
     company: str
+    company_logo_url: HttpUrl | None = None
     location: str | None = None
     url: HttpUrl
     application_url: HttpUrl | None = None
@@ -170,6 +176,14 @@ class JobSpyDiscoveryResponse(BaseModel):
         "glassdoor",
     ]
     results: list[JobDiscoveryListing]
+
+
+class JobicyDiscoveryResponse(BaseModel):
+    source: Literal["jobicy"]
+    geo: Literal["apac", "europe", "usa", "canada", "uk"]
+    results: list[JobDiscoveryListing]
+    has_more: bool
+    next_cursor: str | None = None
 
 
 class JobApplicationPlan(BaseModel):

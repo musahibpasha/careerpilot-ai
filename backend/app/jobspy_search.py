@@ -121,6 +121,25 @@ def _job_url(value, site: str) -> str | None:
     return url
 
 
+def _company_logo_url(value) -> str | None:
+    url = _value_text(value, 2000)
+    try:
+        parts = urlparse(url)
+        port = parts.port
+    except ValueError:
+        return None
+    if (
+        parts.scheme != "https"
+        or not parts.hostname
+        or parts.username is not None
+        or parts.password is not None
+        or port not in (None, 443)
+        or any(char.isspace() or ord(char) < 0x20 for char in url)
+    ):
+        return None
+    return url
+
+
 def _supported_application_url(value) -> str | None:
     raw = _value_text(value, 2000)
     if not raw:
@@ -446,6 +465,9 @@ def search_jobspy_jobs(
                 "source_job_id": source_job_id,
                 "title": title,
                 "company": company,
+                "company_logo_url": _company_logo_url(
+                    row.get("company_logo") or row.get("company_logo_url")
+                ),
                 "location": _value_text(row.get("location"), 250) or None,
                 "url": url,
                 "application_url": _supported_application_url(row.get("job_url_direct")),

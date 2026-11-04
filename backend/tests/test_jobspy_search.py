@@ -67,7 +67,10 @@ def test_search_normalizes_listings_and_uses_bounded_jobspy_query(monkeypatch):
 
     def fake_scrape_jobs(**kwargs):
         calls.append(kwargs)
-        return FakeFrame([_job(), _job(job_url="https://linkedin.com.evil.example/fake")])
+        return FakeFrame([
+            _job(company_logo="https://cdn.example.test/company.png"),
+            _job(job_url="https://linkedin.com.evil.example/fake"),
+        ])
 
     monkeypatch.setattr(jobspy_search, "scrape_jobs", fake_scrape_jobs)
     result = jobspy_search.search_jobspy_jobs(
@@ -83,6 +86,7 @@ def test_search_normalizes_listings_and_uses_bounded_jobspy_query(monkeypatch):
     assert len(result["results"]) == 1
     listing = result["results"][0]
     assert listing["title"] == "Python Engineer"
+    assert listing["company_logo_url"] == "https://cdn.example.test/company.png"
     assert listing["source_job_id"] == hashlib.sha256(
         listing["url"].encode("utf-8")
     ).hexdigest()[:32]
@@ -101,6 +105,22 @@ def test_search_normalizes_listings_and_uses_bounded_jobspy_query(monkeypatch):
         "hours_old": 168,
         "fetch_description": True,
     }]
+
+
+def test_search_ignores_unsafe_company_logo_urls(monkeypatch):
+    monkeypatch.setattr(
+        jobspy_search,
+        "scrape_jobs",
+        lambda **_kwargs: FakeFrame([_job(company_logo="http://127.0.0.1/logo.png")]),
+    )
+
+    result = jobspy_search.search_jobspy_jobs(
+        site="linkedin",
+        what="python engineer",
+        where="",
+    )
+
+    assert result["results"][0]["company_logo_url"] is None
 
 
 def test_indeed_search_uses_country_from_location_instead_of_jobspy_us_default(monkeypatch):

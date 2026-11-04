@@ -1,10 +1,13 @@
 from copy import deepcopy
+import logging
 
 from fastapi import Depends
 from pymongo import MongoClient
 from pymongo.database import Database
 from app.auth import get_current_user_id
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 # MongoClient connects lazily, so importing this module never fails if MongoDB is down.
 _client = MongoClient(settings.mongodb_url, tz_aware=True, serverSelectionTimeoutMS=5000)
@@ -148,7 +151,44 @@ def ensure_indexes(db: Database) -> None:
         partialFilterExpression={"url": {"$type": "string"}},
     )
     db.jobs.create_index([("owner_uid", 1), ("created_at", -1)])
-    db.applications.create_index([("owner_uid", 1), ("job_id", 1)])
+    duplicate_application = next(
+        iter(
+            db.applications.aggregate(
+                [
+                    {
+                        "$group": {
+                            "_id": {
+                                "owner_uid": "$owner_uid",
+                                "job_id": "$job_id",
+                            },
+                            "count": {"$sum": 1},
+                        }
+                    },
+                    {"$match": {"count": {"$gt": 1}}},
+                    {"$limit": 1},
+                ]
+            )
+        ),
+        None,
+    )
+    if duplicate_application is None:
+        for name, info in db.applications.index_information().items():
+            if (
+                name != "_id_"
+                and info.get("key") == [("owner_uid", 1), ("job_id", 1)]
+                and not info.get("unique")
+            ):
+                db.applications.drop_index(name)
+        db.applications.create_index(
+            [("owner_uid", 1), ("job_id", 1)],
+            unique=True,
+            name="uq_application_owner_job",
+        )
+    else:
+        logger.error(
+            "Could not enforce unique applications per user/job: legacy duplicate "
+            "application records exist. They were preserved and need manual review."
+        )
     db.applications.create_index([("owner_uid", 1), ("updated_at", -1)])
     db.profiles.create_index("owner_uid", unique=True, name="uq_profile_owner")
     db.preferences.create_index("owner_uid", unique=True, name="uq_preferences_owner")

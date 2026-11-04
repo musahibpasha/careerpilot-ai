@@ -2,12 +2,13 @@ import json
 from io import BytesIO
 
 import mongomock
+from bson import ObjectId
 from fastapi.testclient import TestClient
 from pypdf import PdfReader
 
 from app import main
 from app.main import app
-from app.database import get_db
+from app.database import ensure_indexes, get_db
 from app.matching import calculate_match
 
 
@@ -92,6 +93,171 @@ def test_health():
     response = client.get("/api/health")
 
     assert response.json()["status"] == "ok"
+
+
+def test_job_saved_state_can_be_changed_without_deleting_job():
+    created = client.post(
+        "/api/jobs",
+        json={
+            "title": "Saved state test",
+            "company": "Example Co",
+            "description": "A test job listing.",
+            "skills": [],
+        },
+    )
+    assert created.status_code == 201
+    job = created.json()
+    assert job["is_saved"] is True
+
+    unsaved = client.put(f"/api/jobs/{job['id']}/saved", json={"saved": False})
+    assert unsaved.status_code == 200
+    assert unsaved.json()["is_saved"] is False
+    assert _db.jobs.find_one({"_id": ObjectId(job["id"])}) is not None
+
+    restored = client.put(f"/api/jobs/{job['id']}/saved", json={"saved": True})
+    assert restored.status_code == 200
+    assert restored.json()["is_saved"] is True
+
+
+def test_legacy_job_defaults_to_saved():
+    created = client.post(
+        "/api/jobs",
+        json={
+            "title": "Legacy saved state test",
+            "company": "Example Co",
+            "description": "A test job listing.",
+            "skills": [],
+        },
+    )
+    assert created.status_code == 201
+    job_id = created.json()["id"]
+    _db.jobs.update_one({"_id": ObjectId(job_id)}, {"$unset": {"is_saved": ""}})
+
+    jobs = client.get("/api/jobs")
+    assert jobs.status_code == 200
+    legacy_job = next(job for job in jobs.json() if job["id"] == job_id)
+    assert legacy_job["is_saved"] is True
+
+
+def test_applied_job_is_excluded_from_saved_jobs_without_deleting_records():
+    saved_job_ids = []
+    application_id = None
+    for title in ("Applied listing", "Still saved listing"):
+        created = client.post(
+            "/api/jobs",
+            json={
+                "title": title,
+                "company": "Example Co",
+                "description": "A test job listing.",
+                "skills": [],
+            },
+        )
+        assert created.status_code == 201
+        job = created.json()
+        saved_job_ids.append(job["id"])
+        if title == "Applied listing":
+            app_response = client.post(
+                "/api/applications",
+                json={"job_id": job["id"], "status": "saved"},
+            )
+            assert app_response.status_code == 201
+            application_id = app_response.json()["id"]
+
+    updated = client.patch(
+        f"/api/applications/{application_id}/apply",
+        json={"status": "applied", "notes": "Submitted on company site."},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["apply_status"] == "applied"
+
+    saved_response = client.get("/api/jobs/saved")
+    assert saved_response.status_code == 200
+    visible_ids = {job["id"] for job in saved_response.json()}
+    assert saved_job_ids[0] not in visible_ids
+    assert saved_job_ids[1] in visible_ids
+    assert client.get("/api/jobs").status_code == 200
+    assert _db.jobs.find_one({"_id": ObjectId(saved_job_ids[0])}) is not None
+    assert _db.applications.find_one({"_id": ObjectId(application_id)}) is not None
+
+    changed = client.patch(
+        f"/api/applications/{application_id}/apply",
+        json={"status": "interview", "notes": "Interview scheduled."},
+    )
+    assert changed.status_code == 200
+    assert saved_job_ids[0] not in {
+        job["id"] for job in client.get("/api/jobs/saved").json()
+    }
+
+
+def test_creating_application_for_same_job_returns_existing_record():
+    job = client.post(
+        "/api/jobs",
+        json={
+            "title": "Unique application test",
+            "company": "Example Co",
+            "description": "A test job listing.",
+            "skills": [],
+        },
+    ).json()
+    first = client.post(
+        "/api/applications",
+        json={"job_id": job["id"], "status": "saved"},
+    )
+    second = client.post(
+        "/api/applications",
+        json={"job_id": job["id"], "status": "saved"},
+    )
+    assert first.status_code == 201
+    assert second.status_code == 200
+    assert second.json()["id"] == first.json()["id"]
+    assert _db.applications.count_documents({"job_id": ObjectId(job["id"])}) == 1
+
+
+def test_database_enforces_one_application_per_user_and_job():
+    database = mongomock.MongoClient(tz_aware=True)["unique_application_index"]
+    ensure_indexes(database)
+    index = database.applications.index_information()["uq_application_owner_job"]
+    assert index["unique"] is True
+    assert index["key"] == [("owner_uid", 1), ("job_id", 1)]
+
+
+def test_jobicy_discovery_route_scores_real_integration_results(monkeypatch):
+    monkeypatch.setattr(
+        main.jobicy,
+        "search_jobicy_jobs",
+        lambda **_kwargs: {
+            "source": "jobicy",
+            "geo": "apac",
+            "results": [
+                {
+                    "source_job_id": "jobicy-test",
+                    "title": "Python Engineer",
+                    "company": "Example Co",
+                    "location": "India",
+                    "url": "https://jobicy.com/jobs/123-python-engineer",
+                    "description": "Build Python services.",
+                    "skills": ["Python"],
+                    "nice_to_have_skills": [],
+                    "employment_types": ["Full-Time"],
+                    "published_at": None,
+                    "work_arrangement": "remote",
+                    "experience_level": "entry",
+                    "salary_min": None,
+                    "salary_max": None,
+                    "salary_currency": "",
+                    "salary_period": "year",
+                }
+            ],
+            "has_more": False,
+            "next_cursor": None,
+        },
+    )
+    response = client.get("/api/jobs/discover/jobicy?what=engineer&where=India&geo=apac")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source"] == "jobicy"
+    assert body["results"][0]["match_score"] >= 0
+    assert body["results"][0]["match_breakdown"]
 
 
 def test_generate_job_application_materials_uses_profile_and_job(monkeypatch):

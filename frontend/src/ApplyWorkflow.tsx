@@ -106,6 +106,7 @@ export default function ApplyWorkflow({
   onClose,
   onReturnDashboard,
   onApplicationUpdated,
+  onSaved,
 }: {
   job: Job;
   application: Application;
@@ -119,6 +120,7 @@ export default function ApplyWorkflow({
   onClose: () => void;
   onReturnDashboard: () => void;
   onApplicationUpdated: (application: Application) => void;
+  onSaved: (application: Application) => void;
 }) {
   const [step, setStep] = useState(0);
   const [profile, setProfile] = useState<Profile>(blankProfile);
@@ -265,6 +267,7 @@ export default function ApplyWorkflow({
       if (!response.ok) throw new Error(data?.detail || "Could not save your application.");
       onApplicationUpdated(data as Application);
       setNotice("Application status, notes, and generated drafts saved.");
+      onSaved(data as Application);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Could not save your application.");
     } finally {
@@ -349,7 +352,13 @@ export default function ApplyWorkflow({
               </section>
               <section className="apply-info-block">
                 <h3>Application status</h3>
-                <label className="apply-field">Status<select value={applyStatus} onChange={(event) => setApplyStatus(event.target.value as ApplyStatus)}>{STATUSES.map((status) => <option key={status.value} value={status.value}>{status.label}</option>)}</select></label>
+                <label className="apply-field">Status<select value={applyStatus === "applied" ? "current-applied" : applyStatus} onChange={(event) => {
+                  if (event.target.value !== "current-applied") setApplyStatus(event.target.value as ApplyStatus);
+                }}>
+                  {applyStatus === "applied" && <option value="current-applied" disabled>Applied (current)</option>}
+                  {STATUSES.filter((status) => status.value !== "applied" || applyStatus !== "applied")
+                    .map((status) => <option key={status.value} value={status.value}>{status.label}</option>)}
+                </select></label>
                 {application.applied_at && <p className="apply-muted">Applied on {new Date(application.applied_at).toLocaleDateString()}</p>}
                 <label className="apply-field">Optional notes<textarea rows={5} maxLength={5000} value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Add reminders or notes about this application…" /></label>
                 {application.apply_updated_at && <p className="apply-muted">Last updated {new Date(application.apply_updated_at).toLocaleString()}</p>}
