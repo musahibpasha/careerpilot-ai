@@ -234,7 +234,7 @@ export default function AuthBoundary({ children }: { children?: ReactNode }) {
               ? "We’ll email you a secure password reset link."
               : mode === "sign-up"
                 ? "Create an account to start your private workspace."
-                : "Sign in to continue to CareerPilot."}
+                : "Sign in to continue to ThoughtLabs Job CoPilot."}
           </p>
           {mode !== "reset" && (
             <button type="button" className="auth-google" disabled={busy} onClick={signInWithGoogle}>
