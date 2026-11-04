@@ -269,6 +269,111 @@ def test_a_new_application_records_the_active_resume(db):
     assert application["resume_label"] == "Frontend"
 
 
+def test_apply_status_notes_and_documents_persist_on_existing_application(db):
+    job_id = make_job()
+    application = track(job_id)
+    materials = {
+        "job_id": job_id,
+        "title": "Dev",
+        "company": "Acme",
+        "cover_letter": "Dear hiring team",
+        "resume_summary": "Developer with relevant experience.",
+        "skills_to_prioritize": ["Python"],
+        "bullet_suggestions": [],
+        "caveats": [],
+    }
+
+    applied = client.patch(
+        f"/api/applications/{application['id']}/apply",
+        json={
+            "status": "applied",
+            "notes": "Submitted on the company site.",
+            "apply_documents": materials,
+        },
+    )
+
+    assert applied.status_code == 200
+    body = applied.json()
+    assert body["id"] == application["id"]
+    assert body["apply_status"] == "applied"
+    assert body["applied_at"]
+    assert body["apply_updated_at"]
+    assert body["notes"] == "Submitted on the company site."
+    assert body["apply_documents"]["cover_letter"] == "Dear hiring team"
+    assert len(body["apply_status_history"]) == 2
+
+    updated = client.patch(
+        f"/api/applications/{application['id']}/apply",
+        json={"status": "assessment", "notes": "Assessment due Friday."},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["apply_status"] == "assessment"
+    assert updated.json()["applied_at"] == body["applied_at"]
+    assert updated.json()["apply_documents"]["resume_summary"] == materials["resume_summary"]
+    assert client.get("/api/applications").json()[0]["apply_status"] == "assessment"
+
+
+def test_creating_an_application_for_the_same_job_reuses_the_record(db):
+    job_id = make_job()
+    first = client.post("/api/applications", json={"job_id": job_id})
+    second = client.post("/api/applications", json={"job_id": job_id})
+
+    assert first.status_code == 201
+    assert second.status_code == 200
+    assert second.json()["id"] == first.json()["id"]
+    assert db.applications.count_documents({}) == 1
+
+
+def test_tailored_resume_pdf_is_a_valid_pdf_with_reviewed_content(db):
+    assert client.put(
+        "/api/profile",
+        json={
+            "full_name": "Jane Example",
+            "email": "jane@example.com",
+            "phone": "+91 98765 43210",
+            "location": "Bangalore",
+            "target_roles": ["Developer"],
+            "skills": ["Python", "FastAPI"],
+            "experience_summary": "Backend developer.",
+            "work_experience": [{
+                "title": "Developer",
+                "company": "Example Co",
+                "description": "Built REST APIs.",
+            }],
+            "education": [{"institution": "ABC College", "degree": "BCA"}],
+        },
+    ).status_code == 200
+    job_id = make_job()
+
+    response = client.post(
+        f"/api/jobs/{job_id}/tailored-resume.pdf",
+        json={
+            "materials": {
+                "job_id": job_id,
+                "title": "Dev",
+                "company": "Acme",
+                "cover_letter": "Dear hiring team",
+                "resume_summary": "Tailored backend developer.",
+                "skills_to_prioritize": ["FastAPI"],
+                "bullet_suggestions": [{
+                    "section": "Developer at Example Co",
+                    "source_text": "Built REST APIs.",
+                    "tailored_text": "Built REST APIs using Python.",
+                }],
+                "caveats": [],
+            }
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/pdf"
+    reader = PdfReader(BytesIO(response.content))
+    extracted = "\n".join(page.extract_text() or "" for page in reader.pages)
+    assert "Jane Example" in extracted
+    assert "Tailored backend developer." in extracted
+    assert "Built REST APIs using Python." in extracted
+
+
 def test_changing_the_active_resume_does_not_change_old_applications(db):
     first = upload("a.pdf", label="Frontend").json()
     second = upload("b.pdf", label="Data").json()

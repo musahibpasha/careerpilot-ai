@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import ApplicationAssistant, { type AssistantMaterials } from "./ApplicationAssistant";
+import ApplyWorkflow from "./ApplyWorkflow";
 import { apiFetch as fetch } from "./api";
 import {
   Activity,
@@ -121,7 +122,7 @@ type ChatMessage = {
   cta?: { label: string; run: () => void };
 };
 
-type Job = {
+export type Job = {
   id: string;
   title: string;
   company: string;
@@ -129,6 +130,7 @@ type Job = {
   source: string;
   source_job_id?: string | null;
   url: string | null;
+  application_url?: string | null;
   description: string;
   skills: string[];
   nice_to_have_skills?: string[];
@@ -136,6 +138,10 @@ type Job = {
   published_at?: string | null;
   work_arrangement?: string;
   experience_level?: string;
+  salary_min?: number | null;
+  salary_max?: number | null;
+  salary_currency?: string;
+  salary_period?: "year" | "month";
   match_score: number;
   match_reasons: string[];
   match_confidence?: "" | "low" | "medium" | "high";
@@ -165,7 +171,7 @@ type ResumeBulletSuggestion = {
   tailored_text: string;
 };
 
-type ApplicationMaterials = {
+export type ApplicationMaterials = {
   job_id: string;
   title: string;
   company: string;
@@ -721,7 +727,7 @@ type StatusHistoryEntry = {
   note: string;
 };
 
-type Application = {
+export type Application = {
   id: string;
   job_id: string;
   status: string;
@@ -734,6 +740,11 @@ type Application = {
   job_title: string;
   company: string;
   notes: string;
+  apply_status: "not_applied" | "applied" | "interview" | "assessment" | "rejected" | "offer_received" | "withdrawn";
+  apply_status_history: StatusHistoryEntry[];
+  applied_at: string | null;
+  apply_updated_at: string | null;
+  apply_documents: ApplicationMaterials | null;
 };
 
 type Profile = {
@@ -1204,6 +1215,10 @@ function App() {
 
   const [analysisJob, setAnalysisJob] = useState<Job | null>(null);
   const [assistantJobId, setAssistantJobId] = useState<string | null>(null);
+  const [applySelection, setApplySelection] = useState<{
+    job: Job;
+    application: Application;
+  } | null>(null);
   const [analysisPlan, setAnalysisPlan] = useState<Record<string, ApplicationPlan>>({});
   const [analysisPlanLoading, setAnalysisPlanLoading] = useState(false);
   const [analysisMaterials, setAnalysisMaterials] = useState<
@@ -2167,6 +2182,42 @@ function App() {
     }
   }
 
+  async function openApplyWorkflow(job: Job) {
+    setBusy(true);
+    setNotice("");
+    try {
+      let application = applications.find(
+        (candidate) => String(candidate.job_id) === String(job.id),
+      );
+      if (!application) {
+        const response = await fetch(`${API}/api/applications`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ job_id: job.id, status: "saved" }),
+        });
+        const data = await response.json().catch(() => null);
+        if (!response.ok) {
+          throw new Error(errorText(data, "Could not open the application workflow."));
+        }
+        application = data as Application;
+        setApplications((current) =>
+          current.some((item) => item.id === application?.id)
+            ? current
+            : [application as Application, ...current],
+        );
+      }
+      setApplySelection({ job, application });
+    } catch (reason) {
+      setNotice(
+        reason instanceof Error
+          ? reason.message
+          : "Could not open the application workflow.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function changeApplicationStatus(
     application: Application,
     nextStatus: string,
@@ -2368,7 +2419,10 @@ function App() {
     void loadApplicationPlan(analysisJob);
   }, [analysisJob?.id]);
 
-  async function generateApplicationMaterials(job: Job) {
+  async function generateApplicationMaterials(
+    job: Job,
+    target?: "resume" | "cover_letter",
+  ): Promise<ApplicationMaterials | null> {
     setMaterialsLoadingId(job.id);
     setNotice("");
     try {
@@ -2387,11 +2441,33 @@ function App() {
       ) {
         throw new Error("The API returned an invalid application-draft response.");
       }
-      setAnalysisMaterials((current) => ({ ...current, [job.id]: data }));
+      const generated = data as ApplicationMaterials;
+      const existing = analysisMaterials[job.id];
+      const materials =
+        target && existing
+          ? target === "resume"
+            ? {
+                ...existing,
+                resume_summary: generated.resume_summary,
+                skills_to_prioritize: generated.skills_to_prioritize,
+                bullet_suggestions: generated.bullet_suggestions,
+                caveats: generated.caveats,
+              }
+            : { ...existing, cover_letter: generated.cover_letter }
+          : generated;
+      setAnalysisMaterials((current) => ({
+        ...current,
+        [job.id]: materials,
+      }));
+      return materials;
     } catch (e) {
-      setNotice(
-        e instanceof Error ? e.message : "Could not generate application drafts.",
-      );
+      const message =
+        e instanceof Error ? e.message : "Could not generate application drafts.";
+      if (target) {
+        throw new Error(message);
+      }
+      setNotice(message);
+      return null;
     } finally {
       setMaterialsLoadingId(null);
     }
@@ -2892,10 +2968,10 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
           </button>
           <button
             className="primary-button"
-            onClick={() => void trackJob(job)}
+            onClick={() => void openApplyWorkflow(job)}
             disabled={busy}
           >
-            Track job
+            Apply
           </button>
           <div className="row">
             <button
@@ -4426,6 +4502,10 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
         <ApplicationAssistant
           jobId={assistantJobId}
           onClose={() => setAssistantJobId(null)}
+          onReturnDashboard={() => {
+            setAssistantJobId(null);
+            goTo("dashboard");
+          }}
           onChanged={() => void load()}
           onExportMaterials={(jobId, materials: AssistantMaterials, kind) => {
             const job = jobs.find((candidate) => candidate.id === jobId);
@@ -4444,6 +4524,36 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
             } else {
               void downloadTailoredResume(job, exportMaterials);
             }
+          }}
+        />
+      )}
+
+      {applySelection && (
+        <ApplyWorkflow
+          key={applySelection.job.id}
+          job={applySelection.job}
+          application={applySelection.application}
+          initialMaterials={analysisMaterials[applySelection.job.id] ?? null}
+          materialsLoading={materialsLoadingId === applySelection.job.id}
+          onGenerateMaterials={generateApplicationMaterials}
+          onMaterialsChange={(materials) =>
+            setAnalysisMaterials((current) => ({
+              ...current,
+              [applySelection.job.id]: materials,
+            }))
+          }
+          onClose={() => setApplySelection(null)}
+          onReturnDashboard={() => {
+            setApplySelection(null);
+            goTo("dashboard");
+          }}
+          onApplicationUpdated={(updated) => {
+            setApplySelection((current) =>
+              current ? { ...current, application: updated } : current,
+            );
+            setApplications((current) =>
+              current.map((item) => item.id === updated.id ? updated : item),
+            );
           }}
         />
       )}

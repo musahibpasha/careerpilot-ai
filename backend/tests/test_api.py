@@ -193,6 +193,47 @@ def test_generate_job_application_materials_requires_openrouter_key(monkeypatch)
     assert response.json()["detail"] == "OpenRouter API key is not configured."
 
 
+def test_job_description_summary_uses_saved_description_and_configured_provider(monkeypatch):
+    job = client.post(
+        "/api/jobs",
+        json={
+            "title": "Data Analyst",
+            "company": "Example Co",
+            "description": "Investigate datasets with SQL and report data quality findings.",
+        },
+    ).json()
+    sent_messages = []
+
+    class FakeResponse:
+        status_code = 200
+        is_error = False
+
+        def json(self):
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "The role investigates datasets using SQL and reports data-quality findings."
+                        }
+                    }
+                ]
+            }
+
+    async def fake_completion(client_arg, messages):
+        sent_messages.extend(messages)
+        return FakeResponse()
+
+    monkeypatch.setattr(main.settings, "openrouter_api_key", "mock-test-key")
+    monkeypatch.setattr(main, "_post_with_retry_and_fallback", fake_completion)
+
+    response = client.post(f"/api/jobs/{job['id']}/description-summary")
+
+    assert response.status_code == 200
+    assert "investigates datasets" in response.json()["summary"]
+    assert "Investigate datasets with SQL" in sent_messages[1]["content"]
+    assert "Do not infer or add" in sent_messages[0]["content"]
+
+
 def test_download_cover_letter_pdf_contains_reviewed_text_and_job_context():
     assert client.put("/api/profile", json=valid_profile()).status_code == 200
     job_response = client.post(

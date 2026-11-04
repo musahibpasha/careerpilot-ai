@@ -318,11 +318,13 @@ function CopyButton({ text, label }: { text: string; label: string }) {
 export default function ApplicationAssistant({
   jobId,
   onClose,
+  onReturnDashboard,
   onChanged,
   onExportMaterials,
 }: {
   jobId: string;
   onClose: () => void;
+  onReturnDashboard: () => void;
   onChanged: () => void;
   onExportMaterials: (
     jobId: string,
@@ -501,6 +503,10 @@ export default function ApplicationAssistant({
     return (
       <div className="aa-overlay" role="dialog" aria-modal="true" aria-label="Application Assistant">
         <div className="aa-shell">
+          <button type="button" className="aa-brand" onClick={onReturnDashboard}>
+            <span className="brand-mark"><Sparkles size={18} /></span>
+            <strong>ThoughtLabs</strong>
+          </button>
           <div className="aa-banner aa-bad" role="alert">
             <CircleAlert size={16} /> {loadError}
           </div>
@@ -524,6 +530,10 @@ export default function ApplicationAssistant({
     <div className="aa-overlay" role="dialog" aria-modal="true" aria-label="Application Assistant">
       <div className="aa-shell">
         <header className="aa-head">
+          <button type="button" className="aa-brand" onClick={onReturnDashboard} aria-label="Return to CareerPilot dashboard">
+            <span className="brand-mark"><Sparkles size={18} /></span>
+            <strong>ThoughtLabs</strong>
+          </button>
           <div>
             <p className="aa-eyebrow">Application Assistant</p>
             <h2>{s ? `${s.job.title} at ${s.job.company}` : "Loading..."}</h2>

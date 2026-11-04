@@ -206,6 +206,10 @@ class JobApplicationMaterials(BaseModel):
     caveats: list[str] = Field(default_factory=list, max_length=20)
 
 
+class JobDescriptionSummary(BaseModel):
+    summary: str = Field(min_length=1, max_length=1200)
+
+
 class CoverLetterPdfRequest(BaseModel):
     cover_letter: str = Field(min_length=1, max_length=8000)
 
@@ -215,6 +219,10 @@ class CoverLetterPdfRequest(BaseModel):
         if not value.strip():
             raise ValueError("Cover-letter text cannot be blank.")
         return value
+
+
+class ResumePdfRequest(BaseModel):
+    materials: JobApplicationMaterials
 
 
 class ApplicationCreate(BaseModel):
@@ -240,6 +248,25 @@ class StatusChange(BaseModel):
     note: str = Field(default="", max_length=500)
 
 
+ApplyStatus = Literal[
+    "not_applied",
+    "applied",
+    "interview",
+    "assessment",
+    "rejected",
+    "offer_received",
+    "withdrawn",
+]
+
+
+class ApplicationApplyUpdate(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    status: ApplyStatus
+    notes: str = Field(default="", max_length=5000)
+    apply_documents: JobApplicationMaterials | None = None
+
+
 class ApplicationRead(BaseModel):
     id: str
     job_id: str
@@ -254,6 +281,11 @@ class ApplicationRead(BaseModel):
     updated_at: datetime
     job_title: str
     company: str
+    apply_status: ApplyStatus = "not_applied"
+    apply_status_history: list[StatusHistoryEntry] = Field(default_factory=list)
+    applied_at: datetime | None = None
+    apply_updated_at: datetime | None = None
+    apply_documents: JobApplicationMaterials | None = None
 
 
 class WorkExperience(BaseModel):
