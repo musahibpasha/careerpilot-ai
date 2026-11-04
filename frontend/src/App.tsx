@@ -122,6 +122,7 @@ function saveSetting(key: string, value: string) {
 }
 
 type Page = "dashboard" | "jobs" | "saved" | "applications" | "copilot";
+type JobSearchView = "recommended" | "searching" | "results" | "empty" | "error";
 
 const PAGE_HASH: Record<Page, string> = {
   dashboard: "#/",
@@ -1243,6 +1244,7 @@ function App({
   const [discoveryBusy, setDiscoveryBusy] = useState(false);
   const [discoveryMessage, setDiscoveryMessage] = useState("");
   const [discoveryError, setDiscoveryError] = useState(false);
+  const [jobSearchView, setJobSearchView] = useState<JobSearchView>("recommended");
   const discoveryRequestId = useRef(0);
   const [savingDiscoveryId, setSavingDiscoveryId] = useState<string | null>(null);
   const [dismissedDiscoveryIds, setDismissedDiscoveryIds] = useState<Set<string>>(
@@ -1431,13 +1433,16 @@ function App({
     setDiscoveryResults([]);
     setDiscoveryMessage("");
     setDiscoveryError(false);
+    setJobSearchView("recommended");
   }
 
   async function searchJobBoard() {
     const requestId = ++discoveryRequestId.current;
     setDiscoveryBusy(true);
+    setDiscoveryResults([]);
     setDiscoveryMessage("");
     setDiscoveryError(false);
+    setJobSearchView("searching");
     try {
       const params = new URLSearchParams({
         site: jobSource,
@@ -1489,16 +1494,20 @@ function App({
         })),
       );
       if (data.results.length === 0) {
+        setJobSearchView("empty");
         setDiscoveryMessage(
           data.source === "indeed"
             ? "Indeed returned no matching listings. Try broader keywords or clear filters; listings without details needed by a selected filter are excluded."
             : "No matching listings were returned. Try broader keywords or clear filters; listings without details needed by a selected filter are excluded.",
         );
+      } else {
+        setJobSearchView("results");
       }
     } catch (e) {
       if (requestId !== discoveryRequestId.current) return;
       setDiscoveryResults([]);
       setDiscoveryError(true);
+      setJobSearchView("error");
       setDiscoveryMessage(e instanceof Error ? e.message : "Could not search this job board.");
     } finally {
       if (requestId === discoveryRequestId.current) setDiscoveryBusy(false);
@@ -1559,6 +1568,11 @@ function App({
   function selectJobSource(source: JobSearchSource) {
     if (source !== jobSource) clearDiscoveryResults();
     setJobSource(source);
+  }
+
+  function returnToRecommendations() {
+    clearDiscoveryResults();
+    setDismissedDiscoveryIds(new Set());
   }
 
   function useProfileForLinkedInSearch() {
@@ -1760,6 +1774,13 @@ function App({
   const jobsById = useMemo(
     () => new Map(jobs.map((j) => [String(j.id), j])),
     [jobs],
+  );
+  const visibleDiscoveryResults = useMemo(
+    () =>
+      discoveryResults.filter(
+        (job) => !dismissedDiscoveryIds.has(`${job.source}:${job.source_job_id}`),
+      ),
+    [discoveryResults, dismissedDiscoveryIds],
   );
 
   const draggedApplication = useMemo(
@@ -4014,6 +4035,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                 <label>
                   Job title or keywords
                   <input
+                    id="job-search-keywords"
                     value={linkedinKeywords}
                     onChange={(event) => setLinkedinKeywords(event.target.value)}
                     placeholder="e.g. Frontend Developer, Data Analyst"
@@ -4160,6 +4182,15 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                       Searching {JOB_SEARCH_SOURCES.find((source) => source.id === jobSource)?.label}…
                     </p>
                   )}
+                  {jobSearchView !== "recommended" && (
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={returnToRecommendations}
+                    >
+                      Clear search
+                    </button>
+                  )}
                   <small>
                     Search results are temporary until you save a listing. Resume details are not sent to the job board.
                   </small>
@@ -4195,10 +4226,9 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
               </small>
             </section>
 
-            {renderRecommendedJobsSection("jobs")}
-
+            {jobSearchView !== "recommended" && (
             <div className="source-search-output">
-              {discoveryMessage && (
+              {discoveryMessage && jobSearchView !== "empty" && (
                 <div className={discoveryError ? "source-feedback error" : "source-feedback"} role={discoveryError ? "alert" : "status"}>
                   <span>{discoveryMessage}</span>
                   {discoveryError && (
@@ -4213,16 +4243,51 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                   )}
                 </div>
               )}
-              {discoveryResults.length > 0 && (
+              {jobSearchView === "empty" && (
+                <section className="panel search-empty-state" role="status">
+                  <h2>No Results Found</h2>
+                  <p>{discoveryMessage || "Try changing your keywords or search filters."}</p>
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={() =>
+                      document.getElementById("job-search-keywords")?.focus()
+                    }
+                  >
+                    Modify search
+                  </button>
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={returnToRecommendations}
+                  >
+                    Return to recommendations
+                  </button>
+                </section>
+              )}
+              {jobSearchView === "results" && discoveryResults.length > 0 && (
                 <>
                   <div className="source-results-heading">
                     <h3>{JOB_SEARCH_SOURCES.find((source) => source.id === jobSource)?.label} results</h3>
-                    <span>{discoveryResults.length} listing{discoveryResults.length === 1 ? "" : "s"}</span>
+                    <span>
+                      {visibleDiscoveryResults.length} listing{visibleDiscoveryResults.length === 1 ? "" : "s"}
+                    </span>
                   </div>
+                  {visibleDiscoveryResults.length === 0 ? (
+                    <section className="panel search-empty-state" role="status">
+                      <h2>No Results Found</h2>
+                      <p>All listings from this search have been hidden.</p>
+                      <button
+                        className="secondary-button"
+                        type="button"
+                        onClick={returnToRecommendations}
+                      >
+                        Return to recommendations
+                      </button>
+                    </section>
+                  ) : (
                   <section className="jobs-list source-search-results">
-                    {discoveryResults
-                      .filter((job) => !dismissedDiscoveryIds.has(`${job.source}:${job.source_job_id}`))
-                      .map((job) => {
+                    {visibleDiscoveryResults.map((job) => {
                       const saved = jobs.some(
                         (existing) =>
                           existing.source === job.source &&
@@ -4341,9 +4406,12 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                       );
                     })}
                   </section>
+                  )}
                 </>
               )}
             </div>
+            )}
+            {jobSearchView === "recommended" && renderRecommendedJobsSection("jobs")}
             </>
               </>
             )}
