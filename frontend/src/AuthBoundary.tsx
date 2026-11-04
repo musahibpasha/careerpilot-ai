@@ -216,6 +216,24 @@ export default function AuthBoundary({ children }: { children?: ReactNode }) {
 
   return (
     <main className="auth-page">
+      <nav className="auth-account-nav" aria-label="Account navigation">
+        <button
+          type="button"
+          className={`auth-account-nav__link ${mode === "sign-in" ? "is-active" : ""}`}
+          aria-current={mode === "sign-in" ? "page" : undefined}
+          onClick={() => { setError(""); setNotice(""); setMode("sign-in"); }}
+        >
+          Login
+        </button>
+        <button
+          type="button"
+          className={`auth-account-nav__link ${mode === "sign-up" ? "is-active" : ""}`}
+          aria-current={mode === "sign-up" ? "page" : undefined}
+          onClick={() => { setError(""); setNotice(""); setMode("sign-up"); }}
+        >
+          Sign Up
+        </button>
+      </nav>
       <section className="auth-layout">
         <aside className="auth-intro">
           <div className="auth-card__brand"></div>

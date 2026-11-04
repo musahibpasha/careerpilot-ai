@@ -285,6 +285,46 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   font-weight: 500;
 }
 .profile-button:hover { border-color: var(--line-strong); }
+.account-menu { position: relative; }
+.account-menu > summary { list-style: none; cursor: pointer; }
+.account-menu > summary::-webkit-details-marker { display: none; }
+.account-menu > summary::marker { content: ""; }
+.account-menu[open] > summary { border-color: var(--line-strong); }
+.account-menu-popover {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 8px);
+  right: 0;
+  display: grid;
+  min-width: 190px;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+}
+.account-menu-popover > button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--ink);
+  background: transparent;
+  text-align: left;
+}
+.account-menu-popover > button:hover { background: var(--surface-2); }
+.account-menu-email {
+  overflow: hidden;
+  padding: 5px 10px 8px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .avatar {
   width: 30px;
   height: 30px;
@@ -2100,6 +2140,7 @@ body {
 }
 
 .auth-page {
+  position: relative;
   display: grid;
   min-height: 100vh;
   place-items: center;
@@ -2107,6 +2148,31 @@ body {
   background:
     radial-gradient(ellipse at 30% 15%, rgba(169, 154, 255, 0.14), transparent 42%),
     var(--bg);
+}
+.auth-account-nav {
+  position: absolute;
+  z-index: 2;
+  top: 18px;
+  right: clamp(16px, 3vw, 36px);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.auth-account-nav__link {
+  min-height: 38px;
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--ink-2);
+  background: var(--surface);
+  font-size: 13px;
+  font-weight: 600;
+}
+.auth-account-nav__link:hover,
+.auth-account-nav__link.is-active {
+  border-color: var(--blue-100);
+  color: var(--ink);
+  background: var(--blue-50);
 }
 .auth-layout {
   display: grid;

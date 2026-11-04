@@ -3669,18 +3669,42 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
           </div>
 
           <div className="topbar-right">
-            <button className="profile-button" onClick={() => openProfile()}>
-              <span className="avatar">
-                {(accountName || profile?.full_name || accountEmail || "Y").trim().slice(0, 1).toUpperCase()}
-              </span>
-              <span className="account-identity">
-                <strong>{accountName || profile?.full_name || "Your profile"}</strong>
-                {accountEmail && <small>{accountEmail}</small>}
-              </span>
-            </button>
-            {onLogout && (
-              <button type="button" className="secondary-button account-logout" onClick={onLogout} aria-label="Log out">
-                <LogOut size={15} /> <span>Log out</span>
+            {onLogout ? (
+              <details className="account-menu">
+                <summary className="profile-button">
+                  <span className="avatar">
+                    {(accountName || profile?.full_name || accountEmail || "Y").trim().slice(0, 1).toUpperCase()}
+                  </span>
+                  <span className="account-identity">
+                    <strong>{accountName || profile?.full_name || "Your profile"}</strong>
+                    {accountEmail && <small>{accountEmail}</small>}
+                  </span>
+                </summary>
+                <div className="account-menu-popover">
+                  {accountEmail && <span className="account-menu-email">{accountEmail}</span>}
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.currentTarget.closest("details")?.removeAttribute("open");
+                      openProfile();
+                    }}
+                  >
+                    <User size={15} /> Profile
+                  </button>
+                  <button type="button" onClick={onLogout}>
+                    <LogOut size={15} /> Log out
+                  </button>
+                </div>
+              </details>
+            ) : (
+              <button className="profile-button" onClick={() => openProfile()}>
+                <span className="avatar">
+                  {(accountName || profile?.full_name || accountEmail || "Y").trim().slice(0, 1).toUpperCase()}
+                </span>
+                <span className="account-identity">
+                  <strong>{accountName || profile?.full_name || "Your profile"}</strong>
+                  {accountEmail && <small>{accountEmail}</small>}
+                </span>
               </button>
             )}
           </div>
