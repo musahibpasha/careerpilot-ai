@@ -2930,3 +2930,284 @@ footer { margin-top: 32px; font-size: 12px; color: var(--faint); }
   .auth-form button,
   .auth-card > button:not(.auth-link) { transition: none; }
 }
+
+/* Find Jobs: keep candidate context and search actions visually grouped. */
+.jobs-page { display: grid; align-content: start; gap: 16px; }
+.jobs-page .candidate-context {
+  gap: 16px;
+  margin: 0;
+  padding: 20px 22px;
+  border-color: #e7e3ed;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 2px 8px rgba(37, 27, 49, 0.045);
+}
+.candidate-context--jobs .candidate-context-heading {
+  align-items: center;
+  gap: 20px;
+}
+.candidate-context--jobs .candidate-context-heading h2 {
+  font-size: 17px;
+  letter-spacing: -0.25px;
+}
+.candidate-context--jobs .candidate-context-heading p {
+  margin-top: 4px;
+  font-size: 13px;
+}
+.candidate-context--jobs .candidate-context-heading > button {
+  min-height: 38px;
+  flex: none;
+}
+.candidate-context-controls {
+  display: grid;
+  grid-template-columns: minmax(240px, 0.85fr) minmax(320px, 1.15fr);
+  align-items: start;
+  gap: 14px;
+}
+.candidate-context--jobs .candidate-context-select {
+  max-width: none;
+  gap: 7px;
+  color: #555064;
+  font-size: 12px;
+  font-weight: 600;
+}
+.candidate-search-input {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.candidate-search-input > svg {
+  position: absolute;
+  left: 13px;
+  color: #817a90;
+  pointer-events: none;
+}
+.candidate-context--jobs .candidate-search-input input,
+.candidate-context--jobs .candidate-context-picker select {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 13px;
+  border: 1px solid #dcd8e4;
+  border-radius: 9px;
+  color: #302b3e;
+  background: #fff;
+  font-size: 13px;
+  font-weight: 450;
+  box-shadow: 0 1px 2px rgba(37, 27, 49, 0.03);
+  transition: border-color .16s ease, box-shadow .16s ease;
+}
+.candidate-context--jobs .candidate-search-input input { padding-left: 39px; }
+.candidate-context--jobs .candidate-search-input input:focus,
+.candidate-context--jobs .candidate-context-picker select:focus {
+  border-color: #8d6ac3 !important;
+  box-shadow: 0 0 0 3px rgba(112, 72, 184, 0.12);
+  outline: none;
+}
+.candidate-context--jobs .candidate-picker-hint {
+  min-height: 16px;
+  color: #817a90;
+  font-size: 11px;
+  font-weight: 450;
+}
+.candidate-context--jobs .candidate-context-summary {
+  align-items: center;
+  gap: 13px;
+  min-height: 76px;
+  padding: 13px 15px;
+  border-color: #ebe7f1;
+  border-radius: 11px;
+  background: #faf9fc;
+}
+.candidate-context--jobs .candidate-context-avatar {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  background: #714bb0;
+  font-size: 13px;
+}
+.candidate-context--jobs .candidate-context-info {
+  grid-template-columns: minmax(0, 1fr);
+  align-content: center;
+  gap: 4px;
+}
+.candidate-context--jobs .candidate-context-info > strong {
+  color: #302b3e;
+  font-size: 14px;
+  font-weight: 650;
+}
+.candidate-context--jobs .candidate-context-info > span {
+  color: #6b6678;
+  font-size: 12px;
+}
+.candidate-context--jobs .candidate-context-info > small {
+  color: #777184;
+  font-size: 11px;
+}
+.candidate-context--jobs .candidate-context-skills { gap: 6px; margin-top: 2px; }
+.candidate-context--jobs .candidate-context-skills span {
+  max-width: 180px;
+  padding: 4px 9px;
+  border: 1px solid #e8e1f2;
+  color: #5d4388;
+  background: #f3eff8;
+  font-size: 11px;
+}
+.job-source-card {
+  margin: 0;
+  padding: 18px 22px;
+  border-color: #e7e3ed;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 2px 8px rgba(37, 27, 49, 0.045);
+}
+.job-source-heading { margin-bottom: 13px; }
+.job-source-heading h2,
+.job-results-heading h2 { font-size: 16px; letter-spacing: -0.2px; }
+.job-source-heading p,
+.job-results-heading p { font-size: 12px; }
+.job-source-options { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.job-source-option {
+  min-height: 74px;
+  padding: 12px 14px;
+  border-color: #e5e1eb;
+  border-radius: 10px;
+  background: #fff;
+}
+.job-source-option:hover { border-color: #bdb1d1; background: #fbfaff; }
+.job-source-option.selected {
+  border-color: #8969bb;
+  color: #332744;
+  background: #f5f1fb;
+  box-shadow: inset 0 0 0 1px rgba(112, 72, 184, .12);
+}
+.job-source-option.selected .source-option-title > svg { color: #68479d; }
+.job-source-option.selected > small { color: #6b5b80; }
+.job-source-option.selected .source-brand-icon { background: #7048b8; }
+.source-primary-tag { color: var(--blue-600); }
+.source-disclaimer { margin-top: 12px; font-size: 11px; }
+.linkedin-search-card {
+  margin: 0;
+  padding: 20px 22px;
+  border-color: #e7e3ed;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 2px 8px rgba(37, 27, 49, 0.045);
+}
+.criteria-panel-head {
+  margin-bottom: 17px;
+  padding-bottom: 13px;
+  border-bottom: 1px solid #eeebf2;
+}
+.criteria-panel-head h2 { font-size: 17px; letter-spacing: -0.25px; }
+.criteria-panel-head p { margin-top: 4px; font-size: 12px; }
+.linkedin-criteria-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: end;
+  gap: 16px 18px;
+}
+.linkedin-criteria-grid label {
+  gap: 7px;
+  color: #555064;
+  font-size: 12px;
+  font-weight: 550;
+}
+.linkedin-criteria-grid input,
+.linkedin-criteria-grid select {
+  height: 44px;
+  padding: 9px 12px;
+  border-color: #dcd8e4;
+  border-radius: 9px;
+  color: #302b3e;
+  background-color: #fff;
+  font-size: 13px;
+  font-weight: 450;
+  box-shadow: 0 1px 2px rgba(37, 27, 49, 0.03);
+  transition: border-color .16s ease, box-shadow .16s ease;
+}
+.linkedin-criteria-grid input:focus,
+.linkedin-criteria-grid select:focus {
+  border-color: #8d6ac3 !important;
+  box-shadow: 0 0 0 3px rgba(112, 72, 184, 0.12);
+}
+.criteria-search-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid #eeebf2;
+}
+.criteria-search-primary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+.criteria-search-action .primary-button {
+  min-height: 44px;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 18px;
+  border-radius: 9px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.criteria-search-action > small {
+  max-width: 460px;
+  color: #777184;
+  font-size: 11px;
+  line-height: 1.5;
+  text-align: right;
+}
+.criteria-search-action .secondary-button { min-height: 40px; }
+.criteria-search-action .source-loading { flex-basis: 100%; }
+.linkedin-search-card > small:not(.criteria-disclaimer) {
+  margin-top: 13px;
+  color: #686274;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.linkedin-search-card > .row { margin-top: 5px !important; }
+.criteria-disclaimer { margin-top: 8px; font-size: 11px; }
+@media (max-width: 900px) {
+  .candidate-context-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .linkedin-criteria-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .criteria-search-action > small { max-width: 340px; }
+}
+@media (max-width: 720px) {
+  .jobs-page { gap: 12px; }
+  .jobs-page .candidate-context,
+  .job-source-card,
+  .linkedin-search-card { padding: 16px; }
+  .candidate-context-controls { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .candidate-context--jobs .candidate-context-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .candidate-context--jobs .candidate-context-heading > button { width: auto; }
+  .job-source-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .linkedin-criteria-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px; }
+  .criteria-search-action {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 9px;
+    margin-top: 15px;
+    padding-top: 14px;
+  }
+  .criteria-search-action > small { max-width: none; text-align: left; }
+}
+@media (max-width: 460px) {
+  .candidate-context--jobs .candidate-context-heading > button { width: 100%; justify-content: center; }
+  .job-source-options,
+  .linkedin-criteria-grid { grid-template-columns: minmax(0, 1fr); }
+  .criteria-search-primary { width: 100%; }
+  .criteria-search-primary .primary-button { width: 100%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .candidate-context--jobs .candidate-search-input input,
+  .candidate-context--jobs .candidate-context-picker select,
+  .linkedin-criteria-grid input,
+  .linkedin-criteria-grid select { transition: none; }
+}

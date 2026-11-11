@@ -3433,10 +3433,14 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
 
   function renderCandidateSelector(context: "dashboard" | "jobs") {
     const heading = context === "jobs" ? "Search for a candidate" : "Choose a candidate";
+    const searchTerm = candidateQuery.trim().toLocaleLowerCase();
     const visibleCandidates = candidates.filter((candidate) =>
-      candidate.id === selectedCandidateId ||
-      candidate.full_name.toLocaleLowerCase().includes(candidateQuery.trim().toLocaleLowerCase()),
+      candidate.full_name.toLocaleLowerCase().includes(searchTerm),
     );
+    const selectedCandidateOutsideSearch =
+      selectedCandidate && !visibleCandidates.some((candidate) => candidate.id === selectedCandidate.id)
+        ? selectedCandidate
+        : null;
     return (
       <section
         className={`panel candidate-context candidate-context--${context}`}
@@ -3467,34 +3471,50 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
           </div>
         ) : (
           <>
-            <label className="candidate-context-select">
-              Search candidates by name
-              <input
-                type="search"
-                value={candidateQuery}
-                onChange={(event) => setCandidateQuery(event.target.value)}
-                placeholder="Type a candidate name"
-              />
-            </label>
-            <label className="candidate-context-select">
-              Candidate
-              <select
-                value={selectedCandidateId}
-                onChange={(event) => chooseCandidate(event.target.value)}
-                aria-label="Select candidate"
-              >
-                <option value="">Select a candidate</option>
-                {visibleCandidates.map((candidate) => (
-                  <option value={candidate.id} key={candidate.id}>
-                    {candidate.full_name}
-                    {candidate.current_job_title ? ` — ${candidate.current_job_title}` : ""}
-                  </option>
-                ))}
-                {visibleCandidates.length === 0 && (
-                  <option value="" disabled>No candidates match that name</option>
-                )}
-              </select>
-            </label>
+            <div className="candidate-context-controls">
+              <label className="candidate-context-select candidate-context-search">
+                Search candidates by name
+                <span className="candidate-search-input">
+                  <Search size={16} aria-hidden="true" />
+                  <input
+                    type="search"
+                    value={candidateQuery}
+                    onChange={(event) => setCandidateQuery(event.target.value)}
+                    placeholder="Type a candidate name"
+                    autoComplete="off"
+                  />
+                </span>
+              </label>
+              <label className="candidate-context-select candidate-context-picker">
+                Select candidate
+                <select
+                  value={selectedCandidateId}
+                  onChange={(event) => chooseCandidate(event.target.value)}
+                  aria-label="Select candidate"
+                >
+                  <option value="">Select a candidate</option>
+                  {selectedCandidateOutsideSearch && (
+                    <option value={selectedCandidateOutsideSearch.id}>
+                      Current selection — {selectedCandidateOutsideSearch.full_name}
+                    </option>
+                  )}
+                  {visibleCandidates.map((candidate) => (
+                    <option value={candidate.id} key={candidate.id}>
+                      {candidate.full_name}
+                      {candidate.current_job_title ? ` — ${candidate.current_job_title}` : ""}
+                    </option>
+                  ))}
+                  {visibleCandidates.length === 0 && !selectedCandidateOutsideSearch && (
+                    <option value="" disabled>No candidates match that name</option>
+                  )}
+                </select>
+                <small className="candidate-picker-hint">
+                  {!searchTerm
+                    ? `${candidates.length} candidates available`
+                    : `${visibleCandidates.length} matching candidate${visibleCandidates.length === 1 ? "" : "s"}`}
+                </small>
+              </label>
+            </div>
             {selectedCandidate ? (
               <div className="candidate-context-summary">
                 <span className="candidate-context-avatar" aria-hidden="true">
@@ -4438,7 +4458,9 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                     <option value="newest">Match score, newest first on ties</option>
                   </select>
                 </label>
-                <div className="criteria-search-action">
+              </div>
+              <div className="criteria-search-action">
+                <div className="criteria-search-primary">
                   <button
                     className="primary-button"
                     type="button"
@@ -4464,10 +4486,10 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                       Clear search
                     </button>
                   )}
-                  <small>
-                    Search results are temporary until you save a listing. Resume details are not sent to the job board.
-                  </small>
                 </div>
+                <small>
+                  Search results are temporary until you save a listing. Resume details are not sent to the job board.
+                </small>
               </div>
 
               {profile && (profile.target_roles.length > 0 || profile.skills.length > 0) ? (
