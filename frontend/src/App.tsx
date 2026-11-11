@@ -2835,7 +2835,7 @@ function App({
     },
     copilot: {
       eyebrow: "AI COPILOT",
-      title: "ThoughtbotLabs Copilot",
+      title: "CareerPilot AI Copilot",
       sub: "Quick answers about your matches, gaps and approvals.",
     },
   };
@@ -3821,7 +3821,8 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
   ];
 
   const t = pageTitle[page];
-  const accountInitial = accountEmail.trim().slice(0, 1).toUpperCase() || "R";
+  const accountLabel = accountName.trim() || accountEmail.trim() || "Recruiter account";
+  const accountInitial = accountLabel.slice(0, 1).toUpperCase();
 
   return (
     <div className="app-shell">
@@ -3850,7 +3851,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
 
         <div className="workspace-label">Workspace</div>
 
-        <nav id="main-navigation">
+        <nav id="main-navigation" aria-label="Workspace pages">
           {navItems.map((item) =>
             item.page ? (
               <a
@@ -3863,62 +3864,74 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                   goTo(item.page as Page);
                 }}
               >
-                {item.icon} {item.label}
+                {item.icon}
+                <span className="nav-label">{item.label}</span>
                 {item.count !== undefined && <span className="nav-count">{item.count}</span>}
               </a>
             ) : (
-              <button key={item.key} type="button" className="nav" onClick={item.onClick}>
-                {item.icon} {item.label}
+              <button
+                key={item.key}
+                type="button"
+                className="nav"
+                onClick={item.onClick}
+              >
+                {item.icon}
+                <span className="nav-label">{item.label}</span>
               </button>
             ),
           )}
         </nav>
 
         <div className="sidebar-bottom">
-          <div className="secure-icon">
-            <ShieldCheck size={18} />
+          <div className="sidebar-account">
+            <span className="avatar">{accountInitial}</span>
+            <span className="sidebar-account-identity">
+              <strong title={accountLabel}>{accountLabel}</strong>
+              {accountEmail && accountEmail !== accountLabel && (
+                <small title={accountEmail}>{accountEmail}</small>
+              )}
+              {(!accountEmail || accountEmail === accountLabel) && <small>Recruiter</small>}
+            </span>
+            {onLogout && (
+              <button
+                type="button"
+                className="sidebar-logout"
+                onClick={onLogout}
+                aria-label="Log out"
+                title="Log out"
+              >
+                <LogOut size={16} />
+              </button>
+            )}
           </div>
-          <strong>You approve every application</strong>
-          <p>AI prepares. You decide. Nothing is submitted without your approval.</p>
-          <span className="status-pill">
-            <i /> Approval gate enabled
-          </span>
+          <div className="sidebar-policy">
+            <div className="secure-icon">
+              <ShieldCheck size={17} />
+            </div>
+            <span>
+              <strong>Human approval required</strong>
+              <small>Nothing is submitted without your approval.</small>
+            </span>
+          </div>
         </div>
       </aside>
 
       <main className="main">
-        <header className="topbar">
-          <div className="topbar-lead">
-            <button
-              type="button"
-              className="mobile-nav-toggle"
-              onClick={() => setSidebarOpen(true)}
-              aria-expanded={sidebarOpen}
-              aria-controls="main-navigation"
-              aria-label="Open menu"
-            >
-              <Menu size={20} />
-            </button>
-            <div>
-              <div className="eyebrow">{t.eyebrow}</div>
-              <h1 tabIndex={-1}>{t.title}</h1>
-              <p>{t.sub}</p>
-            </div>
-          </div>
-
-          <div className="topbar-right">
-            <div className="profile-button" aria-label="Recruiter account">
-              <span className="avatar">{accountInitial}</span>
-              <span className="account-identity">
-                <strong>{accountEmail || "Recruiter account"}</strong>
-                <small>Recruiter</small>
-              </span>
-            </div>
-            {onLogout && (
-              <button type="button" className="secondary-button" onClick={onLogout}>
-                <LogOut size={15} /> Log out
-              </button>
-            )}
+        <header className="page-heading">
+          <button
+            type="button"
+            className="mobile-nav-toggle"
+            onClick={() => setSidebarOpen(true)}
+            aria-expanded={sidebarOpen}
+            aria-controls="main-navigation"
+            aria-label="Open menu"
+          >
+            <Menu size={20} />
+          </button>
+          <div className="page-heading-copy">
+            <div className="eyebrow">{t.eyebrow}</div>
+            <h1 tabIndex={-1}>{t.title}</h1>
+            <p>{t.sub}</p>
           </div>
         </header>
 
@@ -4811,7 +4824,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                   <Bot size={20} />
                 </span>
                 <div>
-                  <strong>Thoughtlabs Copilot</strong>
+                  <strong>CareerPilot AI Copilot</strong>
                   <small>Answers come from your saved jobs, profile and applications</small>
                 </div>
               </div>
