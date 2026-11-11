@@ -16,9 +16,22 @@ def recommendation_db():
     database = mongo_client["recommendations_test"]
     previous = app.dependency_overrides.get(get_db)
     app.dependency_overrides[get_db] = lambda: database
+    candidate_id = ObjectId()
+    database.candidates.insert_one(
+        {
+            "_id": candidate_id,
+            "full_name": "Candidate Example",
+            "target_roles": ["Candidate Engineer"],
+            "skills": ["Go"],
+            "location": "Brussels, Belgium",
+            "preferred_location": "Brussels, Belgium",
+            "archived": False,
+        }
+    )
     database.resumes.insert_one(
         {
             "_id": ObjectId(),
+            "candidate_id": candidate_id,
             "label": "Active resume",
             "filename": "resume.pdf",
             "data": b"%PDF-1.4",
@@ -63,7 +76,7 @@ def _listing(source_job_id, location, url):
     }
 
 
-def test_recommendations_use_resume_profile_and_target_countries(
+def test_recommendations_use_selected_candidate_and_target_countries(
     recommendation_db, monkeypatch
 ):
     from app import main
@@ -102,13 +115,18 @@ def test_recommendations_use_resume_profile_and_target_countries(
     monkeypatch.setattr(main, "search_jobspy_jobs", search_board)
     monkeypatch.setattr(main.jobicy, "search_jobicy_jobs", search_jobicy)
 
-    response = client.get("/api/jobs/recommendations")
+    candidate_id = str(recommendation_db.candidates.find_one({})["_id"])
+    response = client.get(
+        "/api/jobs/recommendations",
+        params={"candidate_id": candidate_id},
+    )
 
     assert response.status_code == 200
     data = response.json()
     assert {call[2] for call in board_calls} == {"Belgium", "Germany"}
     assert all(call[3] == "match" for call in board_calls)
-    assert all("Data Engineer" in call[1] and "Product Engineer" in call[1] for call in board_calls)
+    assert all("Candidate Engineer" in call[1] and "Product Engineer" in call[1] for call in board_calls)
+    assert all("Data Engineer" not in call[1] for call in board_calls)
     assert {call[2] for call in jobicy_calls} == {"europe"}
     assert any("brussels" in call[1].casefold() for call in jobicy_calls)
     assert any("berlin" in call[1].casefold() for call in jobicy_calls)
@@ -127,18 +145,34 @@ def test_recommendations_use_resume_profile_and_target_countries(
     assert recommendation_db.profiles.find_one({})["skills"] == ["Python"]
 
 
-def test_recommendations_require_an_active_resume(monkeypatch):
+def test_recommendations_reject_missing_or_archived_candidate(monkeypatch):
     mongo_client = mongomock.MongoClient(tz_aware=True)
     database = mongo_client["recommendations_without_resume_test"]
     previous = app.dependency_overrides.get(get_db)
     app.dependency_overrides[get_db] = lambda: database
+    archived_id = database.candidates.insert_one(
+        {
+            "full_name": "Archived Candidate",
+            "target_roles": ["Engineer"],
+            "skills": ["Python"],
+            "archived": True,
+        }
+    ).inserted_id
     try:
-        response = client.get("/api/jobs/recommendations")
+        response = client.get(
+            "/api/jobs/recommendations",
+            params={"candidate_id": str(ObjectId())},
+        )
+        archived_response = client.get(
+            "/api/jobs/recommendations",
+            params={"candidate_id": str(archived_id)},
+        )
     finally:
         if previous is not None:
             app.dependency_overrides[get_db] = previous
         else:
             app.dependency_overrides.pop(get_db, None)
 
-    assert response.status_code == 409
-    assert "active resume" in response.json()["detail"].lower()
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Candidate not found."
+    assert archived_response.status_code == 404

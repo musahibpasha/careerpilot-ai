@@ -144,18 +144,21 @@ export default function ApplyWorkflow({
 
   useEffect(() => {
     let active = true;
-    fetch(`${API}/api/profile`)
+    const profilePath = application.candidate_id
+      ? `/api/candidates/${application.candidate_id}`
+      : "/api/profile";
+    fetch(`${API}${profilePath}`)
       .then(async (response) => {
         const data = await response.json().catch(() => null);
-        if (!response.ok) throw new Error(data?.detail || "Could not load your profile.");
+        if (!response.ok) throw new Error(data?.detail || "Could not load candidate profile.");
         if (active) setProfile({ ...blankProfile, ...data });
       })
       .catch((reason: unknown) => {
-        if (active) setError(reason instanceof Error ? reason.message : "Could not load your profile.");
+        if (active) setError(reason instanceof Error ? reason.message : "Could not load candidate profile.");
       })
       .finally(() => active && setProfileLoading(false));
     return () => { active = false; };
-  }, []);
+  }, [application.candidate_id]);
 
   useEffect(() => {
     let active = true;
@@ -306,7 +309,7 @@ export default function ApplyWorkflow({
           {step === 0 && (
             <div className="apply-step-content">
               <section className="apply-info-block">
-                <div className="apply-section-heading"><h3>Your profile and resume details</h3><span className="apply-match">{Math.round(job.match_score)}% match{job.match_confidence ? ` · ${job.match_confidence} confidence` : ""}</span></div>
+                <div className="apply-section-heading"><h3>{application.candidate_id ? "Candidate profile and resume details" : "Profile and resume details"}</h3><span className="apply-match">{Math.round(job.match_score)}% match{job.match_confidence ? ` · ${job.match_confidence} confidence` : ""}</span></div>
                 {profileLoading ? <p className="apply-muted">Loading saved profile…</p> : (
                   <>
                     <p><strong>{profile.full_name || "Name not provided"}</strong>{[profile.email, profile.phone, profile.location].filter(Boolean).length ? ` · ${[profile.email, profile.phone, profile.location].filter(Boolean).join(" · ")}` : ""}</p>

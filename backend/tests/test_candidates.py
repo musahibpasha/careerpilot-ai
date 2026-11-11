@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from pypdf import PdfWriter
 
 from app.database import UserScopedDatabase, get_db
+from app import assistant_routes
 from app.main import app
 
 
@@ -315,6 +316,151 @@ def test_candidate_applications_are_real_records_and_not_saved_jobs(db):
         json={"job_id": job["id"], "status": "saved"},
     )
     assert conflict.status_code == 409
+
+
+def test_saved_job_and_application_keep_their_candidate_association(db):
+    candidate = client.post("/api/candidates", json=make_candidate_payload()).json()
+    another = client.post(
+        "/api/candidates",
+        json=make_candidate_payload(full_name="Morgan Lee", email="morgan@example.com"),
+    ).json()
+    created = client.post(
+        "/api/jobs",
+        json={
+            "candidate_id": candidate["id"],
+            "title": "Backend Engineer",
+            "company": "Example Co",
+            "url": "https://example.com/jobs/backend",
+        },
+    )
+    assert created.status_code == 201, created.text
+    job = created.json()
+    assert job["candidate_id"] == candidate["id"]
+
+    conflict = client.put(
+        f"/api/jobs/{job['id']}/saved",
+        json={"saved": True, "candidate_id": another["id"]},
+    )
+    assert conflict.status_code == 409
+    assert client.get("/api/jobs").json()[0]["candidate_id"] == candidate["id"]
+
+    conflict = client.post(
+        "/api/applications",
+        json={
+            "job_id": job["id"],
+            "status": "saved",
+            "candidate_id": another["id"],
+        },
+    )
+    assert conflict.status_code == 409
+
+    tracked = client.post(
+        "/api/applications",
+        json={"job_id": job["id"], "status": "saved"},
+    )
+    assert tracked.status_code == 201, tracked.text
+    assert tracked.json()["candidate_id"] == candidate["id"]
+
+
+def test_candidate_job_rescore_uses_candidate_not_recruiter_profile(db):
+    db.profiles.insert_one(
+        {
+            "target_roles": ["Backend Engineer"],
+            "skills": ["Kubernetes"],
+            "location": "Austin, TX",
+        }
+    )
+    candidate = client.post(
+        "/api/candidates",
+        json=make_candidate_payload(
+            target_roles=["Software Engineer"],
+            skills=["Python"],
+        ),
+    ).json()
+    job = client.post(
+        "/api/jobs",
+        json={
+            "candidate_id": candidate["id"],
+            "title": "Backend Engineer",
+            "company": "Example Co",
+            "location": "Austin, TX",
+            "skills": ["Kubernetes"],
+        },
+    )
+    assert job.status_code == 201, job.text
+
+    rescored = client.post("/api/jobs/rescore")
+    assert rescored.status_code == 200
+    result = client.get("/api/jobs").json()[0]
+    skill_factor = next(
+        factor for factor in result["match_breakdown"] if factor["key"] == "skills"
+    )
+    assert skill_factor["details"]["matched"] == []
+    assert skill_factor["details"]["missing_must_have"] == ["kubernetes"]
+
+
+def test_candidate_application_assistant_uses_only_its_candidate_resume(db):
+    candidate = client.post(
+        "/api/candidates",
+        json=make_candidate_payload(full_name="Jordan Lee", skills=["Python"]),
+    ).json()
+    another = client.post(
+        "/api/candidates",
+        json=make_candidate_payload(full_name="Morgan Lee", email="morgan@example.com"),
+    ).json()
+    candidate_resume_id = db.resumes.insert_one(
+        {
+            "candidate_id": ObjectId(candidate["id"]),
+            "filename": "jordan.pdf",
+            "label": "Jordan Resume",
+            "uploaded_at": datetime.now(timezone.utc),
+            "data": b"%PDF-1.4 Jordan",
+        }
+    ).inserted_id
+    other_resume_id = db.resumes.insert_one(
+        {
+            "candidate_id": ObjectId(another["id"]),
+            "filename": "morgan.pdf",
+            "label": "Morgan Resume",
+            "is_active": True,
+            "uploaded_at": datetime.now(timezone.utc),
+            "data": b"%PDF-1.4 Morgan",
+        }
+    ).inserted_id
+    job = client.post(
+        "/api/jobs",
+        json={
+            "candidate_id": candidate["id"],
+            "title": "Backend Engineer",
+            "company": "Example Co",
+        },
+    ).json()
+    application = client.post(
+        "/api/applications",
+        json={
+            "job_id": job["id"],
+            "status": "saved",
+            "candidate_id": candidate["id"],
+        },
+    )
+    assert application.status_code == 201, application.text
+    assert application.json()["resume_id"] == str(candidate_resume_id)
+
+    state = client.get(
+        f"/api/applications/{application.json()['id']}/assistant"
+    )
+    assert state.status_code == 200, state.text
+    assistant_state = state.json()
+    assert assistant_state["resume"]["id"] == str(candidate_resume_id)
+    assert {item["id"] for item in assistant_state["available_resumes"]} == {
+        str(candidate_resume_id)
+    }
+
+    rejected_resume = client.put(
+        f"/api/applications/{application.json()['id']}/assistant/resume",
+        json={"resume_id": str(other_resume_id)},
+    )
+    assert rejected_resume.status_code == 404
 
 
 def test_import_profile_preserves_existing_data_and_attaches_existing_resumes(db):

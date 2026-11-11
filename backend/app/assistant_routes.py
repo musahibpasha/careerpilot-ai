@@ -259,8 +259,26 @@ def _stored(app_doc: dict) -> dict:
     return app_doc.get("assistant") or {}
 
 
+def _candidate_resume_query(app_doc: dict) -> dict:
+    candidate_id = app_doc.get("candidate_id")
+    return {"candidate_id": candidate_id} if candidate_id else {"is_active": True}
+
+
+def _default_resume(db: Database, app_doc: dict, projection=None):
+    return db.resumes.find_one(
+        _candidate_resume_query(app_doc),
+        projection,
+        sort=[("uploaded_at", -1)],
+    )
+
+
 def _effective(db: Database, app_doc: dict) -> tuple[dict, dict, dict]:
-    profile = db.profiles.find_one({})
+    if app_doc.get("candidate_id"):
+        profile = _main()._candidate_matching_data(
+            str(app_doc["candidate_id"]), db, include_archived=True
+        )[1]
+    else:
+        profile = db.profiles.find_one({})
     stored = _stored(app_doc)
     facts = kit.effective_facts(profile, stored.get("kit"))
     answers = kit.effective_answers(stored.get("kit"))
@@ -275,7 +293,7 @@ def _rows_and_hash(db: Database, app_doc: dict, job: dict):
     assistant = _stored(app_doc)
     selected_resume = app_doc.get("resume_id")
     if selected_resume is None and not assistant.get("resume_selection_cleared"):
-        active = db.resumes.find_one({"is_active": True}, {"_id": 1})
+        active = _default_resume(db, app_doc, {"_id": 1})
         selected_resume = active.get("_id") if active else None
     resume_fingerprint = ""
     resume_doc = db.resumes.find_one({"_id": selected_resume}) if selected_resume else None
@@ -349,7 +367,7 @@ def _state(db: Database, app_doc: dict, job: dict, generation: dict | None = Non
             "reason": d.get("reason", ""),
         }
     available_resumes = []
-    for candidate in db.resumes.find({}, {"data": 0}):
+    for candidate in db.resumes.find(_candidate_resume_query(app_doc), {"data": 0}):
         available_resumes.append(
             {
                 "id": str(candidate["_id"]),
@@ -365,7 +383,7 @@ def _state(db: Database, app_doc: dict, job: dict, generation: dict | None = Non
     elif stored.get("resume_selection_cleared"):
         doc = None
     else:
-        doc = db.resumes.find_one({"is_active": True}, {"data": 0})
+        doc = _default_resume(db, app_doc, {"data": 0})
     if doc:
         resume = {"id": str(doc["_id"]), "label": doc.get("label", ""), "filename": doc.get("filename", ""),
                   "is_active": bool(doc.get("is_active"))}
@@ -568,8 +586,14 @@ def select_resume(
     app_doc, _ = _load(db, application_id)
     if payload.resume_id:
         resume_id = _main().to_oid(payload.resume_id, "Resume")
-        if not db.resumes.find_one({"_id": resume_id}, {"_id": 1}):
-            raise HTTPException(status_code=404, detail="Resume not found.")
+        resume_query = {"_id": resume_id}
+        if app_doc.get("candidate_id"):
+            resume_query["candidate_id"] = app_doc["candidate_id"]
+        if not db.resumes.find_one(resume_query, {"_id": 1}):
+            raise HTTPException(
+                status_code=404,
+                detail="Resume not found for this candidate.",
+            )
     else:
         resume_id = None
     result = db.applications.update_one(
@@ -715,7 +739,12 @@ async def generate_drafts(
     app_doc, job = _load(db, application_id)
     if app_doc["status"] in ("submitted", "interview", "offer", "rejected", "withdrawn"):
         raise HTTPException(status_code=409, detail="This application is no longer being prepared.")
-    profile = db.profiles.find_one({})
+    if app_doc.get("candidate_id"):
+        profile = _main()._candidate_matching_data(
+            str(app_doc["candidate_id"]), db, include_archived=True
+        )[1]
+    else:
+        profile = db.profiles.find_one({})
     if profile is None:
         raise HTTPException(status_code=409, detail="Save your profile before generating drafts.")
     unknown_keys = set(payload.keys) - set(kit.DRAFT_LABELS)
@@ -1010,7 +1039,7 @@ def automate_application(
     if payload.upload_resume:
         resume_id = app_doc.get("resume_id")
         if resume_id is None and not stored.get("resume_selection_cleared"):
-            active = db.resumes.find_one({"is_active": True}, {"_id": 1})
+            active = _default_resume(db, app_doc, {"_id": 1})
             resume_id = active.get("_id") if active else None
         resume_doc = db.resumes.find_one({"_id": resume_id}) if resume_id else None
         if resume_doc:
@@ -1067,7 +1096,7 @@ def start_fill(application_id: str, payload: FillRequest, db: Database = Depends
     if payload.upload_resume:
         resume_id = app_doc.get("resume_id")
         if resume_id is None and not _stored(app_doc).get("resume_selection_cleared"):
-            active = db.resumes.find_one({"is_active": True}, {"_id": 1})
+            active = _default_resume(db, app_doc, {"_id": 1})
             resume_id = active.get("_id") if active else None
         resume_doc = db.resumes.find_one({"_id": resume_id}) if resume_id else None
         if not resume_doc:

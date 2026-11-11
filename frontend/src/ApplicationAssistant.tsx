@@ -505,7 +505,7 @@ export default function ApplicationAssistant({
         <div className="aa-shell">
           <button type="button" className="aa-brand" onClick={onReturnDashboard}>
             <span className="brand-mark"><Sparkles size={18} /></span>
-            <strong>ThoughtLabs</strong>
+            <strong>CareerPilot AI</strong>
           </button>
           <div className="aa-banner aa-bad" role="alert">
             <CircleAlert size={16} /> {loadError}
@@ -532,7 +532,7 @@ export default function ApplicationAssistant({
         <header className="aa-head">
           <button type="button" className="aa-brand" onClick={onReturnDashboard} aria-label="Return to CareerPilot dashboard">
             <span className="brand-mark"><Sparkles size={18} /></span>
-            <strong>ThoughtLabs</strong>
+            <strong>CareerPilot AI</strong>
           </button>
           <div>
             <p className="aa-eyebrow">Application Assistant</p>

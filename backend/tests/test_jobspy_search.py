@@ -2,6 +2,7 @@ import hashlib
 
 import mongomock
 import pytest
+from bson import ObjectId
 from fastapi.testclient import TestClient
 
 from app import jobspy_search
@@ -9,12 +10,23 @@ from app.database import get_db
 from app.main import app
 
 client = TestClient(app)
+CANDIDATE_ID = "64f000000000000000000001"
 
 
 @pytest.fixture(autouse=True)
 def discovery_db():
     mongo_client = mongomock.MongoClient(tz_aware=True)
     database = mongo_client["jobspy_search_test"]
+    database.candidates.insert_one(
+        {
+            "_id": ObjectId(CANDIDATE_ID),
+            "full_name": "Test Candidate",
+            "target_roles": ["Data Analyst"],
+            "skills": ["SQL"],
+            "location": "Mumbai, India",
+            "archived": False,
+        }
+    )
     previous = app.dependency_overrides.get(get_db)
     app.dependency_overrides[get_db] = lambda: database
     yield database
@@ -517,6 +529,7 @@ def test_board_discovery_endpoint_validates_source_and_forwards_filters(monkeypa
         "/api/jobs/discover/board",
         params={
             "site": "glassdoor",
+            "candidate_id": CANDIDATE_ID,
             "what": "data analyst",
             "where": "Mumbai, India",
             "job_type": "fulltime",
@@ -554,11 +567,19 @@ def test_board_discovery_endpoint_validates_source_and_forwards_filters(monkeypa
     }]
     assert client.get(
         "/api/jobs/discover/board",
-        params={"site": "unknown", "what": "engineer"},
+        params={
+            "site": "unknown",
+            "candidate_id": CANDIDATE_ID,
+            "what": "engineer",
+        },
     ).status_code == 422
     assert client.get(
         "/api/jobs/discover/board",
-        params={"site": "zip_recruiter", "what": "engineer"},
+        params={
+            "site": "zip_recruiter",
+            "candidate_id": CANDIDATE_ID,
+            "what": "engineer",
+        },
     ).status_code == 422
 
 
@@ -592,17 +613,28 @@ def test_board_discovery_scores_for_user_and_sorts_by_match_score(monkeypatch, d
 
     monkeypatch.setattr("app.main.search_jobspy_jobs", fake_search)
     monkeypatch.setattr("app.main.score_fields", fake_score_fields)
+    from app import main
+    expected_profile, expected_preferences = main._candidate_matching_data(
+        CANDIDATE_ID, discovery_db
+    )[1:]
 
     response = client.get(
         "/api/jobs/discover/board",
-        params={"site": "linkedin", "what": "data analyst"},
+        params={
+            "site": "linkedin",
+            "candidate_id": CANDIDATE_ID,
+            "what": "data analyst",
+        },
     )
 
     assert response.status_code == 200
     results = response.json()["results"]
     assert [job["title"] for job in results] == ["Higher score", "Lower score"]
     assert [job["match_score"] for job in results] == [91, 32]
-    assert score_inputs == [(profile, preferences), (profile, preferences)]
+    assert score_inputs == [
+        (expected_profile, expected_preferences),
+        (expected_profile, expected_preferences),
+    ]
 
 
 @pytest.mark.parametrize(
@@ -618,7 +650,12 @@ def test_board_discovery_scores_for_user_and_sorts_by_match_score(monkeypatch, d
 def test_board_discovery_rejects_invalid_or_incomplete_filter_values(filters):
     response = client.get(
         "/api/jobs/discover/board",
-        params={"site": "linkedin", "what": "data analyst", **filters},
+        params={
+            "site": "linkedin",
+            "candidate_id": CANDIDATE_ID,
+            "what": "data analyst",
+            **filters,
+        },
     )
 
     assert response.status_code == 422
@@ -633,7 +670,11 @@ def test_board_discovery_endpoint_accepts_each_supported_source(monkeypatch, sit
 
     response = client.get(
         "/api/jobs/discover/board",
-        params={"site": site, "what": "software engineer"},
+        params={
+            "site": site,
+            "candidate_id": CANDIDATE_ID,
+            "what": "software engineer",
+        },
     )
 
     assert response.status_code == 200

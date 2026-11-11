@@ -1,5 +1,5 @@
 /* =========================================================
-   ThoughtLabs AI — shared design system
+   CareerPilot AI — shared design system
    Midnight surfaces, lavender and mint accents.
    All tokens live in :root so every screen shares one look.
    ========================================================= */
@@ -1661,6 +1661,107 @@ body {
 
 /* ---------- Find Jobs source selection ---------- */
 .jobs-page { min-width: 0; }
+.candidate-context {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background:
+    radial-gradient(ellipse at 100% 0%, rgba(138, 72, 161, 0.13), transparent 48%),
+    var(--surface);
+}
+.candidate-context-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+.candidate-context-heading h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 15px;
+}
+.candidate-context-heading p,
+.candidate-context-empty p,
+.candidate-context-hint {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.candidate-context-select {
+  display: grid;
+  max-width: 520px;
+  gap: 6px;
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+.candidate-context-select select,
+.candidate-context-select input {
+  min-height: 42px;
+  padding: 8px 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: 11px;
+  color: var(--ink);
+  background: var(--surface-2);
+}
+.candidate-context-summary {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: 100%;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface-2);
+}
+.candidate-context-avatar {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  flex: none;
+  place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  background: linear-gradient(135deg, #a952e5, #7025be);
+}
+.candidate-context-info {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+.candidate-context-info > strong { color: var(--ink); font-size: 13px; }
+.candidate-context-info > span,
+.candidate-context-info > small { color: var(--muted); font-size: 11px; line-height: 1.5; }
+.candidate-context-skills { display: flex; flex-wrap: wrap; gap: 5px; }
+.candidate-context-skills span {
+  max-width: 180px;
+  overflow: hidden;
+  padding: 3px 7px;
+  border-radius: 999px;
+  color: var(--blue);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: var(--blue-50);
+}
+.candidate-context-empty {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 13px;
+}
+.candidate-context-error { margin: 0; color: var(--bad); font-size: 12px; }
+.job-candidate-link { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; }
 .job-source-card {
   margin-bottom: 10px;
   padding: 15px 18px;
@@ -2583,6 +2684,10 @@ body {
   .bench-filters .bench-search { grid-column: span 2; }
 }
 @media (max-width: 720px) {
+  .candidate-context-heading { flex-direction: column; }
+  .candidate-context-heading > button { width: 100%; justify-content: center; }
+  .candidate-context-empty { align-items: flex-start; flex-direction: column; }
+  .candidate-context-empty > button { width: 100%; justify-content: center; }
   .bench-toolbar { align-items: flex-start; flex-direction: column; }
   .bench-toolbar-actions { width: 100%; justify-content: space-between; }
   .bench-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }

@@ -160,6 +160,7 @@ type ChatMessage = {
 
 export type Job = {
   id: string;
+  candidate_id?: string | null;
   title: string;
   company: string;
   is_saved?: boolean;
@@ -815,6 +816,23 @@ export type Application = {
   applied_at: string | null;
   apply_updated_at: string | null;
   apply_documents: ApplicationMaterials | null;
+  candidate_id?: string | null;
+};
+
+type RecruiterCandidate = {
+  id: string;
+  full_name: string;
+  current_job_title?: string;
+  professional_headline?: string;
+  target_roles: string[];
+  skills: string[];
+  location: string;
+  preferred_location: string;
+  experience_years: number | null;
+  work_arrangement_preference?: string;
+  resume_count: number;
+  resume_filename: string;
+  archived: boolean;
 };
 
 type Profile = {
@@ -1212,6 +1230,16 @@ function App({
   accountEmail?: string;
   onLogout?: () => void;
 }) {
+  const [candidates, setCandidates] = useState<RecruiterCandidate[]>([]);
+  const [candidateLoadError, setCandidateLoadError] = useState("");
+  const [candidateQuery, setCandidateQuery] = useState("");
+  const [selectedCandidateId, setSelectedCandidateId] = useState(() => {
+    try {
+      return window.localStorage.getItem("cp-selected-candidate") ?? "";
+    } catch {
+      return "";
+    }
+  });
   const [jobs, setJobs] = useState<Job[]>([]);
   const [savedJobs, setSavedJobs] = useState<Job[]>([]);
   const [applications, setApplications] = useState<Application[]>([]);
@@ -1333,6 +1361,11 @@ function App({
       text: "Hi! I can summarise your matches, skill gaps and approval queue from the data in this app. Pick a quick action below.",
     },
   ]);
+  const selectedCandidate = candidates.find(
+    (candidate) => candidate.id === selectedCandidateId,
+  ) ?? null;
+  const candidateName = (candidateId?: string | null) =>
+    candidates.find((candidate) => candidate.id === candidateId)?.full_name ?? "Unassigned";
   const threadRef = useRef<HTMLDivElement>(null);
   const previousPageRef = useRef(page);
 
@@ -1393,6 +1426,7 @@ function App({
       profileResult,
       preferencesResult,
       resumesResult,
+      candidatesResult,
     ] = await Promise.allSettled([
       get("/api/jobs"),
       get("/api/jobs/saved"),
@@ -1400,6 +1434,7 @@ function App({
       get("/api/profile"),
       get("/api/preferences"),
       get("/api/resumes"),
+      get("/api/candidates"),
     ]);
 
     const problems: string[] = [];
@@ -1438,6 +1473,29 @@ function App({
       problems.push(String(resumesResult.reason?.message ?? "resumes failed"));
     }
 
+    if (candidatesResult.status === "fulfilled") {
+      const candidateItems = Array.isArray(candidatesResult.value?.items)
+        ? candidatesResult.value.items as RecruiterCandidate[]
+        : [];
+      setCandidates(candidateItems.filter((candidate) => !candidate.archived));
+      if (
+        selectedCandidateId &&
+        !candidateItems.some(
+          (candidate) => candidate.id === selectedCandidateId && !candidate.archived,
+        )
+      ) {
+        setSelectedCandidateId("");
+        saveSetting("cp-selected-candidate", "");
+        recommendationsStarted.current = false;
+      }
+      setCandidateLoadError("");
+    } else {
+      setCandidateLoadError(
+        String(candidatesResult.reason?.message ?? "Could not load candidates."),
+      );
+      problems.push(String(candidatesResult.reason?.message ?? "candidates failed"));
+    }
+
     if (problems.length > 0) {
       const coreDashboardUnavailable =
         jobsResult.status === "rejected" ||
@@ -1469,7 +1527,44 @@ function App({
     setJobSearchView("recommended");
   }
 
+  function chooseCandidate(candidateId: string) {
+    const candidate = candidates.find((item) => item.id === candidateId);
+    setSelectedCandidateId(candidate?.id ?? "");
+    saveSetting("cp-selected-candidate", candidate?.id ?? "");
+    clearDiscoveryResults();
+    recommendationRequestId.current += 1;
+    setRecommendationLoading(false);
+    setRecommendedJobs([]);
+    setRecommendationMessage("");
+    setRecommendationSourceFailures([]);
+    setRecommendationLastUpdated(null);
+    recommendationsStarted.current = false;
+    if (!candidate) return;
+
+    const roles = candidate.target_roles.map((role) => role.trim()).filter(Boolean);
+    const suggestedKeywords = roles.length
+      ? roles.slice(0, 3).join(" OR ")
+      : candidate.skills.map((skill) => skill.trim()).filter(Boolean).slice(0, 5).join(" ") ||
+        candidate.current_job_title ||
+        candidate.professional_headline ||
+        "";
+    setLinkedinKeywords(suggestedKeywords.slice(0, 100));
+    setLinkedinLocation(candidate.preferred_location || candidate.location || "");
+    const arrangement = candidate.work_arrangement_preference?.toLowerCase();
+    setLinkedinWorkArrangement(
+      arrangement === "remote" || arrangement === "hybrid" || arrangement === "onsite"
+        ? arrangement
+        : "any",
+    );
+  }
+
   async function searchJobBoard() {
+    if (!selectedCandidate) {
+      setDiscoveryError(true);
+      setJobSearchView("error");
+      setDiscoveryMessage("Select a candidate before searching for jobs.");
+      return;
+    }
     const requestId = ++discoveryRequestId.current;
     setDiscoveryBusy(true);
     setDiscoveryResults([]);
@@ -1479,6 +1574,7 @@ function App({
     try {
       const params = new URLSearchParams({
         site: jobSource,
+        candidate_id: selectedCandidate.id,
         what: linkedinKeywords.trim(),
         where: linkedinLocation.trim(),
       });
@@ -1541,6 +1637,10 @@ function App({
   }
 
   async function refreshRecommendations() {
+    if (!selectedCandidate) {
+      setRecommendationMessage("Select a candidate to see candidate-specific recommendations.");
+      return;
+    }
     const requestId = ++recommendationRequestId.current;
     recommendationsStarted.current = true;
     setRecommendationLoading(true);
@@ -1549,7 +1649,8 @@ function App({
     setRecommendationMessage("");
     setRecommendationSourceFailures([]);
     try {
-      const response = await fetch(`${API}/api/jobs/recommendations`);
+      const params = new URLSearchParams({ candidate_id: selectedCandidate.id });
+      const response = await fetch(`${API}/api/jobs/recommendations?${params}`);
       const data = await response.json().catch(() => null);
       if (!response.ok) {
         throw new Error(errorText(data, `HTTP ${response.status}`));
@@ -1562,6 +1663,9 @@ function App({
         throw new Error("The recommendation service returned an invalid response.");
       }
       if (requestId !== recommendationRequestId.current) return;
+      if (data.candidate_id !== selectedCandidate.id) {
+        throw new Error("Recommendations were returned for a different candidate.");
+      }
 
       const jobs = data.results as DiscoveredJob[];
       const failures = data.source_failures as string[];
@@ -1601,23 +1705,6 @@ function App({
     setDismissedDiscoveryIds(new Set());
   }
 
-  function useProfileForLinkedInSearch() {
-    const roles = (profile?.target_roles ?? []).map((role) => role.trim()).filter(Boolean);
-    const skills = (profile?.skills ?? []).map((skill) => skill.trim()).filter(Boolean);
-    const suggestedKeywords = roles.length
-      ? roles.slice(0, 3).join(" OR ")
-      : skills.slice(0, 5).join(" ");
-
-    if (suggestedKeywords) setLinkedinKeywords(suggestedKeywords);
-    setLinkedinLocation((cur) => cur.trim() || "Belgium");
-
-    setLinkedinWorkArrangement(
-      preferencesForm.work_arrangements.length === 1
-        ? preferencesForm.work_arrangements[0]
-        : "any",
-    );
-  }
-
   async function saveDiscoveredJob(job: DiscoveredJob): Promise<Job | null> {
     setSavingDiscoveryId(job.source_job_id);
     setDiscoveryMessage("");
@@ -1632,7 +1719,11 @@ function App({
         {
         method: existing ? "PUT" : "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(existing ? { saved: true } : {
+        body: JSON.stringify(existing ? {
+          saved: true,
+          candidate_id: selectedCandidateId || undefined,
+        } : {
+          candidate_id: selectedCandidateId,
           title: job.title,
           company: job.company,
           location: job.location,
@@ -1655,7 +1746,13 @@ function App({
       });
       const data = await response.json().catch(() => null);
       if (response.status === 409) {
-        setDiscoveryMessage("This listing is already saved.");
+        const linkedToAnotherCandidate =
+          existing?.candidate_id &&
+          existing.candidate_id !== selectedCandidateId;
+        setDiscoveryMessage(linkedToAnotherCandidate
+          ? "This listing is already associated with another candidate."
+          : errorText(data, "This listing is already saved."));
+        if (linkedToAnotherCandidate) return null;
         return existing && existing.is_saved !== false ? existing : null;
       }
       if (!response.ok) {
@@ -1763,11 +1860,50 @@ function App({
     if (
       (page === "dashboard" || page === "jobs") &&
       dashboardLoadState === "ready" &&
+      selectedCandidateId &&
       !recommendationsStarted.current
     ) {
       void refreshRecommendations();
     }
-  }, [page, dashboardLoadState, resumes]);
+  }, [page, dashboardLoadState, selectedCandidateId]);
+
+  useEffect(() => {
+    if (page !== "dashboard" && page !== "jobs") return;
+    let cancelled = false;
+    void fetch(`${API}/api/candidates`)
+      .then(async (response) => {
+        const data = await response.json().catch(() => null);
+        if (!response.ok) {
+          throw new Error(errorText(data, `Could not load candidates (HTTP ${response.status}).`));
+        }
+        return data;
+      })
+      .then((data) => {
+        if (cancelled) return;
+        const candidateItems = Array.isArray(data?.items)
+          ? (data.items as RecruiterCandidate[]).filter((candidate) => !candidate.archived)
+          : [];
+        setCandidates(candidateItems);
+        setCandidateLoadError("");
+        if (
+          selectedCandidateId &&
+          !candidateItems.some((candidate) => candidate.id === selectedCandidateId)
+        ) {
+          setSelectedCandidateId("");
+          saveSetting("cp-selected-candidate", "");
+          recommendationsStarted.current = false;
+        }
+      })
+      .catch((reason) => {
+        if (cancelled) return;
+        setCandidateLoadError(
+          reason instanceof Error ? reason.message : "Could not load candidates.",
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [page]);
 
   useEffect(() => {
     setFormError("");
@@ -2005,6 +2141,7 @@ function App({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ...form,
+          candidate_id: selectedCandidateId || undefined,
           location: form.location || null,
           url: form.url || null,
           skills: splitCommas(form.skills),
@@ -2463,6 +2600,7 @@ function App({
         body: JSON.stringify({
           job_id: job.id,
           status: "saved",
+          candidate_id: job.candidate_id || selectedCandidateId || undefined,
         }),
       });
 
@@ -2484,9 +2622,21 @@ function App({
   }
 
   async function openApplyWorkflow(job: Job) {
+    const candidateId = job.candidate_id || selectedCandidateId;
+    if (!candidateId) {
+      setNotice("Select a candidate before opening the application workflow.");
+      return;
+    }
     const knownApplication = applications.find(
       (candidate) => candidate.job_id === job.id,
     );
+    if (
+      knownApplication?.candidate_id &&
+      knownApplication.candidate_id !== candidateId
+    ) {
+      setNotice("This application is already linked to another candidate.");
+      return;
+    }
     if (knownApplication && hasConfirmedApplication(knownApplication)) {
       setNotice("You have already confirmed this application.");
       goTo("applications");
@@ -2499,11 +2649,15 @@ function App({
       let application = applications.find(
         (candidate) => String(candidate.job_id) === String(job.id),
       );
-      if (!application) {
+      if (!application || !application.candidate_id) {
         const response = await fetch(`${API}/api/applications`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ job_id: job.id, status: "saved" }),
+          body: JSON.stringify({
+            job_id: job.id,
+            status: "saved",
+            candidate_id: candidateId,
+          }),
         });
         const data = await response.json().catch(() => null);
         if (!response.ok) {
@@ -3107,7 +3261,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
         role: "assistant",
         text: waiting.length
           ? "These applications are waiting for your review. Nothing is submitted on your behalf; use Automate to prepare and review one."
-          : "Nothing is waiting for review. ThoughtLabs Pilot never submits an application for you.",
+          : "Nothing is waiting for review. CareerPilot AI never submits an application for you.",
         lines: waiting.map(
           (a) => `${a.job_title} at ${a.company} — ${statusLabel(a.status)}`,
         ),
@@ -3245,8 +3399,111 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
     );
   }
 
+  function renderCandidateSelector(context: "dashboard" | "jobs") {
+    const heading = context === "jobs" ? "Search for a candidate" : "Choose a candidate";
+    const visibleCandidates = candidates.filter((candidate) =>
+      candidate.id === selectedCandidateId ||
+      candidate.full_name.toLocaleLowerCase().includes(candidateQuery.trim().toLocaleLowerCase()),
+    );
+    return (
+      <section
+        className={`panel candidate-context candidate-context--${context}`}
+        aria-label={heading}
+      >
+        <div className="candidate-context-heading">
+          <div>
+            <h2>{heading}</h2>
+            <p>
+              {context === "jobs"
+                ? "Search and match listings using the selected candidate's saved profile."
+                : "Recommendations are calculated from the selected candidate's profile and resume."}
+            </p>
+          </div>
+          <button type="button" className="secondary-button" onClick={() => goTo("bench")}>
+            <UsersRound size={14} /> Manage candidates
+          </button>
+        </div>
+        {candidateLoadError && (
+          <p className="candidate-context-error" role="alert">{candidateLoadError}</p>
+        )}
+        {candidates.length === 0 ? (
+          <div className="candidate-context-empty">
+            <p>No candidates are available yet. Add a candidate before searching or viewing recommendations.</p>
+            <button type="button" className="primary-button" onClick={() => goTo("bench")}>
+              <Plus size={14} /> Add candidate
+            </button>
+          </div>
+        ) : (
+          <>
+            <label className="candidate-context-select">
+              Search candidates by name
+              <input
+                type="search"
+                value={candidateQuery}
+                onChange={(event) => setCandidateQuery(event.target.value)}
+                placeholder="Type a candidate name"
+              />
+            </label>
+            <label className="candidate-context-select">
+              Candidate
+              <select
+                value={selectedCandidateId}
+                onChange={(event) => chooseCandidate(event.target.value)}
+                aria-label="Select candidate"
+              >
+                <option value="">Select a candidate</option>
+                {visibleCandidates.map((candidate) => (
+                  <option value={candidate.id} key={candidate.id}>
+                    {candidate.full_name}
+                    {candidate.current_job_title ? ` — ${candidate.current_job_title}` : ""}
+                  </option>
+                ))}
+                {visibleCandidates.length === 0 && (
+                  <option value="" disabled>No candidates match that name</option>
+                )}
+              </select>
+            </label>
+            {selectedCandidate ? (
+              <div className="candidate-context-summary">
+                <span className="candidate-context-avatar" aria-hidden="true">
+                  {selectedCandidate.full_name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "?"}
+                </span>
+                <div className="candidate-context-info">
+                  <strong>{selectedCandidate.full_name}</strong>
+                  <span>
+                    {selectedCandidate.current_job_title ||
+                      selectedCandidate.professional_headline ||
+                      selectedCandidate.target_roles[0] ||
+                      "Role not specified"}
+                    {selectedCandidate.experience_years !== null &&
+                      ` · ${selectedCandidate.experience_years} years`}
+                    {(selectedCandidate.preferred_location || selectedCandidate.location) &&
+                      ` · ${selectedCandidate.preferred_location || selectedCandidate.location}`}
+                  </span>
+                  {selectedCandidate.skills.length > 0 && (
+                    <div className="candidate-context-skills">
+                      {selectedCandidate.skills.slice(0, 6).map((skill) => (
+                        <span key={skill}>{skill}</span>
+                      ))}
+                    </div>
+                  )}
+                  <small>
+                    {selectedCandidate.resume_count > 0
+                      ? `Resume available${selectedCandidate.resume_filename ? `: ${selectedCandidate.resume_filename}` : ""}`
+                      : "No resume uploaded"}
+                  </small>
+                </div>
+              </div>
+            ) : (
+              <p className="candidate-context-hint">Select a candidate to continue.</p>
+            )}
+          </>
+        )}
+      </section>
+    );
+  }
+
   function renderRecommendedJobsSection(placement: "dashboard" | "jobs") {
-    const hasActiveResume = resumes.some((resume) => resume.is_active);
     return (
       <section
         className={`panel recommended-jobs recommended-jobs--${placement} ${
@@ -3258,9 +3515,11 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
           <div>
             <h2>Recommended Jobs</h2>
             <p>
-              Matched against your saved profile and active resume for Belgium and Germany
-              across LinkedIn, Indeed, Glassdoor, and Jobicy. Naukri's current listing integration
-              is India-only.
+              {selectedCandidate
+                ? `Matched for ${selectedCandidate.full_name} across Belgium and Germany`
+                : "Select a candidate to see candidate-specific recommendations"}
+              {selectedCandidate &&
+                " across LinkedIn, Indeed, Glassdoor, and Jobicy. Naukri's current listing integration is India-only."}
               {recommendationLastUpdated &&
                 ` Last updated ${new Date(recommendationLastUpdated).toLocaleString()}.`}
             </p>
@@ -3269,19 +3528,16 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
             type="button"
             className="secondary-button recommendation-refresh"
             onClick={() => void refreshRecommendations()}
-            disabled={recommendationLoading}
+            disabled={recommendationLoading || !selectedCandidate}
             aria-label="Refresh recommended jobs"
           >
             <RotateCcw size={14} className={recommendationLoading ? "recommendation-spinning" : ""} />
             {recommendationLoading ? "Refreshing…" : "Refresh"}
           </button>
         </div>
-        {!hasActiveResume ? (
+        {!selectedCandidate ? (
           <div className="recommendation-empty">
-            <p>Upload or select an active resume to see jobs matched to your experience.</p>
-            <button type="button" className="secondary-button" onClick={() => openProfile("my-resumes")}>
-              <Upload size={14} /> Open Resumes
-            </button>
+            <p>Select a candidate above to see jobs matched to their saved skills and resume.</p>
           </div>
         ) : (
           <>
@@ -3391,6 +3647,11 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
           </div>
 
           <p>{job.company}</p>
+          {page === "saved" && (
+            <small className="job-candidate-link">
+              Candidate: {candidateName(job.candidate_id)}
+            </small>
+          )}
 
           <div className="job-meta">
             {job.location && (
@@ -3531,8 +3792,8 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
     .slice(0, 4);
 
   const setup = [
-    { label: "Add skills to your profile", done: !!profile?.skills?.length },
-    { label: "Upload a resume and set one active", done: resumes.some((r) => r.is_active) },
+    { label: "Add a candidate", done: candidates.length > 0 },
+    { label: "Add candidate skills", done: candidates.some((candidate) => candidate.skills.length > 0) },
     { label: "Save at least one job", done: savedJobCount > 0 },
     { label: "Confirm an application", done: confirmedApplications.length > 0 },
   ];
@@ -3582,8 +3843,8 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
             <Sparkles size={20} />
           </div>
           <div>
-            <strong>ThoughtLabs</strong>
-            <span>AI job-search copilot</span>
+            <strong>CareerPilot AI</strong>
+            <span>Recruiter workspace</span>
           </div>
         </div>
 
@@ -3803,20 +4064,17 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
 
               <div className="stat-card">
                 <div className="stat-top">
-                  <span>Profile readiness</span>
+                  <span>Bench Candidates</span>
                   <span className="stat-icon green">
-                    <Target size={18} />
+                    <UsersRound size={18} />
                   </span>
                 </div>
-                <strong>{profile?.skills?.length ? "Ready" : "Setup"}</strong>
-                <small>
-                  {profile?.skills?.length
-                    ? `${profile.skills.length} skills in your profile`
-                    : "Add skills to improve matching"}
-                </small>
+                <strong>{candidates.length}</strong>
+                <small>Managed candidate profiles</small>
               </div>
             </section>
 
+            {renderCandidateSelector("dashboard")}
             <div className="dash-grid dashboard-section-enter dashboard-section-enter--2" style={{ marginTop: 20 }}>
               <div className="dash-main">
                 {renderRecommendedJobsSection("dashboard")}
@@ -3831,7 +4089,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                     <div>
                       <h2>Human approval required</h2>
                       <p style={{ marginTop: 4, fontSize: 13 }}>
-                        ThoughtLabs Pilot never submits an application for you. Review and approve it in
+                        CareerPilot AI never submits an application for you. Review and approve it in
                         the Application Assistant, then submit it yourself on the employer's site.
                       </p>
                     </div>
@@ -3924,6 +4182,9 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                         <div className="recent-job">
                           <strong>{application.job_title}</strong>
                           <span>{application.company}</span>
+                          <small className="job-candidate-link">
+                            Candidate: {candidateName(application.candidate_id)}
+                          </small>
                         </div>
                         <div className="recent-status">
                           <span className={`status status-${application.status}`}>
@@ -3969,6 +4230,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
           <div className="page-view jobs-page">
             {page === "jobs" && (
               <>
+            {renderCandidateSelector("jobs")}
             <section className="job-source-card" aria-label="Job source">
               <div className="job-source-heading">
                 <span className="job-source-icon">
@@ -4011,14 +4273,6 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                   <h2>Search criteria</h2>
                   <p>Find listings on {JOB_SEARCH_SOURCES.find((source) => source.id === jobSource)?.label}.</p>
                 </div>
-                <button
-                  className="secondary-button"
-                  type="button"
-                  onClick={useProfileForLinkedInSearch}
-                  disabled={!profile || (!profile.target_roles.length && !profile.skills.length)}
-                >
-                  Use my profile
-                </button>
               </div>
 
               <div className="search-criteria-grid linkedin-criteria-grid">
@@ -4029,7 +4283,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                     value={linkedinKeywords}
                     onChange={(event) => setLinkedinKeywords(event.target.value)}
                     placeholder="e.g. Frontend Developer, Data Analyst"
-                    maxLength={300}
+                    maxLength={100}
                   />
                 </label>
                 <label>
@@ -4113,7 +4367,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                   <button
                     className="primary-button"
                     type="button"
-                    disabled={discoveryBusy || linkedinKeywords.trim().length < 2}
+                    disabled={discoveryBusy || !selectedCandidate || linkedinKeywords.trim().length < 2}
                     onClick={() => void searchJobBoard()}
                   >
                     {discoveryBusy
@@ -4947,6 +5201,9 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                                   ? ` · ${linkedJob.location}`
                                   : ""}
                               </span>
+                              <small className="job-candidate-link">
+                                Candidate: {candidateName(application.candidate_id)}
+                              </small>
                             </div>
 
                             {linkedJob && (
@@ -5169,7 +5426,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
         )}
 
         <footer>
-          ThoughtLabs AI <span>·</span> ThoughtLabs automation, human decisions.
+          CareerPilot AI <span>·</span> CareerPilot automation, human decisions.
         </footer>
       </main>
 

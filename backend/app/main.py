@@ -158,6 +158,7 @@ def to_oid(value: str, what: str) -> ObjectId:
 def job_out(d: dict) -> dict:
     return {
         "id": str(d["_id"]),
+        "candidate_id": str(d["candidate_id"]) if d.get("candidate_id") else None,
         "title": d["title"],
         "company": d["company"],
         "is_saved": d.get("is_saved", True),
@@ -230,7 +231,16 @@ def rescore_all_jobs(db: Database, profile: dict | None = None, prefs: dict | No
     prefs = prefs if prefs is not None else db.preferences.find_one({})
     count = 0
     for job in db.jobs.find({}):
-        db.jobs.update_one({"_id": job["_id"]}, {"$set": score_fields(job, profile, prefs)})
+        if job.get("candidate_id"):
+            _, matching_profile, matching_preferences = _candidate_matching_data(
+                str(job["candidate_id"]), db, include_archived=True
+            )
+        else:
+            matching_profile, matching_preferences = profile, prefs
+        db.jobs.update_one(
+            {"_id": job["_id"]},
+            {"$set": score_fields(job, matching_profile, matching_preferences)},
+        )
         count += 1
     return count
 
@@ -929,6 +939,7 @@ def list_saved_jobs(db: Database = Depends(get_db)):
 @app.get("/api/jobs/discover/board", response_model=schemas.JobSpyDiscoveryResponse)
 def discover_board_jobs(
     site: str = Query(..., min_length=2, max_length=30),
+    candidate_id: str = Query(..., min_length=1),
     what: str = Query(default="software engineer", min_length=2, max_length=100),
     where: str = Query(default="", max_length=100),
     job_type: str | None = Query(
@@ -974,6 +985,7 @@ def discover_board_jobs(
             status_code=422,
             detail="Choose a salary currency when filtering by salary.",
         )
+    _, profile, preferences = _candidate_matching_data(candidate_id, db)
     try:
         search_options = {
             "site": site,
@@ -994,8 +1006,6 @@ def discover_board_jobs(
         if english_only:
             search_options["english_only"] = True
         response = search_jobspy_jobs(**search_options)
-        profile = db.profiles.find_one({})
-        preferences = db.preferences.find_one({})
         for job in response["results"]:
             job.update(score_fields(job, profile, preferences))
         if sort_by == "newest":
@@ -1102,6 +1112,44 @@ def _recommendation_profile(profile: dict | None, extracted: dict) -> dict:
     return matched_profile
 
 
+def _candidate_matching_data(
+    candidate_id: str,
+    db: Database,
+    *,
+    include_archived: bool = False,
+) -> tuple[dict, dict, dict]:
+    candidate_oid = to_oid(candidate_id, "Candidate")
+    query = {"_id": candidate_oid}
+    if not include_archived:
+        query["archived"] = {"$ne": True}
+    candidate = db.candidates.find_one(query)
+    if candidate is None:
+        raise HTTPException(status_code=404, detail="Candidate not found.")
+
+    resume = db.resumes.find_one(
+        {"candidate_id": candidate_oid},
+        {"data": 0},
+        sort=[("uploaded_at", -1)],
+    )
+    extracted = resume.get("extracted") if isinstance(resume, dict) else {}
+    profile = _recommendation_profile(candidate, extracted if isinstance(extracted, dict) else {})
+    location = (
+        str(candidate.get("preferred_location") or "").strip()
+        or str(candidate.get("location") or "").strip()
+    )
+    work_arrangement = str(candidate.get("work_arrangement_preference") or "").strip().lower()
+    preferences = {
+        "locations": [location] if location else [],
+        "work_arrangements": (
+            [work_arrangement]
+            if work_arrangement in {"remote", "hybrid", "onsite"}
+            else []
+        ),
+        "experience_level": str(candidate.get("seniority_level") or "").strip().lower(),
+    }
+    return candidate, profile, preferences
+
+
 async def _stored_resume_extraction(
     doc: dict,
     db: Database,
@@ -1137,28 +1185,12 @@ async def _stored_resume_extraction(
     "/api/jobs/recommendations",
     response_model=schemas.JobRecommendationsResponse,
 )
-async def recommended_jobs(db: Database = Depends(get_db)):
-    """Fetch current Belgium/Germany listings and score them against this user's data."""
-    resume = db.resumes.find_one({"is_active": True})
-    if not resume:
-        raise HTTPException(
-            status_code=409,
-            detail="Upload a resume or select an active resume to get recommendations.",
-        )
-
-    try:
-        extraction = await _stored_resume_extraction(resume, db)
-    except HTTPException as error:
-        raise HTTPException(
-            status_code=error.status_code,
-            detail=f"Could not read the active resume for recommendations: {error.detail}",
-        ) from error
-
-    profile = _recommendation_profile(
-        db.profiles.find_one({}),
-        extraction["extracted"],
-    )
-    preferences = db.preferences.find_one({}) or {}
+async def recommended_jobs(
+    candidate_id: str = Query(..., min_length=1),
+    db: Database = Depends(get_db),
+):
+    """Fetch current Belgium/Germany listings for the selected candidate."""
+    candidate, profile, preferences = _candidate_matching_data(candidate_id, db)
     roles = profile.get("target_roles") or []
     skills = profile.get("skills") or []
     query_roles = [str(role).strip() for role in roles if str(role).strip()][:3]
@@ -1167,15 +1199,12 @@ async def recommended_jobs(db: Database = Depends(get_db)):
     if not query_roles:
         raise HTTPException(
             status_code=422,
-            detail="Add target roles or skills to your profile or active resume to get recommendations.",
+            detail="Add target roles or skills to this candidate's profile or resume to get recommendations.",
         )
 
     search_term = " OR ".join(query_roles)[:100]
     jobicy_terms = query_roles[:3]
-    target_preferences = {
-        **preferences,
-        "locations": ["Belgium", "Germany"],
-    }
+    target_preferences = {**preferences, "locations": ["Belgium", "Germany"]}
     search_calls = [
         (site, country)
         for site in _RECOMMENDATION_SITES
@@ -1256,6 +1285,7 @@ async def recommended_jobs(db: Database = Depends(get_db)):
         key=lambda listing: -listing["match_score"],
     )[:6]
     return {
+        "candidate_id": str(candidate["_id"]),
         "results": ranked_jobs,
         "source_failures": source_failures,
         "successful_sources": sorted(successful_sources),
@@ -1414,11 +1444,14 @@ def job_application_plan(job_id: str, db: Database = Depends(get_db)):
     job = db.jobs.find_one({"_id": oid})
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found.")
-    plan = build_application_plan(
-        job,
-        db.profiles.find_one({}),
-        db.preferences.find_one({}),
-    )
+    if job.get("candidate_id"):
+        _, profile, preferences = _candidate_matching_data(
+            str(job["candidate_id"]), db, include_archived=True
+        )
+    else:
+        profile = db.profiles.find_one({})
+        preferences = db.preferences.find_one({})
+    plan = build_application_plan(job, profile, preferences)
     return {
         "job_id": str(job["_id"]),
         "title": job.get("title", ""),
@@ -1454,11 +1487,16 @@ async def generate_job_application_materials(
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found.")
 
-    profile = db.profiles.find_one({})
+    if job.get("candidate_id"):
+        _, profile, _ = _candidate_matching_data(
+            str(job["candidate_id"]), db, include_archived=True
+        )
+    else:
+        profile = db.profiles.find_one({})
     if profile is None:
         raise HTTPException(
             status_code=409,
-            detail="Save your profile before generating application materials.",
+            detail="Add candidate profile details before generating application materials.",
         )
 
     # Exclude direct contact details. Only send the confirmed career profile
@@ -2048,6 +2086,15 @@ def create_job(
     payload: schemas.JobCreate,
     db: Database = Depends(get_db),
 ):
+    candidate_oid = None
+    if payload.candidate_id:
+        candidate_oid = to_oid(payload.candidate_id, "Candidate")
+        if db.candidates.find_one(
+            {"_id": candidate_oid, "archived": {"$ne": True}},
+            {"_id": 1},
+        ) is None:
+            raise HTTPException(status_code=404, detail="Candidate not found.")
+
     url = str(payload.url) if payload.url else None
     application_url = str(payload.application_url) if payload.application_url else None
     if application_url:
@@ -2091,6 +2138,7 @@ def create_job(
 
     doc = {
         "title": payload.title.strip(),
+        "candidate_id": candidate_oid,
         "company": payload.company.strip(),
         "is_saved": True,
         "location": payload.location,
@@ -2111,7 +2159,14 @@ def create_job(
         "salary_period": payload.salary_period,
         "created_at": now(),
     }
-    doc.update(score_fields(doc, db.profiles.find_one({}), db.preferences.find_one({})))
+    if payload.candidate_id:
+        _, matching_profile, matching_preferences = _candidate_matching_data(
+            payload.candidate_id, db
+        )
+    else:
+        matching_profile = db.profiles.find_one({})
+        matching_preferences = db.preferences.find_one({})
+    doc.update(score_fields(doc, matching_profile, matching_preferences))
 
     try:
         doc["_id"] = db.jobs.insert_one(doc).inserted_id
@@ -2134,8 +2189,24 @@ def update_job_saved_state(
     db: Database = Depends(get_db),
 ):
     oid = to_oid(job_id, "Job")
-    if db.jobs.update_one({"_id": oid}, {"$set": {"is_saved": payload.saved}}).matched_count == 0:
+    job = db.jobs.find_one({"_id": oid})
+    if job is None:
         raise HTTPException(status_code=404, detail="Job not found.")
+    updates = {"is_saved": payload.saved}
+    if payload.candidate_id:
+        candidate_oid = to_oid(payload.candidate_id, "Candidate")
+        if db.candidates.find_one(
+            {"_id": candidate_oid, "archived": {"$ne": True}},
+            {"_id": 1},
+        ) is None:
+            raise HTTPException(status_code=404, detail="Candidate not found.")
+        if job.get("candidate_id") not in (None, candidate_oid):
+            raise HTTPException(
+                status_code=409,
+                detail="This job is already associated with another candidate.",
+            )
+        updates["candidate_id"] = candidate_oid
+    db.jobs.update_one({"_id": oid}, {"$set": updates})
     return job_out(db.jobs.find_one({"_id": oid}))
 
 
@@ -2216,6 +2287,24 @@ def create_application(
         )
         if candidate is None:
             raise HTTPException(status_code=404, detail="Candidate not found.")
+        if job.get("candidate_id") not in (None, candidate_id):
+            raise HTTPException(
+                status_code=409,
+                detail="This job is associated with another candidate.",
+            )
+        if job.get("candidate_id") is None:
+            db.jobs.update_one(
+                {"_id": job["_id"]},
+                {"$set": {"candidate_id": candidate_id}},
+            )
+            job["candidate_id"] = candidate_id
+    elif job.get("candidate_id"):
+        candidate_id = job["candidate_id"]
+        if db.candidates.find_one(
+            {"_id": candidate_id, "archived": {"$ne": True}},
+            {"_id": 1},
+        ) is None:
+            raise HTTPException(status_code=404, detail="Candidate not found.")
 
     existing = db.applications.find_one({"job_id": job["_id"]})
     if existing is not None:
@@ -2227,18 +2316,42 @@ def create_application(
                     detail="This application is already linked to another candidate.",
                 )
             if assigned_candidate is None:
+                candidate_resume = db.resumes.find_one(
+                    {"candidate_id": candidate_id},
+                    {"data": 0},
+                    sort=[("uploaded_at", -1)],
+                )
+                resume_id = candidate_resume["_id"] if candidate_resume else None
+                resume_label = candidate_resume.get("label") if candidate_resume else None
                 db.applications.update_one(
                     {"_id": existing["_id"]},
-                    {"$set": {"candidate_id": candidate_id}},
+                    {
+                        "$set": {
+                            "candidate_id": candidate_id,
+                            "resume_id": resume_id,
+                            "resume_label": resume_label,
+                        }
+                    },
                 )
                 existing["candidate_id"] = candidate_id
+                existing["resume_id"] = resume_id
+                existing["resume_label"] = resume_label
         response.status_code = 200
         return app_out(existing, job)
 
     timestamp = now()
 
     # Record which resume was active when this application was created.
-    active_resume = db.resumes.find_one({"is_active": True}, {"data": 0})
+    active_resume_query = (
+        {"candidate_id": candidate_id}
+        if candidate_id is not None
+        else {"is_active": True}
+    )
+    active_resume = db.resumes.find_one(
+        active_resume_query,
+        {"data": 0},
+        sort=[("uploaded_at", -1)],
+    )
 
     doc = {
         "job_id": job["_id"],

@@ -13,6 +13,7 @@ from pydantic import (
 
 
 class JobCreate(BaseModel):
+    candidate_id: str | None = None
     title: str = Field(min_length=1, max_length=250)
     company: str = Field(min_length=1, max_length=250)
     location: str | None = None
@@ -58,6 +59,7 @@ class MatchFactor(BaseModel):
 
 class JobRead(BaseModel):
     id: str
+    candidate_id: str | None = None
     title: str
     company: str
     is_saved: bool = True
@@ -90,6 +92,7 @@ class JobRead(BaseModel):
 
 class JobSavedUpdate(BaseModel):
     saved: bool
+    candidate_id: str | None = None
 
 
 FeedbackReason = Literal["", "role", "skills", "location", "salary", "experience", "company", "other"]
@@ -191,6 +194,7 @@ class JobRecommendation(JobDiscoveryListing):
 
 
 class JobRecommendationsResponse(BaseModel):
+    candidate_id: str
     results: list[JobRecommendation]
     source_failures: list[str] = Field(default_factory=list)
     successful_sources: list[str] = Field(default_factory=list)
