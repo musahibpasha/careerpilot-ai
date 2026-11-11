@@ -76,6 +76,59 @@ def _listing(source_job_id, location, url):
     }
 
 
+def test_trending_jobs_search_all_boards_without_a_candidate(recommendation_db, monkeypatch):
+    from app import main
+
+    board_calls = []
+    jobicy_calls = []
+
+    def search_board(*, site, what, where, sort_by):
+        board_calls.append((site, what, where, sort_by))
+        listing = _listing(
+            f"{site}-{what}",
+            "Brussels, Belgium",
+            f"https://{site}.example.test/jobs/{what.replace(' ', '-')}",
+        )
+        listing["company"] = site.title()
+        listing["published_at"] = (
+            "2026-11-11T12:00:00+00:00"
+            if what == "engineer"
+            else "2026-11-10T12:00:00+00:00"
+        )
+        return {"results": [listing]}
+
+    def search_jobicy(*, what, where, geo):
+        jobicy_calls.append((what, where, geo))
+        listing = _listing(
+            "jobicy-belgium",
+            "Antwerp, Belgium",
+            "https://jobicy.com/jobs/belgium",
+        )
+        listing["company"] = "Jobicy"
+        return {"results": [listing]}
+
+    monkeypatch.setattr(main, "search_jobspy_jobs", search_board)
+    monkeypatch.setattr(main.jobicy, "search_jobicy_jobs", search_jobicy)
+
+    response = client.get("/api/jobs/trending")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert len(board_calls) == len(main.SUPPORTED_SITES) * 3
+    assert all(call[2:] == ("Belgium", "newest") for call in board_calls)
+    assert len(jobicy_calls) == 1
+    assert jobicy_calls[0][0] == ""
+    assert jobicy_calls[0][2] == "europe" and "Belgium" in jobicy_calls[0][1]
+    assert set(data["successful_sources"]) == {*main.SUPPORTED_SITES, "jobicy"}
+    assert {job["source"] for job in data["results"]} == {
+        *main.SUPPORTED_SITES,
+        "jobicy",
+    }
+    assert data["results"][0]["published_at"].startswith("2026-11-11T12:00:00")
+    assert all("match_score" not in job for job in data["results"])
+    assert "candidate_id" not in data
+
+
 def test_recommendations_use_selected_candidate_and_target_countries(
     recommendation_db, monkeypatch
 ):

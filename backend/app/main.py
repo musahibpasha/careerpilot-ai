@@ -1293,6 +1293,97 @@ async def recommended_jobs(
     }
 
 
+_TRENDING_JOB_TERMS = ("engineer", "analyst", "manager")
+
+
+@app.get("/api/jobs/trending", response_model=schemas.TrendingJobsResponse)
+async def trending_jobs(db: Database = Depends(get_db)):
+    """Fetch recent public listings in Belgium without using a candidate profile."""
+
+    async def search_board(site: str, term: str):
+        return await asyncio.to_thread(
+            search_jobspy_jobs,
+            site=site,
+            what=term,
+            where="Belgium",
+            sort_by="newest",
+        )
+
+    async def search_jobicy():
+        return await asyncio.to_thread(
+            jobicy.search_jobicy_jobs,
+            what="",
+            where="Belgium, Brussels, Antwerp, Ghent, Charleroi, Liege, Bruges, Leuven",
+            geo="europe",
+        )
+
+    source_labels = {
+        "linkedin": "LinkedIn",
+        "naukri": "Naukri",
+        "indeed": "Indeed",
+        "glassdoor": "Glassdoor",
+        "jobicy": "Jobicy",
+    }
+    calls = [
+        (site, term, search_board(site, term))
+        for site in SUPPORTED_SITES
+        for term in _TRENDING_JOB_TERMS
+    ]
+    calls.append(("jobicy", "", search_jobicy()))
+    responses = await asyncio.gather(
+        *(call for _, _, call in calls),
+        return_exceptions=True,
+    )
+
+    source_failures: list[str] = []
+    successful_sources: set[str] = set()
+    unique_jobs: dict[str, dict] = {}
+    seen_titles: set[str] = set()
+    for (source, term, _), response in zip(calls, responses):
+        label = f"{source_labels[source]} ({term or 'Belgium'})"
+        if isinstance(response, Exception):
+            logger.warning("Trending job source failed: %s: %s", label, response)
+            source_failures.append(label)
+            continue
+        if not isinstance(response, dict) or not isinstance(response.get("results"), list):
+            logger.warning("Trending job source returned an invalid response: %s", label)
+            source_failures.append(label)
+            continue
+
+        successful_sources.add(source)
+        for listing in response["results"]:
+            if not isinstance(listing, dict) or _recommendation_country(
+                listing.get("location")
+            ) != "Belgium":
+                continue
+            listing = {**listing, "source": source}
+            parsed_url = urlsplit(str(listing.get("url") or ""))
+            url_key = (
+                f"{(parsed_url.hostname or '').casefold()}"
+                f"{parsed_url.path.rstrip('/').casefold()}"
+            )
+            title_key = "|".join(
+                str(listing.get(field) or "").strip().casefold()
+                for field in ("title", "company", "location")
+            )
+            if not url_key or url_key in unique_jobs or title_key in seen_titles:
+                continue
+            unique_jobs[url_key] = listing
+            seen_titles.add(title_key)
+
+    recent_jobs = sorted(
+        unique_jobs.values(),
+        key=lambda listing: str(listing.get("published_at") or ""),
+        reverse=True,
+    )[:12]
+    return {
+        "results": recent_jobs,
+        "source_failures": source_failures,
+        "successful_sources": sorted(successful_sources),
+        "updated_at": now(),
+    }
+
+
 @app.post("/api/jobs/import-preview", response_model=schemas.JobImportPreview)
 def import_job_preview(payload: schemas.JobImportRequest):
     """Read pasted job text (or, if none is given, the posting link) and return a draft.

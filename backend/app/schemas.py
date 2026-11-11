@@ -201,6 +201,31 @@ class JobRecommendationsResponse(BaseModel):
     updated_at: datetime
 
 
+class TrendingJob(BaseModel):
+    source: Literal["linkedin", "naukri", "indeed", "glassdoor", "jobicy"]
+    source_job_id: str
+    title: str
+    company: str
+    company_logo_url: HttpUrl | None = None
+    location: str | None = None
+    url: HttpUrl
+    application_url: HttpUrl | None = None
+    employment_types: list[str] = Field(default_factory=list)
+    published_at: datetime | None = None
+    work_arrangement: str = ""
+    salary_min: int | None = None
+    salary_max: int | None = None
+    salary_currency: str = ""
+    salary_period: str = "year"
+
+
+class TrendingJobsResponse(BaseModel):
+    results: list[TrendingJob]
+    source_failures: list[str] = Field(default_factory=list)
+    successful_sources: list[str] = Field(default_factory=list)
+    updated_at: datetime
+
+
 class JobApplicationPlan(BaseModel):
     job_id: str
     title: str

@@ -266,6 +266,24 @@ type DiscoveredJob = {
   match_breakdown: MatchFactor[];
 };
 
+type TrendingJob = Pick<
+  DiscoveredJob,
+  | "source"
+  | "source_job_id"
+  | "title"
+  | "company"
+  | "company_logo_url"
+  | "location"
+  | "url"
+  | "employment_types"
+  | "published_at"
+  | "work_arrangement"
+  | "salary_min"
+  | "salary_max"
+  | "salary_currency"
+  | "salary_period"
+>;
+
 type JobSearchSource =
   | "linkedin"
   | "naukri"
@@ -282,6 +300,14 @@ const JOB_SEARCH_SOURCES: {
   { id: "indeed", label: "Indeed", mark: "I", description: "Global job listings" },
   { id: "glassdoor", label: "Glassdoor", mark: "G", description: "Jobs and company reviews" },
 ];
+
+const TRENDING_SOURCE_LABELS: Record<string, string> = {
+  linkedin: "LinkedIn",
+  indeed: "Indeed",
+  glassdoor: "Glassdoor",
+  naukri: "Naukri",
+  jobicy: "Jobicy",
+};
 
 function extractRecruiterEmail(text?: string | null): string | null {
   if (!text) return null;
@@ -1259,6 +1285,14 @@ function App({
   const [recommendationMessage, setRecommendationMessage] = useState("");
   const recommendationsStarted = useRef(false);
   const recommendationRequestId = useRef(0);
+  const [trendingJobs, setTrendingJobs] = useState<TrendingJob[]>([]);
+  const [trendingLoading, setTrendingLoading] = useState(false);
+  const [trendingLoaded, setTrendingLoaded] = useState(false);
+  const [trendingError, setTrendingError] = useState("");
+  const [trendingSourceFailures, setTrendingSourceFailures] = useState<string[]>([]);
+  const [trendingSources, setTrendingSources] = useState<string[]>([]);
+  const [trendingUpdatedAt, setTrendingUpdatedAt] = useState<string | null>(null);
+  const trendingRequestId = useRef(0);
   const [profile, setProfile] = useState<Profile>(null);
   const [dashboardLoadState, setDashboardLoadState] = useState<
     "loading" | "ready" | "error"
@@ -1715,6 +1749,41 @@ function App({
     }
   }
 
+  async function refreshTrendingJobs() {
+    const requestId = ++trendingRequestId.current;
+    setTrendingLoading(true);
+    setTrendingError("");
+    try {
+      const response = await fetch(`${API}/api/jobs/trending`);
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(errorText(data, `Could not load Belgium job listings (HTTP ${response.status}).`));
+      }
+      if (
+        !Array.isArray(data?.results) ||
+        !Array.isArray(data?.source_failures) ||
+        !Array.isArray(data?.successful_sources)
+      ) {
+        throw new Error("The Belgium job listings service returned an invalid response.");
+      }
+      if (requestId !== trendingRequestId.current) return;
+      setTrendingJobs(data.results as TrendingJob[]);
+      setTrendingSourceFailures(data.source_failures as string[]);
+      setTrendingSources(data.successful_sources as string[]);
+      setTrendingUpdatedAt(typeof data.updated_at === "string" ? data.updated_at : null);
+      setTrendingLoaded(true);
+    } catch (reason) {
+      if (requestId === trendingRequestId.current) {
+        setTrendingError(
+          reason instanceof Error ? reason.message : "Could not load Belgium job listings.",
+        );
+        setTrendingLoaded(true);
+      }
+    } finally {
+      if (requestId === trendingRequestId.current) setTrendingLoading(false);
+    }
+  }
+
   function selectJobSource(source: JobSearchSource) {
     if (source !== jobSource) clearDiscoveryResults();
     setJobSource(source);
@@ -1878,7 +1947,7 @@ function App({
 
   useEffect(() => {
     if (
-      (page === "dashboard" || page === "jobs") &&
+      page === "jobs" &&
       dashboardLoadState === "ready" &&
       selectedCandidateId &&
       !recommendationsStarted.current
@@ -1886,6 +1955,12 @@ function App({
       void refreshRecommendations();
     }
   }, [page, dashboardLoadState, selectedCandidateId]);
+
+  useEffect(() => {
+    if (page === "dashboard" && dashboardLoadState === "ready" && !trendingLoaded) {
+      void refreshTrendingJobs();
+    }
+  }, [page, dashboardLoadState, trendingLoaded]);
 
   useEffect(() => {
     if (page !== "dashboard" && page !== "jobs") return;
@@ -3431,6 +3506,132 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
     );
   }
 
+  function renderTrendingJobsSection() {
+    const formatDate = (value: string | null) => {
+      if (!value) return null;
+      const date = new Date(value);
+      return Number.isNaN(date.getTime())
+        ? null
+        : date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    };
+
+    return (
+      <section className="panel dashboard-trending dashboard-section-enter" aria-label="Trending jobs in Belgium">
+        <div className="panel-head dashboard-trending-head">
+          <div>
+            <div className="dashboard-trending-kicker">LIVE FROM JOB BOARDS</div>
+            <h2>Trending jobs in Belgium</h2>
+            <p>
+              Fresh listings from LinkedIn, Indeed, Glassdoor, Naukri and Jobicy.
+              Ordered by posting date; popularity data is not provided by the boards.
+            </p>
+          </div>
+          <button
+            type="button"
+            className="secondary-button dashboard-trending-refresh"
+            onClick={() => void refreshTrendingJobs()}
+            disabled={trendingLoading}
+            aria-label="Refresh Belgium job listings"
+          >
+            <RotateCcw size={14} className={trendingLoading ? "recommendation-spinning" : ""} />
+            {trendingLoading ? "Refreshing…" : "Refresh"}
+          </button>
+        </div>
+
+        {trendingSources.length > 0 && (
+          <div className="dashboard-trending-sources" aria-label="Available job sources">
+            {trendingSources.map((source) => (
+              <span key={source}>{TRENDING_SOURCE_LABELS[source] ?? source}</span>
+            ))}
+            {trendingUpdatedAt && (
+              <small>Updated {new Date(trendingUpdatedAt).toLocaleTimeString([], {
+                hour: "numeric",
+                minute: "2-digit",
+              })}</small>
+            )}
+          </div>
+        )}
+
+        {trendingLoading && trendingJobs.length === 0 ? (
+          <div className="trending-jobs-state" role="status" aria-live="polite">
+            <span className="trending-loading-mark" aria-hidden="true" />
+            <div>
+              <strong>Checking live listings</strong>
+              <p>Searching supported job boards for current Belgium openings.</p>
+            </div>
+          </div>
+        ) : trendingError ? (
+          <div className="trending-jobs-state trending-jobs-state--error" role="alert">
+            <div>
+              <strong>Belgium listings are unavailable</strong>
+              <p>{trendingError}</p>
+            </div>
+            <button type="button" className="secondary-button" onClick={() => void refreshTrendingJobs()}>
+              Try again
+            </button>
+          </div>
+        ) : trendingJobs.length > 0 ? (
+          <>
+            {trendingSourceFailures.length > 0 && (
+              <p className="dashboard-trending-warning" role="status">
+                Some boards could not be reached: {trendingSourceFailures.join(", ")}.
+              </p>
+            )}
+            <div className="trending-job-grid">
+              {trendingJobs.map((job) => (
+                <article className="trending-job-card" key={`${job.source}:${job.source_job_id}`}>
+                  <div className="trending-job-brand">
+                    <span>{TRENDING_SOURCE_LABELS[job.source] ?? job.source}</span>
+                    {formatDate(job.published_at) && <small>{formatDate(job.published_at)}</small>}
+                  </div>
+                  <h3>{job.title}</h3>
+                  <p className="trending-job-company">{job.company}</p>
+                  <div className="trending-job-details">
+                    {job.location && <span><MapPin size={13} />{job.location}</span>}
+                    {job.work_arrangement && <span>{job.work_arrangement}</span>}
+                    {job.employment_types.slice(0, 1).map((type) => <span key={type}>{type}</span>)}
+                  </div>
+                  {(job.salary_min != null || job.salary_max != null) && (
+                    <p className="trending-job-salary">
+                      {job.salary_currency ? `${job.salary_currency} ` : ""}
+                      {job.salary_min != null ? job.salary_min.toLocaleString() : "—"}
+                      {" – "}
+                      {job.salary_max != null ? job.salary_max.toLocaleString() : "—"}
+                      {` / ${job.salary_period}`}
+                    </p>
+                  )}
+                  <a href={job.url} target="_blank" rel="noreferrer" className="trending-job-link">
+                    View original listing <ArrowUpRight size={14} />
+                  </a>
+                </article>
+              ))}
+            </div>
+          </>
+        ) : trendingLoaded ? (
+          <div className="trending-jobs-empty" role="status">
+            <BriefcaseBusiness size={20} />
+            <div>
+              <strong>No live listings found</strong>
+              <p>
+                {trendingSources.length === 0
+                  ? "The job boards could not be reached. Try refreshing in a moment."
+                  : "No matching Belgium listings were returned from the available job boards."}
+              </p>
+            </div>
+          </div>
+        ) : (
+          <div className="trending-jobs-state" role="status">
+            <span className="trending-loading-mark" aria-hidden="true" />
+            <div>
+              <strong>Preparing live listings</strong>
+              <p>Loading your dashboard and checking job boards.</p>
+            </div>
+          </div>
+        )}
+      </section>
+    );
+  }
+
   function renderCandidateSelector(context: "dashboard" | "jobs") {
     const heading = context === "jobs" ? "Search for a candidate" : "Choose a candidate";
     const searchTerm = candidateQuery.trim().toLocaleLowerCase();
@@ -4169,31 +4370,12 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
               </div>
             </section>
 
-            {renderCandidateSelector("dashboard")}
-            <div className="dash-grid dashboard-section-enter dashboard-section-enter--2" style={{ marginTop: 20 }}>
+            <div className="dash-grid dashboard-overview-grid dashboard-section-enter dashboard-section-enter--2">
               <div className="dash-main">
-                {renderRecommendedJobsSection("dashboard")}
+                {renderTrendingJobsSection()}
               </div>
 
               <aside className="dash-side">
-                <section className="panel approval-card">
-                  <div className="approval-note">
-                    <div className="secure-icon">
-                      <ShieldCheck size={18} />
-                    </div>
-                    <div>
-                      <h2>Human approval required</h2>
-                      <p style={{ marginTop: 4, fontSize: 13 }}>
-                        CareerPilot AI never submits an application for you. Review and approve it in
-                        the Application Assistant, then submit it yourself on the employer's site.
-                      </p>
-                    </div>
-                  </div>
-                  <span className="status-pill">
-                    <i /> Approval gate enabled
-                  </span>
-                </section>
-
                 <section className="panel">
                   <div className="panel-head">
                     <h2>Pipeline</h2>
