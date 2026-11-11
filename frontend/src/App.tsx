@@ -2898,22 +2898,15 @@ function App({
     });
   }
 
-  const firstName = profile?.full_name?.trim().split(/\s+/)[0] ?? "";
+  const recruiterName = accountName.trim() || accountEmail.trim().split("@")[0] || "";
+  const recruiterFirstName = recruiterName.split(/[\s._-]+/)[0] ?? "";
   const savedJobCount = savedJobs.length;
 
   const pageTitle: Record<Page, { eyebrow: string; title: string; sub: string }> = {
     dashboard: {
       eyebrow: "DASHBOARD",
-      title: firstName ? `Welcome back, ${firstName}` : "Welcome back",
-      sub: [
-        metricLoadErrors.candidates
-          ? "Candidate data unavailable"
-          : `${candidates.length} candidate profiles · ${availableCandidateCount} available`,
-        metricLoadErrors.savedJobs ? "Saved job data unavailable" : `${savedJobCount} saved jobs`,
-        metricLoadErrors.applications
-          ? "Application data unavailable"
-          : `${activeApplicationCount} active applications`,
-      ].join(" · "),
+      title: recruiterFirstName ? `Welcome back, ${recruiterFirstName}` : "Welcome back",
+      sub: "",
     },
     bench: {
       eyebrow: "RECRUITER WORKSPACE",
@@ -4206,7 +4199,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
           <div className="page-heading-copy">
             <div className="eyebrow">{t.eyebrow}</div>
             <h1 tabIndex={-1}>{t.title}</h1>
-            <p>{t.sub}</p>
+            {t.sub && <p>{t.sub}</p>}
           </div>
         </header>
 
