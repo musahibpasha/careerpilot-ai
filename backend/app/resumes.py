@@ -1,21 +1,16 @@
-"""Rules for the resume files you keep. No FastAPI or database imports here,
-so these rules are easy to test on their own.
-
-You can keep several PDF resumes and choose one as the active resume. A new
-application records the resume that was active when it was created.
-
-Privacy: these files contain personal details. They are stored in your local
-MongoDB, which is fine while the app only runs on your own machine. Login and
-protected storage (Stage 7) are needed before it is ever put online."""
+"""Resume validation and text extraction helpers, independent of API/database code."""
 
 import re
 from io import BytesIO
+from xml.etree import ElementTree
+from zipfile import BadZipFile, ZipFile
 
 from pypdf import PdfReader
-
-MAX_RESUMES = 5
+#resumes limitations
+MAX_RESUMES = 50
 MAX_RESUME_BYTES = 5 * 1024 * 1024
 MAX_LABEL_LENGTH = 100
+MAX_DOCX_XML_BYTES = 10 * 1024 * 1024
 
 
 def clean_label(label: str, filename: str) -> str:
@@ -23,7 +18,7 @@ def clean_label(label: str, filename: str) -> str:
     text = " ".join(str(label or "").split())
     if text:
         return text
-    stem = re.sub(r"\.pdf$", "", str(filename or "").strip(), flags=re.IGNORECASE)
+    stem = re.sub(r"\.(pdf|docx)$", "", str(filename or "").strip(), flags=re.IGNORECASE)
     return " ".join(stem.split())
 
 
@@ -45,6 +40,62 @@ def safe_filename(filename: str) -> str:
     if not name.lower().endswith(".pdf"):
         name += ".pdf"
     return name[:150]
+
+
+def safe_resume_filename(filename: str) -> str:
+    """Keep the original supported extension in a safe download filename."""
+    name = re.sub(r"[^A-Za-z0-9._ -]", "_", str(filename or "").strip())
+    name = name.strip(" ._") or "resume"
+    extension = ".docx" if name.lower().endswith(".docx") else ".pdf"
+    stem = re.sub(r"\.(pdf|docx)$", "", name, flags=re.IGNORECASE).strip(" ._")
+    return f"{stem[:145] or 'resume'}{extension}"
+
+
+def extract_docx_text(data: bytes) -> tuple[str, list[str]]:
+    """Extract plain text from the DOCX main part without unpacking to disk."""
+    if not data:
+        return "", ["The file is empty"]
+    if len(data) > MAX_RESUME_BYTES:
+        return "", [
+            f"The file is larger than {MAX_RESUME_BYTES // (1024 * 1024)} MB"
+        ]
+    try:
+        with ZipFile(BytesIO(data)) as archive:
+            document = archive.getinfo("word/document.xml")
+            if document.file_size > MAX_DOCX_XML_BYTES:
+                return "", ["The document contains too much text to process"]
+            root = ElementTree.fromstring(archive.read(document))
+    except (BadZipFile, KeyError, ElementTree.ParseError, OSError):
+        return "", ["This DOCX file could not be read. Try exporting it again"]
+
+    namespace = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    paragraphs = []
+    for paragraph in root.iter(f"{namespace}p"):
+        text = "".join(
+            node.text or "" for node in paragraph.iter(f"{namespace}t")
+        ).strip()
+        if text:
+            paragraphs.append(text)
+    if not paragraphs:
+        return "", ["No readable text was found in this DOCX file"]
+    return "\n".join(paragraphs), []
+
+
+def check_resume_file(
+    filename: str,
+    data: bytes,
+    *,
+    allow_docx: bool = False,
+) -> tuple[int, list[str]]:
+    extension = str(filename or "").lower()
+    if extension.endswith(".pdf"):
+        return check_pdf(filename, data)
+    if extension.endswith(".docx") and allow_docx:
+        _, problems = extract_docx_text(data)
+        if not data.startswith(b"PK"):
+            problems.insert(0, "This does not look like a real DOCX file")
+        return 0, problems
+    return 0, ["Only PDF files are supported"]
 
 
 def check_pdf(filename: str, data: bytes) -> tuple[int, list[str]]:

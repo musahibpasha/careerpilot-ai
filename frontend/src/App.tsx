@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import ApplicationAssistant, { type AssistantMaterials } from "./ApplicationAssistant";
 import ApplyWorkflow from "./ApplyWorkflow";
+import BenchCandidates from "./BenchCandidates";
 import { apiFetch as fetch } from "./api";
 import {
   Activity,
@@ -32,6 +33,7 @@ import {
   Trash2,
   Upload,
   User,
+  UsersRound,
   X,
 } from "lucide-react";
 
@@ -121,11 +123,12 @@ function saveSetting(key: string, value: string) {
   }
 }
 
-type Page = "dashboard" | "jobs" | "saved" | "applications" | "copilot";
+type Page = "dashboard" | "bench" | "jobs" | "saved" | "applications" | "copilot";
 type JobSearchView = "recommended" | "searching" | "results" | "empty" | "error";
 
 const PAGE_HASH: Record<Page, string> = {
   dashboard: "#/",
+  bench: "#/bench",
   jobs: "#/jobs",
   saved: "#/saved",
   applications: "#/applications",
@@ -136,6 +139,7 @@ const PAGE_HASH: Record<Page, string> = {
 // button keep working without adding a router library.
 function pageFromHash(): Page {
   const h = window.location.hash;
+  if (h.startsWith("#/bench")) return "bench";
   if (h.startsWith("#/jobs")) return "jobs";
   if (h.startsWith("#/saved")) return "saved";
   if (h.startsWith("#/applications")) return "applications";
@@ -272,10 +276,31 @@ const JOB_SEARCH_SOURCES: {
   description: string;
 }[] = [
   { id: "linkedin", label: "LinkedIn", mark: "in", description: "Professional network" },
-  { id: "naukri", label: "Naukri", mark: "N", description: "Jobs across India" },
   { id: "indeed", label: "Indeed", mark: "I", description: "Global job listings" },
   { id: "glassdoor", label: "Glassdoor", mark: "G", description: "Jobs and company reviews" },
 ];
+
+function extractRecruiterEmail(text?: string | null): string | null {
+  if (!text) return null;
+  const emailPattern = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+  const imageExtension = /\.(?:png|jpe?g|gif|webp|svg|ico|avif|bmp)$/i;
+  for (const match of text.matchAll(emailPattern)) {
+    const email = match[0];
+    const domain = email.split("@")[1]?.toLowerCase();
+    const suffix = text.slice((match.index ?? 0) + email.length);
+    if (
+      !domain ||
+      domain === "example.com" ||
+      domain.endsWith(".example.com") ||
+      imageExtension.test(domain) ||
+      /^\.(?:png|jpe?g|gif|webp|svg|ico|avif|bmp)(?:\b|$)/i.test(suffix)
+    ) {
+      continue;
+    }
+    return email;
+  }
+  return null;
+}
 
 // Why you passed on a job. "page" is where the matching setting lives.
 const DISMISS_REASONS: { key: string; label: string; page?: "profile" | "preferences" }[] = [
@@ -997,7 +1022,7 @@ type ResumeFile = {
   extracted_at: string | null;
 };
 
-const MAX_RESUMES = 5;
+const MAX_RESUMES = 50;
 
 function formatSize(bytes: number): string {
   return bytes >= 1024 * 1024
@@ -1229,19 +1254,16 @@ function App({
   const [showJobForm, setShowJobForm] = useState(false);
   const [jobSource, setJobSource] = useState<JobSearchSource>("linkedin");
   const [linkedinKeywords, setLinkedinKeywords] = useState("software engineer");
-  const [linkedinLocation, setLinkedinLocation] = useState("Bengaluru, India");
+  const [linkedinLocation, setLinkedinLocation] = useState("Belgium");
   const [linkedinWorkArrangement, setLinkedinWorkArrangement] = useState("any");
   const [linkedinEmploymentType, setLinkedinEmploymentType] = useState("Full-time");
   const [linkedinApplicationType, setLinkedinApplicationType] = useState("any");
-  const [linkedinExperience, setLinkedinExperience] = useState("any");
-  const [linkedinSalaryMin, setLinkedinSalaryMin] = useState("");
-  const [linkedinSalaryMax, setLinkedinSalaryMax] = useState("");
-  const [linkedinSalaryCurrency, setLinkedinSalaryCurrency] = useState("INR");
-  const [linkedinSalaryPeriod, setLinkedinSalaryPeriod] = useState<"year" | "month">("year");
+  const [linkedinEnglishOnly, setLinkedinEnglishOnly] = useState(true);
   const [linkedinPostedWithin, setLinkedinPostedWithin] = useState("any");
   const [linkedinSort, setLinkedinSort] = useState("match");
   const [discoveryResults, setDiscoveryResults] = useState<DiscoveredJob[]>([]);
   const [discoveryBusy, setDiscoveryBusy] = useState(false);
+  const [discoveryElapsed, setDiscoveryElapsed] = useState(0);
   const [discoveryMessage, setDiscoveryMessage] = useState("");
   const [discoveryError, setDiscoveryError] = useState(false);
   const [jobSearchView, setJobSearchView] = useState<JobSearchView>("recommended");
@@ -1313,6 +1335,17 @@ function App({
   ]);
   const threadRef = useRef<HTMLDivElement>(null);
   const previousPageRef = useRef(page);
+
+  useEffect(() => {
+    if (!discoveryBusy) {
+      setDiscoveryElapsed(0);
+      return;
+    }
+    const timer = window.setInterval(() => {
+      setDiscoveryElapsed((elapsed) => elapsed + 1);
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [discoveryBusy]);
 
   useEffect(() => {
     if (previousPageRef.current === page) return;
@@ -1453,22 +1486,15 @@ function App({
         "Full-time": "fulltime",
         "Part-time": "parttime",
         Internship: "internship",
-        Contract: "contract",
-        Freelance: "contract",
+        "Freelance / Contract": "contract",
         Temporary: "temporary",
       }[linkedinEmploymentType];
       if (jobType) params.set("job_type", jobType);
+      if (linkedinEnglishOnly) params.set("english_only", "true");
       if (linkedinApplicationType === "easy-apply") params.set("easy_apply", "true");
       if (linkedinWorkArrangement !== "any") {
         params.set("work_arrangement", linkedinWorkArrangement);
         if (linkedinWorkArrangement === "remote") params.set("is_remote", "true");
-      }
-      if (linkedinExperience !== "any") params.set("experience_level", linkedinExperience);
-      if (linkedinSalaryMin.trim()) params.set("salary_min", linkedinSalaryMin.trim());
-      if (linkedinSalaryMax.trim()) params.set("salary_max", linkedinSalaryMax.trim());
-      if (linkedinSalaryMin.trim() || linkedinSalaryMax.trim()) {
-        params.set("salary_currency", linkedinSalaryCurrency.trim());
-        params.set("salary_period", linkedinSalaryPeriod);
       }
       params.set("sort_by", linkedinSort);
       const hoursOld = {
@@ -1583,36 +1609,13 @@ function App({
       : skills.slice(0, 5).join(" ");
 
     if (suggestedKeywords) setLinkedinKeywords(suggestedKeywords);
-    setLinkedinLocation(
-      preferencesForm.locations.trim() ||
-        profile?.location?.trim() ||
-        "Bengaluru, India",
-    );
+    setLinkedinLocation((cur) => cur.trim() || "Belgium");
 
     setLinkedinWorkArrangement(
       preferencesForm.work_arrangements.length === 1
         ? preferencesForm.work_arrangements[0]
         : "any",
     );
-    const experienceSearchLevels: Record<string, string> = {
-      intern: "internship",
-      entry: "entry",
-      mid: "associate",
-      senior: "mid-senior",
-      lead: "executive",
-    };
-    setLinkedinExperience(
-      experienceSearchLevels[preferencesForm.experience_level] ?? "any",
-    );
-
-    setLinkedinSalaryMin(preferencesForm.salary_min);
-    setLinkedinSalaryMax(preferencesForm.salary_max);
-    setLinkedinSalaryPeriod(
-      preferencesForm.salary_period === "month" ? "month" : "year",
-    );
-    if (preferencesForm.salary_currency) {
-      setLinkedinSalaryCurrency(preferencesForm.salary_currency);
-    }
   }
 
   async function saveDiscoveredJob(job: DiscoveredJob): Promise<Job | null> {
@@ -2656,6 +2659,11 @@ function App({
           ? "Search job boards and save opportunities that interest you."
           : `${savedJobCount} saved job${savedJobCount === 1 ? "" : "s"} · ${appliedCount} confirmed application${appliedCount === 1 ? "" : "s"}`,
     },
+    bench: {
+      eyebrow: "RECRUITER WORKSPACE",
+      title: "Bench Candidates",
+      sub: "Manage candidate profiles, resumes, skills and availability.",
+    },
     jobs: {
       eyebrow: "FIND JOBS",
       title: "Find jobs",
@@ -2678,18 +2686,8 @@ function App({
     },
   };
 
-  function openProfile(section?: string) {
-    setSidebarOpen(false);
-    setShowProfile(true);
-    if (section) {
-      window.setTimeout(
-        () =>
-          document
-            .getElementById(section)
-            ?.scrollIntoView({ behavior: "smooth", block: "start" }),
-        60,
-      );
-    }
+  function openProfile(_section?: string) {
+    goTo("bench");
   }
 
   function openPreferences() {
@@ -3129,7 +3127,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
           : "Your profile has skills, target roles and an active resume. Keep your job preferences up to date for the best scores.",
         lines: todo,
         derived: true,
-        cta: { label: "Open profile", run: () => openProfile() },
+        cta: { label: "Manage candidates", run: () => openProfile() },
       });
     } else if (key === "rescore") {
       say({ role: "user", text: "Re-score my jobs" });
@@ -3324,6 +3322,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
   function renderJobCard(job: Job, compact = false) {
     const score = Math.round(job.match_score);
     const cls = scoreClass(job.match_score);
+    const recruiterEmail = extractRecruiterEmail(job.description);
     const application = applicationForListing(job);
     const alreadyApplied = Boolean(application && hasConfirmedApplication(application));
     const skillsFactor = job.match_breakdown?.find((f) => f.key === "skills");
@@ -3373,6 +3372,11 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
           >
             <Bot size={14} /> Automate
           </button>
+          {recruiterEmail && (
+            <a href={`mailto:${recruiterEmail}`} className="secondary-button">
+              Contact Recruiter ({recruiterEmail})
+            </a>
+          )}
         </article>
       );
     }
@@ -3457,6 +3461,11 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
           >
             <Bot size={14} /> Automate
           </button>
+          {recruiterEmail && (
+            <a href={`mailto:${recruiterEmail}`} className="secondary-button">
+              Contact Recruiter ({recruiterEmail})
+            </a>
+          )}
           {alreadyApplied ? (
             <>
               <span className="applied-indicator">Applied</span>
@@ -3537,16 +3546,21 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
     count?: number;
   }[] = [
     { key: "dashboard", label: "Dashboard", icon: <LayoutDashboard size={18} />, page: "dashboard" },
+    {
+      key: "bench",
+      label: "Bench Candidates",
+      icon: <UsersRound size={18} />,
+      page: "bench",
+    },
     { key: "jobs", label: "Find Jobs", icon: <Search size={18} />, page: "jobs" },
     { key: "saved", label: "Saved Jobs", icon: <Bookmark size={18} />, page: "saved", count: savedJobCount },
-    { key: "resume", label: "Resume", icon: <FileText size={18} />, onClick: () => openProfile("my-resumes") },
     { key: "applications", label: "Applications", icon: <Kanban size={18} />, page: "applications", count: appliedCount },
-    { key: "copilot", label: "AI Copilot", icon: <Bot size={18} />, page: "copilot" },
-    { key: "profile", label: "Profile", icon: <User size={18} />, onClick: () => openProfile() },
+    { key: "copilot", label: "Analytics", icon: <Bot size={18} />, page: "copilot" },
     { key: "settings", label: "Settings", icon: <Settings size={18} />, onClick: openPreferences },
   ];
 
   const t = pageTitle[page];
+  const accountInitial = accountEmail.trim().slice(0, 1).toUpperCase() || "R";
 
   return (
     <div className="app-shell">
@@ -3632,42 +3646,16 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
           </div>
 
           <div className="topbar-right">
-            {onLogout ? (
-              <details className="account-menu">
-                <summary className="profile-button">
-                  <span className="avatar">
-                    {(accountName || profile?.full_name || accountEmail || "Y").trim().slice(0, 1).toUpperCase()}
-                  </span>
-                  <span className="account-identity">
-                    <strong>{accountName || profile?.full_name || "Your profile"}</strong>
-                    {accountEmail && <small>{accountEmail}</small>}
-                  </span>
-                </summary>
-                <div className="account-menu-popover">
-                  {accountEmail && <span className="account-menu-email">{accountEmail}</span>}
-                  <button
-                    type="button"
-                    onClick={(event) => {
-                      event.currentTarget.closest("details")?.removeAttribute("open");
-                      openProfile();
-                    }}
-                  >
-                    <User size={15} /> Profile
-                  </button>
-                  <button type="button" onClick={onLogout}>
-                    <LogOut size={15} /> Log out
-                  </button>
-                </div>
-              </details>
-            ) : (
-              <button className="profile-button" onClick={() => openProfile()}>
-                <span className="avatar">
-                  {(accountName || profile?.full_name || accountEmail || "Y").trim().slice(0, 1).toUpperCase()}
-                </span>
-                <span className="account-identity">
-                  <strong>{accountName || profile?.full_name || "Your profile"}</strong>
-                  {accountEmail && <small>{accountEmail}</small>}
-                </span>
+            <div className="profile-button" aria-label="Recruiter account">
+              <span className="avatar">{accountInitial}</span>
+              <span className="account-identity">
+                <strong>{accountEmail || "Recruiter account"}</strong>
+                <small>Recruiter</small>
+              </span>
+            </div>
+            {onLogout && (
+              <button type="button" className="secondary-button" onClick={onLogout}>
+                <LogOut size={15} /> Log out
               </button>
             )}
           </div>
@@ -3707,6 +3695,8 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
             </span>
           </div>
         )}
+
+        {page === "bench" && <BenchCandidates />}
 
         {page === "dashboard" && (
           <div className="dashboard-page page-view">
@@ -4010,7 +4000,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                 ))}
               </div>
               <p className="source-disclaimer">
-                Search LinkedIn, Naukri, Indeed, or Glassdoor with JobSpy. Listings stay here until you save them; application form filling remains review-first and is only supported on select employer sites.
+                Search LinkedIn, Indeed, or Glassdoor with JobSpy. Listings stay here until you save them; application form filling remains review-first and is only supported on select employer sites.
               </p>
             </section>
 
@@ -4047,7 +4037,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                   <input
                     value={linkedinLocation}
                     onChange={(event) => setLinkedinLocation(event.target.value)}
-                    placeholder="e.g. Bengaluru, India"
+                    placeholder="e.g. Brussels, Belgium"
                     maxLength={150}
                   />
                 </label>
@@ -4073,9 +4063,18 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                     <option>Full-time</option>
                     <option>Part-time</option>
                     <option>Internship</option>
-                    <option>Contract</option>
-                    <option>Freelance</option>
+                    <option>Freelance / Contract</option>
                     <option>Temporary</option>
+                  </select>
+                </label>
+                <label>
+                  Language
+                  <select
+                    value={linkedinEnglishOnly ? "true" : "false"}
+                    onChange={(event) => setLinkedinEnglishOnly(event.target.value === "true")}
+                  >
+                    <option value="true">English only</option>
+                    <option value="false">All languages (EN / NL / FR / DE)</option>
                   </select>
                 </label>
                 <label>
@@ -4086,61 +4085,6 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                   >
                     <option value="any">Any</option>
                     <option value="easy-apply">Easy Apply</option>
-                  </select>
-                </label>
-                <label>
-                  Experience level
-                  <select
-                    value={linkedinExperience}
-                    onChange={(event) => setLinkedinExperience(event.target.value)}
-                  >
-                    <option value="any">Any</option>
-                    <option value="entry">Entry level / fresher</option>
-                    <option value="associate">Associate</option>
-                    <option value="mid-senior">Mid-Senior</option>
-                    <option value="director">Director</option>
-                    <option value="executive">Executive</option>
-                  </select>
-                </label>
-                <label className="salary-range-field">
-                  Salary range
-                  <span className="salary-range-inputs">
-                    <input
-                      type="number"
-                      min="0"
-                      value={linkedinSalaryMin}
-                      onChange={(event) => setLinkedinSalaryMin(event.target.value)}
-                      placeholder="Min"
-                      aria-label="Minimum salary"
-                    />
-                    <span aria-hidden="true">–</span>
-                    <input
-                      type="number"
-                      min="0"
-                      value={linkedinSalaryMax}
-                      onChange={(event) => setLinkedinSalaryMax(event.target.value)}
-                      placeholder="Max"
-                      aria-label="Maximum salary"
-                    />
-                    <input
-                      className="salary-currency-input"
-                      value={linkedinSalaryCurrency}
-                      onChange={(event) =>
-                        setLinkedinSalaryCurrency(event.target.value.toUpperCase())
-                      }
-                      maxLength={3}
-                      aria-label="Salary currency"
-                    />
-                  </span>
-                  <select
-                    value={linkedinSalaryPeriod}
-                    onChange={(event) =>
-                      setLinkedinSalaryPeriod(event.target.value as "year" | "month")
-                    }
-                    aria-label="Salary period"
-                  >
-                    <option value="year">Per year</option>
-                    <option value="month">Per month</option>
                   </select>
                 </label>
                 <label>
@@ -4173,13 +4117,13 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                     onClick={() => void searchJobBoard()}
                   >
                     {discoveryBusy
-                      ? "Searching..."
+                      ? `Searching (${discoveryElapsed}s)...`
                       : `Search ${JOB_SEARCH_SOURCES.find((source) => source.id === jobSource)?.label} jobs`}
                     <Search size={14} />
                   </button>
                   {discoveryBusy && (
                     <p className="source-loading" role="status" aria-live="polite">
-                      Searching {JOB_SEARCH_SOURCES.find((source) => source.id === jobSource)?.label}…
+                      Searching live listings in {linkedinLocation || "Belgium"}... ({discoveryElapsed}s elapsed) — Please wait patiently while JobSpy scrapes live postings.
                     </p>
                   )}
                   {jobSearchView !== "recommended" && (
@@ -4299,6 +4243,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                       const publishedDate = job.published_at
                         ? new Date(job.published_at)
                         : null;
+                      const recruiterEmail = extractRecruiterEmail(job.description);
                       return (
                         <article className="job-card" key={`${job.source}-${job.source_job_id}`}>
                           <div className="company-logo" aria-label={`${job.company} logo placeholder`}>{companyInitials(job.company)}</div>
@@ -4391,6 +4336,11 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                             <a href={job.url} target="_blank" rel="noreferrer" className="secondary-button">
                               Original posting <ArrowUpRight size={14} />
                             </a>
+                            {recruiterEmail && (
+                              <a href={`mailto:${recruiterEmail}`} className="secondary-button">
+                                Contact Recruiter ({recruiterEmail})
+                              </a>
+                            )}
                             <button
                               type="button"
                               className="ghost-button"
@@ -5609,7 +5559,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
             </div>
 
             <h3 className="section-title" id="my-resumes">
-              My resumes
+              Bench Candidates ({resumes.length} onboarded)
             </h3>
             <small className="muted-note">
               Keep up to {MAX_RESUMES} PDF resumes and choose which one is
@@ -5657,7 +5607,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                       disabled={fillingId !== null}
                       onClick={() => activateResume(resume)}
                     >
-                      Make active
+                      Select Candidate (Make Active)
                     </button>
                   )}
                   {resume.is_active && (

@@ -1,19 +1,17 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import {
-  createUserWithEmailAndPassword,
   onAuthStateChanged,
   sendEmailVerification,
   sendPasswordResetEmail,
   signInWithEmailAndPassword,
-  signInWithPopup,
   signOut,
   type User,
 } from "firebase/auth";
-import { GoogleAuthProvider, reload } from "firebase/auth";
+import { reload } from "firebase/auth";
 import App from "./App";
 import { firebaseAuth, firebaseConfigured, persistenceReady } from "./firebase";
 
-type AuthMode = "sign-in" | "sign-up" | "reset";
+type AuthMode = "sign-in" | "reset";
 
 function messageForAuthError(error: unknown): string {
   const code =
@@ -21,7 +19,6 @@ function messageForAuthError(error: unknown): string {
       ? String(error.code)
       : "";
   const messages: Record<string, string> = {
-    "auth/email-already-in-use": "An account already uses this email. Sign in instead.",
     "auth/invalid-email": "Enter a valid email address.",
     "auth/invalid-credential": "Email or password is incorrect.",
     "auth/weak-password": "Choose a stronger password (at least 6 characters).",
@@ -81,14 +78,6 @@ export default function AuthBoundary({ children }: { children?: ReactNode }) {
       if (mode === "reset") {
         await sendPasswordResetEmail(firebaseAuth, email.trim());
         setNotice("Password reset email sent. Check your inbox.");
-      } else if (mode === "sign-up") {
-        const credential = await createUserWithEmailAndPassword(
-          firebaseAuth,
-          email.trim(),
-          password,
-        );
-        await sendEmailVerification(credential.user);
-        setNotice("Verify your email using the link we sent, then return here.");
       } else {
         const credential = await signInWithEmailAndPassword(
           firebaseAuth,
@@ -110,20 +99,6 @@ export default function AuthBoundary({ children }: { children?: ReactNode }) {
       } else {
         setError(messageForAuthError(reason));
       }
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function signInWithGoogle() {
-    if (!firebaseAuth) return;
-    setBusy(true);
-    setError("");
-    setNotice("");
-    try {
-      await signInWithPopup(firebaseAuth, new GoogleAuthProvider());
-    } catch (reason) {
-      setError(messageForAuthError(reason));
     } finally {
       setBusy(false);
     }
@@ -219,28 +194,21 @@ export default function AuthBoundary({ children }: { children?: ReactNode }) {
       <section className="auth-layout">
         <aside className="auth-intro">
           <div className="auth-card__brand"></div>
-          <h1>Your career, in your control.</h1>
-          <p>Sign in to your private workspace for saved jobs, applications, and resumes.</p>
+          <h1>Your recruiting workspace.</h1>
+          <p>Sign in to securely manage candidates, resumes, jobs, and applications.</p>
           <div className="auth-steps">
-            <span>01 <b>Secure sign in</b></span>
-            <span>02 <b>Private workspace</b></span>
-            <span>03 <b>Prepare your next move</b></span>
+            <span>01 <b>Secure recruiter sign in</b></span>
+            <span>02 <b>Private candidate workspace</b></span>
+            <span>03 <b>Review candidate profiles</b></span>
           </div>
         </aside>
         <section className="auth-card">
-          <h2>{mode === "sign-up" ? "Create your account" : mode === "reset" ? "Reset password" : "Welcome back"}</h2>
+          <h2>{mode === "reset" ? "Reset password" : "Recruiter sign in"}</h2>
           <p className="auth-card__subtitle">
             {mode === "reset"
               ? "We’ll email you a secure password reset link."
-              : mode === "sign-up"
-                ? "Create an account to start your private workspace."
-                : "Sign in to continue to ThoughtLabs Job CoPilot."}
+              : "Sign in to continue to the CareerPilot AI recruiter workspace."}
           </p>
-          {mode !== "reset" && (
-            <button type="button" className="auth-google" disabled={busy} onClick={signInWithGoogle}>
-              Continue with Google
-            </button>
-          )}
           {mode !== "reset" && <div className="auth-divider"><span>or use email</span></div>}
           <form onSubmit={submit} className="auth-form">
             <label>
@@ -258,7 +226,7 @@ export default function AuthBoundary({ children }: { children?: ReactNode }) {
                 Password
                 <input
                   type="password"
-                  autoComplete={mode === "sign-up" ? "new-password" : "current-password"}
+                  autoComplete="current-password"
                   minLength={6}
                   required
                   value={password}
@@ -269,7 +237,7 @@ export default function AuthBoundary({ children }: { children?: ReactNode }) {
             {error && <p className="auth-feedback auth-feedback--error" role="alert">{error}</p>}
             {notice && <p className="auth-feedback" role="status">{notice}</p>}
             <button type="submit" disabled={busy}>
-              {busy ? "Please wait…" : mode === "sign-up" ? "Create account" : mode === "reset" ? "Send reset link" : "Sign in"}
+              {busy ? "Please wait…" : mode === "reset" ? "Send reset link" : "Sign in"}
             </button>
           </form>
           <nav className="auth-links" aria-label="Account options">
@@ -277,9 +245,6 @@ export default function AuthBoundary({ children }: { children?: ReactNode }) {
               <>
                 <button type="button" className="auth-link" onClick={() => { setError(""); setNotice(""); setMode("reset"); }}>
                   Forgot password?
-                </button>
-                <button type="button" className="auth-link" onClick={() => { setError(""); setNotice(""); setMode("sign-up"); }}>
-                  Create account
                 </button>
               </>
             )}

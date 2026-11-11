@@ -24,7 +24,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 from pymongo.database import Database
@@ -537,7 +537,11 @@ def open_assistant_for_job(job_id: str, db: Database = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Job not found.")
     existing = db.applications.find_one({"job_id": job["_id"]}, sort=[("updated_at", -1)])
     if existing is None:
-        m.create_application(m.schemas.ApplicationCreate(job_id=job_id, status="saved"), db)
+        m.create_application(
+            m.schemas.ApplicationCreate(job_id=job_id, status="saved"),
+            Response(),
+            db,
+        )
         existing = db.applications.find_one({"job_id": job["_id"]}, sort=[("updated_at", -1)])
     stored = _stored(existing)
     if "application_url" not in stored and job.get("application_url"):

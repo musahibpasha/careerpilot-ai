@@ -25,7 +25,7 @@ An AI-assisted job-search platform for organizing opportunities, understanding r
 
 ## 📌 About the Project
 
-CareerPilot AI is a personal job-hunt assistant designed to make job searching more organized and less repetitive. It brings a candidate profile, resume information, saved jobs, basic matching, and application-status tracking into one workspace.
+CareerPilot AI includes recruiter-managed candidate onboarding alongside its existing job-search workspace. Recruiters can store candidate profiles and original resumes in their authenticated MongoDB workspace, review extracted information, and track candidate-linked applications.
 
 The long-term goal is to support a human-approved workflow: find relevant opportunities, understand why a role may fit, prepare truthful application materials, and let the user review and approve any application before a submission action.
 
@@ -35,8 +35,10 @@ The long-term goal is to support a human-approved workflow: find relevant opport
 
 ### ✅ Built
 
+- **Recruiter Bench Candidates** — create and edit MongoDB-backed candidate records, search and filter the bench, compare real candidate skills against entered requirements, update status, archive profiles, and inspect resumes, applications, and persistent recruiter notes.
+- **Structured candidate onboarding** — review editable personal, professional, skill-category, experience, education, certification, project, training, and recruiter-managed fields before saving a candidate.
 - **Candidate profile editor** — save contact details, professional summary, skills, work experience and internships, projects, education, certifications, and achievements.
-- **PDF resume upload and parsing** — extract resume information with an AI-assisted parser using OpenRouter.
+- **PDF and DOCX resume parsing** — extract readable resume text and structured candidate details with the existing OpenRouter parser; scanned PDFs without a text layer still need OCR support.
 - **Review before saving** — inspect extracted resume fields and correct them before updating the profile.
 - **Required-field validation** — frontend and backend checks for required profile fields.
 - **Skill normalization** — treat common variations such as `React`, `React.js`, and `ReactJS` as the same skill for matching.
@@ -47,7 +49,7 @@ The long-term goal is to support a human-approved workflow: find relevant opport
 - **Application-status tracking with history** — statuses are Discovered, Saved, Under review, Ready for approval, Approved, Submitted, Interview, Offer, Rejected, and Withdrawn. Every change is recorded with a timestamp and shown in the tracker. The generic status endpoints still refuse direct Approved/Submitted changes; the Application Assistant has the dedicated review and manual-submission-confirmation flow.
 - **Apply workflow** — the job-card **Apply** action opens a three-step job-description, resume-review, and manual-application flow. It reuses the saved job and application record, summarizes the stored description with the configured AI provider, and uses the exact same application-material generation endpoint as Match analysis. Resume and cover-letter drafts are independently editable, the Apply resume and letter downloads are real PDFs, and the original uploaded resume is unchanged. The final step opens the original listing/application URL in a new tab; it never submits the external form. Its Not Applied, Applied, Interview, Assessment, Rejected, Offer Received, and Withdrawn status, notes, application date, and generated materials are saved on the existing application.
 - **Job preferences** — save preferred locations, experience level, work arrangement (remote, hybrid, on-site), and salary expectation (minimum, maximum, currency, per year or month). Everything is optional, and target roles stay in the profile. Preferences feed the match score (see Explainable matching).
-- **Multiple resumes with an active resume** — in your profile, keep up to 5 PDF resumes (5 MB each), view them, rename them, delete them, and choose one as the active resume (shown with an "Active" badge). A new application records the resume that was active when it was created and shows it in the tracker. Choosing a resume as active (or uploading your first one) reads it with the same AI parser as auto-fill and fills your profile form from it. The reading is kept with the resume, so switching back is instant, and "Re-read" reads it again. Nothing is saved to your profile until you review the form and click Save profile; closing the window without saving undoes it. The "Upload resume (PDF) and auto-fill" button at the top of the profile saves the file under My resumes and fills the form from it (when you already have 5 saved resumes it only fills the form and keeps nothing); "Add a resume" saves the file and fills the form only if it becomes your active resume. Uploading never changes your saved profile by itself. Resume records are scoped to the signed-in Firebase UID.
+- **Candidate resume records** — PDFs and DOCX files are stored with their candidate record in the recruiter’s UID-scoped workspace. PDFs can be previewed in the browser; original DOCX files can be downloaded. Candidate onboarding and the Resume tab use the existing resume extraction endpoint.
 - **Explainable matching** — each job is scored 0-100 from weighted factors: skills (50, must-have vs nice-to-have), role fit against your target roles (15), location and work style (15), experience level (10) and salary (10). Every factor shows a plain-English reason, missing skills are listed, and a factor that cannot be judged (the job or your preferences do not say enough) is left out instead of counted as a miss. A low/medium/high confidence label shows how much of the picture was judged. Scores update when you save your profile or preferences, or call `POST /api/jobs/rescore`. Salary is only compared when both sides use the same currency. Each job card has a "Why this score?" panel with a bar per factor, the confidence label, missing skills, and the factors that were not counted; the add-job form has an optional "More details" section (nice-to-have skills, work style, level, salary).
 - **Application preparation plan** — Match analysis shows a deterministic fit summary, strengths, gaps, resume focus, positioning guidance, and interview prompts based on the saved job and profile. It is guidance, not AI-generated document text.
 - **AI cover-letter and resume wording drafts** — from a job's Match analysis, choose **Generate cover letter and resume drafts** to request a tailored cover letter, professional-summary rewrite, relevant saved skills to emphasize, and suggestions for rewriting existing experience/project bullets. Drafts use the saved profile and job posting, are editable in the panel, and are not submitted or saved automatically. Contact details are excluded from the AI request. Review all text for accuracy. The reviewed cover letter can be downloaded as a real PDF containing the candidate's saved contact details and the selected job context.
@@ -162,7 +164,7 @@ flowchart TD
 | Frontend | React, TypeScript, Vite | User interface and job-tracking workspace |
 | Backend | Python, FastAPI, Uvicorn | API, validation, and application logic |
 | Database | MongoDB, PyMongo | Store profile and job-tracking data |
-| Resume extraction | pypdf | Extract text from PDF resumes |
+| Resume extraction | pypdf + DOCX XML reader | Extract text from PDF and DOCX resumes |
 | PDF generation | ReportLab | Render reviewed cover letters as downloadable PDFs |
 | AI extraction | OpenRouter | Assist with extracting structured profile fields |
 | Testing | Python test suite | Validate backend behaviors across profiles, jobs, matching, imports, and application tracking |
@@ -239,10 +241,16 @@ Sign-in method**, and add `localhost` and the deployed frontend host under
 **Authentication → Settings → Authorized domains**. The app requires verified
 email addresses before accessing workspace APIs.
 
+Public account creation is not exposed in the recruiter UI. Provision recruiter
+accounts through Firebase administration. This repository does not yet include
+an approved-recruiter allowlist: any verified Firebase account that can sign in
+can create and manage only its own UID-scoped workspace. Authentication verifies
+identity and ownership, but is not an approval process for recruiter access.
+
 The backend verifies Firebase ID tokens with the Firebase Admin SDK. It does
 not trust an email, UID, or owner field from request data. Each request is
-scoped to the UID from its verified token; profile, preferences, jobs,
-applications, resumes, and assistant operations all use that scope. Public
+scoped to the UID from its verified token; profiles, candidates, preferences,
+jobs, applications, resumes, and assistant operations all use that scope. Public
 health, transient job-board search, and non-persisting job-import preview
 remain unauthenticated.
 

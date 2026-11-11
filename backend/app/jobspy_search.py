@@ -1,3 +1,7 @@
+
+
+
+
 """Job-board searches backed by the JobSpy library."""
 
 import hashlib
@@ -5,7 +9,7 @@ import logging
 import math
 import re
 from datetime import date, datetime
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from jobspy import Country, scrape_jobs
 
@@ -123,6 +127,28 @@ def _job_url(value, site: str) -> str | None:
     return url
 
 
+def _job_url_identity(url: str, site: str) -> str:
+    parts = urlparse(url)
+    path = parts.path.rstrip("/") or "/"
+    if site == "linkedin":
+        query = ""
+    else:
+        query = urlencode(sorted(
+            (key, value)
+            for key, value in parse_qsl(parts.query, keep_blank_values=True)
+            if not key.casefold().startswith("utm_")
+            and key.casefold() not in {"trk", "trackingid", "refid", "from", "source", "src"}
+        ))
+    return urlunparse((
+        parts.scheme.lower(),
+        (parts.hostname or "").lower(),
+        path,
+        "",
+        query,
+        "",
+    ))
+
+
 def _company_logo_url(value) -> str | None:
     url = _value_text(value, 2000)
     try:
@@ -194,7 +220,42 @@ def _country_from_location(where: str) -> str | None:
 def _indeed_country(where: str) -> str:
     """Use a country suffix from the location, defaulting to CareerPilot's India market."""
     countries = {country.value.casefold(): country.value for country in Country}
-    return _country_from_location(where) or countries["india"]
+    aliases = {
+        "brussels": "belgium",
+        "antwerp": "belgium",
+        "ghent": "belgium",
+        "belgie": "belgium",
+        "belgique": "belgium",
+    }
+    if country := _country_from_location(where):
+        return country
+    fragments = [part.strip().casefold() for part in where.split(",") if part.strip()]
+    for fragment in reversed(fragments):
+        country = countries.get(aliases.get(fragment, fragment))
+        if country:
+            return country
+    return countries["india"]
+
+
+def is_english_posting(title: str, description: str) -> bool:
+    english_stopwords = {
+        "the", "and", "with", "you", "will", "experience", "role", "team",
+        "work", "skills", "requirements", "our", "looking",
+    }
+    non_english_stopwords = {
+        "wij", "zoeken", "voor", "een", "met", "werkzaamheden", "kennis",
+        "ervaring", "jouw", "functie", "nous", "recherchons", "pour", "une",
+        "dans", "avec", "entreprise", "poste", "profil", "vous", "wir",
+        "suchen", "für", "eine", "einen", "mit", "aufgaben", "kenntnisse",
+        "dein", "m/w/d",
+    }
+    text = f"{title} {description}".casefold()
+    words = re.findall(r"[a-zA-ZÀ-ÖØ-öø-ÿ]+", text)
+    english_count = sum(word in english_stopwords for word in words)
+    non_english_count = sum(word in non_english_stopwords for word in words)
+    if re.search(r"(?<!\w)m/w/d(?!\w)", text):
+        non_english_count += 1
+    return not (non_english_count >= 5 and non_english_count > english_count)
 
 
 _LEVEL_FILTERS = {
@@ -318,6 +379,7 @@ def search_jobspy_jobs(
     salary_currency: str | None = None,
     salary_period: str = "year",
     sort_by: str = "match",
+    english_only: bool = False,
 ) -> dict:
     """Search one supported board and return transient, normalized listings."""
     if site not in SUPPORTED_SITES:
@@ -331,17 +393,19 @@ def search_jobspy_jobs(
     if salary_min is not None and salary_max is not None and salary_max < salary_min:
         raise JobSpyError("Maximum salary cannot be lower than minimum salary.", 422)
 
+    effective_job_type = "contract" if job_type == "freelance" else job_type
     alternatives = _search_alternatives(what) or [what.strip()]
     search_options = {
         "site_name": [site],
         "location": where,
         "results_wanted": 20,
-        "job_type": job_type,
+        "job_type": effective_job_type,
         "is_remote": is_remote,
         "easy_apply": easy_apply,
         "hours_old": hours_old,
         "fetch_description": any((
             job_type is not None and site == "linkedin",
+            english_only and site != "naukri",
             experience_level is not None and site != "naukri",
             (salary_min is not None or salary_max is not None) and site == "linkedin",
             work_arrangement in {"hybrid", "onsite"} and site != "naukri",
@@ -381,6 +445,8 @@ def search_jobspy_jobs(
             title = _value_text(row.get("title"), 250)
             company = _value_text(row.get("company"), 250)
             description = _value_text(row.get("description"))
+            if english_only and not is_english_posting(title, description):
+                continue
             if (
                 not url
                 or not title
@@ -452,7 +518,7 @@ def search_jobspy_jobs(
                 "remote" if is_remote else None
             )
             if not _job_matches_filters(
-                job_type=job_type,
+                job_type=effective_job_type,
                 work_arrangement=effective_arrangement_filter,
                 experience_level=experience_level,
                 salary_min=salary_min,
@@ -469,6 +535,10 @@ def search_jobspy_jobs(
             ):
                 continue
             seen_urls.add(url)
+            employment_types = [
+                "Freelance / Contract" if "contract" in job_type.casefold() else job_type
+                for job_type in row_job_types
+            ]
 
             alternative_results.append({
                 "source_job_id": source_job_id,
@@ -483,7 +553,7 @@ def search_jobspy_jobs(
                 "description": description,
                 "skills": [],
                 "nice_to_have_skills": [],
-                "employment_types": row_job_types,
+                "employment_types": employment_types,
                 "published_at": _date_text(row.get("date_posted")),
                 "work_arrangement": arrangement,
                 "experience_level": level,
@@ -496,6 +566,7 @@ def search_jobspy_jobs(
 
     results = []
     seen_urls = set()
+    seen_job_ids = set()
     while len(results) < 20:
         progressed = False
         for alternative_results in results_by_alternative:
@@ -503,9 +574,14 @@ def search_jobspy_jobs(
                 continue
             job = alternative_results.pop(0)
             progressed = True
-            if job["url"] in seen_urls:
+            url_identity = _job_url_identity(job["url"], site)
+            if (
+                url_identity in seen_urls
+                or job["source_job_id"] in seen_job_ids
+            ):
                 continue
-            seen_urls.add(job["url"])
+            seen_urls.add(url_identity)
+            seen_job_ids.add(job["source_job_id"])
             results.append(job)
             if len(results) == 20:
                 break

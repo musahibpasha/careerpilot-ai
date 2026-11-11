@@ -1,6 +1,7 @@
 import json
 import logging
 from io import BytesIO
+from zipfile import ZipFile
 
 import httpx
 import pytest
@@ -55,6 +56,17 @@ def pdf_with_text() -> bytes:
     return output.getvalue()
 
 
+def docx_with_text() -> bytes:
+    output = BytesIO()
+    document = b"""<?xml version="1.0" encoding="UTF-8"?>
+    <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+      <w:body><w:p><w:r><w:t>Jane Example DOCX resume</w:t></w:r></w:p></w:body>
+    </w:document>"""
+    with ZipFile(output, "w") as archive:
+        archive.writestr("word/document.xml", document)
+    return output.getvalue()
+
+
 class FakeResponse:
     def __init__(self, status_code: int, payload: object, headers=None):
         self.status_code = status_code
@@ -93,14 +105,16 @@ def mock_openrouter(monkeypatch, response_or_exception):
     return calls
 
 
-def upload_resume(content: bytes | None = None):
+def upload_resume(content: bytes | None = None, filename: str = "resume.pdf"):
+    is_docx = filename.lower().endswith(".docx")
     return client.post(
         "/api/resume/parse",
         files={
             "file": (
-                "resume.pdf",
-                pdf_with_text() if content is None else content,
-                "application/pdf",
+                filename,
+                (docx_with_text() if is_docx else pdf_with_text()) if content is None else content,
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                if is_docx else "application/pdf",
             )
         },
     )
@@ -152,6 +166,32 @@ def test_parse_resume_success_uses_configured_model_and_chat_endpoint(
     assert "OpenRouter request succeeded status=200" in caplog.text
     assert "Jane Example" not in caplog.text
     assert "mock-test-key" not in caplog.text
+
+
+def test_parse_resume_supports_docx_using_existing_extractor(monkeypatch):
+    mock_openrouter(
+        monkeypatch,
+        FakeResponse(
+            200,
+            {"choices": [{"message": {"content": '{"full_name": "Jane Example", "skills": ["Python"]}'}}]},
+        ),
+    )
+    response = upload_resume(filename="resume.docx")
+    assert response.status_code == 200
+    assert response.json()["extracted"]["full_name"] == "Jane Example"
+
+
+def test_parse_resume_rejects_malformed_docx_without_calling_openrouter(monkeypatch):
+    monkeypatch.setattr(main.settings, "openrouter_api_key", "mock-test-key")
+
+    class NoRequestClient:
+        def __init__(self, *args, **kwargs):
+            pytest.fail("Malformed DOCX files must not be sent to OpenRouter")
+
+    monkeypatch.setattr(main.httpx, "AsyncClient", NoRequestClient)
+    response = upload_resume(b"not a DOCX", filename="resume.docx")
+    assert response.status_code == 422
+    assert "DOCX" in response.json()["detail"]
 
 
 def test_parse_resume_without_api_key_does_not_call_openrouter(monkeypatch):
@@ -386,6 +426,142 @@ def test_parse_resume_retries_429_then_falls_back_to_second_model(monkeypatch):
     assert response.status_code == 200
     assert response.json()["extracted"]["full_name"] == "Jane"
     assert calls == ["mock/test-model", "mock/test-model", "mock/backup"]
+
+
+def test_parse_resume_retries_empty_completion_with_fallback_model(monkeypatch):
+    calls = []
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, url, headers, json):
+            calls.append((json["model"], json.get("max_tokens")))
+            if json["model"] == "mock/test-model":
+                return FakeResponse(200, {"choices": [{"message": {"content": ""}}]})
+            return FakeResponse(
+                200,
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": '{"full_name": "Jane Example"}'
+                            }
+                        }
+                    ]
+                },
+            )
+
+    monkeypatch.setattr(main.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(main.settings, "openrouter_api_key", "mock-test-key")
+    monkeypatch.setattr(main.settings, "openrouter_model", "mock/test-model")
+    monkeypatch.setattr(main.settings, "openrouter_fallback_models", "mock/backup")
+    monkeypatch.setattr(main.settings, "openrouter_max_retries", 0)
+
+    response = upload_resume()
+
+    assert response.status_code == 200
+    assert response.json()["extracted"]["full_name"] == "Jane Example"
+    assert calls == [("mock/test-model", 16384), ("mock/backup", 16384)]
+
+
+def test_parse_resume_retries_transient_empty_completion_on_same_model(monkeypatch):
+    calls = []
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, url, headers, json):
+            calls.append(json["model"])
+            if len(calls) == 1:
+                return FakeResponse(
+                    200,
+                    {"choices": [{"message": {"content": ""}, "finish_reason": "error"}]},
+                )
+            return FakeResponse(
+                200,
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": [
+                                    {"type": "text", "text": '{"full_name": "Jane Example"}'}
+                                ]
+                            }
+                        }
+                    ]
+                },
+            )
+
+    monkeypatch.setattr(main.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(main.settings, "openrouter_api_key", "mock-test-key")
+    monkeypatch.setattr(main.settings, "openrouter_model", "mock/test-model")
+    monkeypatch.setattr(main.settings, "openrouter_fallback_models", "")
+    monkeypatch.setattr(main.settings, "openrouter_max_retries", 1)
+
+    response = upload_resume()
+
+    assert response.status_code == 200
+    assert response.json()["extracted"]["full_name"] == "Jane Example"
+    assert calls == ["mock/test-model", "mock/test-model"]
+
+
+def test_parse_resume_reports_empty_completion_after_all_models_fail(
+    monkeypatch,
+    caplog,
+):
+    calls = []
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, url, headers, json):
+            calls.append(json["model"])
+            return FakeResponse(
+                200,
+                {
+                    "choices": [
+                        {
+                            "message": {"content": ""},
+                            "finish_reason": "length",
+                        }
+                    ]
+                },
+            )
+
+    monkeypatch.setattr(main.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(main.settings, "openrouter_api_key", "mock-test-key")
+    monkeypatch.setattr(main.settings, "openrouter_model", "mock/test-model")
+    monkeypatch.setattr(main.settings, "openrouter_fallback_models", "mock/backup")
+    monkeypatch.setattr(main.settings, "openrouter_max_retries", 0)
+
+    with caplog.at_level(logging.WARNING, logger=main.__name__):
+        response = upload_resume()
+
+    assert response.status_code == 502
+    assert "exceeded the model's output limit" in response.json()["detail"]
+    assert calls == ["mock/test-model", "mock/backup"]
+    assert "category=output_limit" in caplog.text
 
 
 @pytest.mark.parametrize(

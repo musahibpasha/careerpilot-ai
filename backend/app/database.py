@@ -113,7 +113,14 @@ class UserScopedCollection:
 class UserScopedDatabase:
     """Expose only the app's personal collections, scoped to one Firebase UID."""
 
-    _COLLECTIONS = {"jobs", "applications", "profiles", "preferences", "resumes"}
+    _COLLECTIONS = {
+        "jobs",
+        "applications",
+        "profiles",
+        "preferences",
+        "resumes",
+        "candidates",
+    }
 
     def __init__(self, database: Database, user_id: str):
         self._database = database
@@ -193,3 +200,13 @@ def ensure_indexes(db: Database) -> None:
     db.profiles.create_index("owner_uid", unique=True, name="uq_profile_owner")
     db.preferences.create_index("owner_uid", unique=True, name="uq_preferences_owner")
     db.resumes.create_index([("owner_uid", 1), ("uploaded_at", -1)])
+    db.candidates.create_index(
+        [("owner_uid", 1), ("updated_at", -1)],
+        name="ix_candidate_owner_updated",
+    )
+    db.candidates.create_index(
+        [("owner_uid", 1), ("source_profile_id", 1)],
+        unique=True,
+        name="uq_candidate_imported_profile",
+        partialFilterExpression={"source_profile_id": {"$type": "objectId"}},
+    )

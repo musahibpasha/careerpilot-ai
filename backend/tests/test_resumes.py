@@ -1,12 +1,13 @@
 import io
 from datetime import datetime, timezone
+from io import BytesIO
 
 import mongomock
 import pytest
 from bson import ObjectId
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from pypdf import PdfWriter
+from pypdf import PdfReader, PdfWriter
 
 from app.database import get_db
 from app.main import app

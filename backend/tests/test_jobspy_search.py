@@ -434,6 +434,37 @@ def test_title_search_runs_each_alternative_and_merges_results(
     ]
 
 
+def test_title_search_deduplicates_tracking_variants_but_keeps_distinct_postings(monkeypatch):
+    def fake_scrape_jobs(**kwargs):
+        suffix = kwargs["search_term"].replace(" ", "-")
+        return FakeFrame([
+            _job(
+                id=f"duplicate-{suffix}",
+                title="Software Engineer",
+                description="Build and maintain software services.",
+                job_url=f"https://www.linkedin.com/jobs/view/123/?trackingId={suffix}",
+            ),
+            _job(
+                id=f"separate-{suffix}",
+                title="Software Engineer",
+                description="Build and maintain software services.",
+                job_url=f"https://www.linkedin.com/jobs/view/456?trackingId={suffix}",
+            ),
+        ])
+
+    monkeypatch.setattr(jobspy_search, "scrape_jobs", fake_scrape_jobs)
+    result = jobspy_search.search_jobspy_jobs(
+        site="linkedin",
+        what="engineer OR software engineer",
+        where="",
+    )
+
+    assert [job["url"] for job in result["results"]] == [
+        "https://www.linkedin.com/jobs/view/123/?trackingId=engineer",
+        "https://www.linkedin.com/jobs/view/456?trackingId=engineer",
+    ]
+
+
 def test_search_keeps_only_supported_employer_application_links(monkeypatch):
     def fake_scrape_jobs(**_kwargs):
         return FakeFrame([
