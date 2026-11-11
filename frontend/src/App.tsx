@@ -865,6 +865,10 @@ type RecruiterCandidate = {
   archived: boolean;
 };
 
+type CandidateResumeFile = ResumeFile & {
+  candidate_id?: string | null;
+};
+
 type Profile = {
   id?: string;
   full_name: string;
@@ -1263,6 +1267,13 @@ function App({
   const [candidates, setCandidates] = useState<RecruiterCandidate[]>([]);
   const [candidateLoadError, setCandidateLoadError] = useState("");
   const [candidateQuery, setCandidateQuery] = useState("");
+  const [candidatePickerOpen, setCandidatePickerOpen] = useState(false);
+  const [candidateActiveIndex, setCandidateActiveIndex] = useState(-1);
+  const [candidateResumes, setCandidateResumes] = useState<CandidateResumeFile[]>([]);
+  const [candidateResumesLoading, setCandidateResumesLoading] = useState(false);
+  const [candidateResumesError, setCandidateResumesError] = useState("");
+  const [selectedCandidateResumeId, setSelectedCandidateResumeId] = useState("");
+  const candidateResumeRequestId = useRef(0);
   const [selectedCandidateId, setSelectedCandidateId] = useState(() => {
     try {
       return window.localStorage.getItem("cp-selected-candidate") ?? "";
@@ -1584,7 +1595,13 @@ function App({
   function chooseCandidate(candidateId: string) {
     const candidate = candidates.find((item) => item.id === candidateId);
     setSelectedCandidateId(candidate?.id ?? "");
+    if (page === "jobs") setCandidateQuery("");
+    setCandidatePickerOpen(false);
+    setCandidateActiveIndex(-1);
     saveSetting("cp-selected-candidate", candidate?.id ?? "");
+    setCandidateResumes([]);
+    setSelectedCandidateResumeId("");
+    setCandidateResumesError("");
     clearDiscoveryResults();
     recommendationRequestId.current += 1;
     setRecommendationLoading(false);
@@ -1632,6 +1649,9 @@ function App({
         what: linkedinKeywords.trim(),
         where: linkedinLocation.trim(),
       });
+      if (selectedCandidateResumeId) {
+        params.set("resume_id", selectedCandidateResumeId);
+      }
       const jobType = {
         "Full-time": "fulltime",
         "Part-time": "parttime",
@@ -1955,6 +1975,55 @@ function App({
       void refreshRecommendations();
     }
   }, [page, dashboardLoadState, selectedCandidateId]);
+
+  useEffect(() => {
+    if (page !== "jobs" || !selectedCandidateId) {
+      setCandidateResumes([]);
+      setSelectedCandidateResumeId("");
+      setCandidateResumesLoading(false);
+      return;
+    }
+
+    const requestId = ++candidateResumeRequestId.current;
+    let cancelled = false;
+    setCandidateResumes([]);
+    setSelectedCandidateResumeId("");
+    setCandidateResumesError("");
+    setCandidateResumesLoading(true);
+    void fetch(`${API}/api/candidates/${encodeURIComponent(selectedCandidateId)}`)
+      .then(async (response) => {
+        const data = await response.json().catch(() => null);
+        if (!response.ok) {
+          throw new Error(errorText(data, `Could not load candidate resumes (HTTP ${response.status}).`));
+        }
+        return data;
+      })
+      .then((data) => {
+        if (cancelled || requestId !== candidateResumeRequestId.current) return;
+        const candidateResumeItems = Array.isArray(data?.resumes)
+          ? data.resumes as CandidateResumeFile[]
+          : [];
+        setCandidateResumes(candidateResumeItems);
+        const preferredResume =
+          candidateResumeItems.find((resume) => resume.is_active) ??
+          candidateResumeItems[0];
+        setSelectedCandidateResumeId(preferredResume?.id ?? "");
+      })
+      .catch((reason) => {
+        if (cancelled || requestId !== candidateResumeRequestId.current) return;
+        setCandidateResumesError(
+          reason instanceof Error ? reason.message : "Could not load candidate resumes.",
+        );
+      })
+      .finally(() => {
+        if (!cancelled && requestId === candidateResumeRequestId.current) {
+          setCandidateResumesLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [page, selectedCandidateId]);
 
   useEffect(() => {
     if (page === "dashboard" && dashboardLoadState === "ready" && !trendingLoaded) {
@@ -2935,7 +3004,7 @@ function App({
     },
     copilot: {
       eyebrow: "AI COPILOT",
-      title: "CareerPilot AI Copilot",
+      title: "ThoughtLabs CoPilot Copilot",
       sub: "Quick answers about your matches, gaps and approvals.",
     },
   };
@@ -3361,7 +3430,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
         role: "assistant",
         text: waiting.length
           ? "These applications are waiting for your review. Nothing is submitted on your behalf; use Automate to prepare and review one."
-          : "Nothing is waiting for review. CareerPilot AI never submits an application for you.",
+          : "Nothing is waiting for review. ThoughtLabs CoPilot never submits an application for you.",
         lines: waiting.map(
           (a) => `${a.job_title} at ${a.company} — ${statusLabel(a.status)}`,
         ),
@@ -3629,8 +3698,11 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
     const heading = context === "jobs" ? "Search for a candidate" : "Choose a candidate";
     const searchTerm = candidateQuery.trim().toLocaleLowerCase();
     const visibleCandidates = candidates.filter((candidate) =>
-      candidate.full_name.toLocaleLowerCase().includes(searchTerm),
+      `${candidate.full_name} ${candidate.current_job_title ?? ""} ${candidate.professional_headline ?? ""} ${candidate.target_roles.join(" ")}`
+        .toLocaleLowerCase()
+        .includes(searchTerm),
     );
+    const pickerCandidates = visibleCandidates.slice(0, 8);
     const selectedCandidateOutsideSearch =
       selectedCandidate && !visibleCandidates.some((candidate) => candidate.id === selectedCandidate.id)
         ? selectedCandidate
@@ -3645,7 +3717,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
             <h2>{heading}</h2>
             <p>
               {context === "jobs"
-                ? "Search and match listings using the selected candidate's saved profile."
+                ? "Choose who to search for. Job matching uses their profile and selected resume."
                 : "Recommendations are calculated from the selected candidate's profile and resume."}
             </p>
           </div>
@@ -3665,81 +3737,213 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
           </div>
         ) : (
           <>
-            <div className="candidate-context-controls">
-              <label className="candidate-context-select candidate-context-search">
-                Search candidates by name
-                <span className="candidate-search-input">
-                  <Search size={16} aria-hidden="true" />
-                  <input
-                    type="search"
-                    value={candidateQuery}
-                    onChange={(event) => setCandidateQuery(event.target.value)}
-                    placeholder="Type a candidate name"
-                    autoComplete="off"
-                  />
-                </span>
-              </label>
-              <label className="candidate-context-select candidate-context-picker">
-                Select candidate
-                <select
-                  value={selectedCandidateId}
-                  onChange={(event) => chooseCandidate(event.target.value)}
-                  aria-label="Select candidate"
-                >
-                  <option value="">Select a candidate</option>
-                  {selectedCandidateOutsideSearch && (
-                    <option value={selectedCandidateOutsideSearch.id}>
-                      Current selection — {selectedCandidateOutsideSearch.full_name}
-                    </option>
-                  )}
-                  {visibleCandidates.map((candidate) => (
-                    <option value={candidate.id} key={candidate.id}>
-                      {candidate.full_name}
-                      {candidate.current_job_title ? ` — ${candidate.current_job_title}` : ""}
-                    </option>
-                  ))}
-                  {visibleCandidates.length === 0 && !selectedCandidateOutsideSearch && (
-                    <option value="" disabled>No candidates match that name</option>
-                  )}
-                </select>
-                <small className="candidate-picker-hint">
-                  {!searchTerm
-                    ? `${candidates.length} candidates available`
-                    : `${visibleCandidates.length} matching candidate${visibleCandidates.length === 1 ? "" : "s"}`}
-                </small>
-              </label>
-            </div>
-            {selectedCandidate ? (
-              <div className="candidate-context-summary">
-                <span className="candidate-context-avatar" aria-hidden="true">
-                  {selectedCandidate.full_name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "?"}
-                </span>
-                <div className="candidate-context-info">
-                  <strong>{selectedCandidate.full_name}</strong>
-                  <span>
-                    {selectedCandidate.current_job_title ||
-                      selectedCandidate.professional_headline ||
-                      selectedCandidate.target_roles[0] ||
-                      "Role not specified"}
-                    {selectedCandidate.experience_years !== null &&
-                      ` · ${selectedCandidate.experience_years} years`}
-                    {(selectedCandidate.preferred_location || selectedCandidate.location) &&
-                      ` · ${selectedCandidate.preferred_location || selectedCandidate.location}`}
-                  </span>
-                  {selectedCandidate.skills.length > 0 && (
-                    <div className="candidate-context-skills">
-                      {selectedCandidate.skills.slice(0, 6).map((skill) => (
-                        <span key={skill}>{skill}</span>
+            {context === "jobs" ? (
+              <div className="candidate-context-controls candidate-context-controls--jobs">
+                <div className="candidate-picker">
+                  <label htmlFor="find-jobs-candidate">
+                    <span>Candidate</span>
+                    <small>
+                      {searchTerm
+                        ? `${visibleCandidates.length} match${visibleCandidates.length === 1 ? "" : "es"}`
+                        : `${candidates.length} available`}
+                    </small>
+                  </label>
+                  <div className="candidate-search-input">
+                    <Search size={17} aria-hidden="true" />
+                    <input
+                      id="find-jobs-candidate"
+                      type="search"
+                      role="combobox"
+                      aria-autocomplete="list"
+                      aria-expanded={candidatePickerOpen && visibleCandidates.length > 0}
+                      aria-controls="find-jobs-candidate-options"
+                      aria-activedescendant={
+                        candidatePickerOpen && candidateActiveIndex >= 0
+                          ? `find-jobs-candidate-option-${pickerCandidates[candidateActiveIndex]?.id}`
+                          : undefined
+                      }
+                      aria-label="Search candidates by name or role"
+                      value={candidateQuery}
+                      onFocus={() => setCandidatePickerOpen(true)}
+                      onBlur={() => window.setTimeout(() => setCandidatePickerOpen(false), 120)}
+                      onChange={(event) => {
+                        setCandidateQuery(event.target.value);
+                        setCandidatePickerOpen(true);
+                        setCandidateActiveIndex(-1);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "ArrowDown" && pickerCandidates.length > 0) {
+                          event.preventDefault();
+                          setCandidatePickerOpen(true);
+                          setCandidateActiveIndex((index) =>
+                            Math.min(index + 1, pickerCandidates.length - 1),
+                          );
+                        } else if (event.key === "ArrowUp" && pickerCandidates.length > 0) {
+                          event.preventDefault();
+                          setCandidateActiveIndex((index) => Math.max(index - 1, 0));
+                        } else if (event.key === "Enter" && pickerCandidates.length > 0) {
+                          event.preventDefault();
+                          const candidate = pickerCandidates[
+                            candidateActiveIndex >= 0 ? candidateActiveIndex : 0
+                          ];
+                          chooseCandidate(candidate.id);
+                        } else if (event.key === "Escape") {
+                          setCandidatePickerOpen(false);
+                        }
+                      }}
+                      placeholder="Search candidates by name or role"
+                      autoComplete="off"
+                    />
+                  </div>
+                  {candidatePickerOpen && visibleCandidates.length > 0 && (
+                    <div
+                      className="candidate-picker-options"
+                      id="find-jobs-candidate-options"
+                      role="listbox"
+                      aria-label="Matching candidates"
+                    >
+                      {pickerCandidates.map((candidate, index) => (
+                        <button
+                          className={index === candidateActiveIndex ? "active" : ""}
+                          type="button"
+                          role="option"
+                          id={`find-jobs-candidate-option-${candidate.id}`}
+                          aria-selected={candidate.id === selectedCandidateId}
+                          key={candidate.id}
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => chooseCandidate(candidate.id)}
+                        >
+                          <span>{candidate.full_name}</span>
+                          <small>
+                            {candidate.current_job_title ||
+                              candidate.professional_headline ||
+                              candidate.target_roles[0] ||
+                              "Role not specified"}
+                          </small>
+                        </button>
                       ))}
                     </div>
                   )}
-                  <small>
-                    {selectedCandidate.resume_count > 0
-                      ? `Resume available${selectedCandidate.resume_filename ? `: ${selectedCandidate.resume_filename}` : ""}`
-                      : "No resume uploaded"}
-                  </small>
+                  {candidatePickerOpen && searchTerm && visibleCandidates.length === 0 && (
+                    <div className="candidate-picker-options candidate-picker-empty" role="status">
+                      No candidates match “{candidateQuery.trim()}”.
+                    </div>
+                  )}
                 </div>
               </div>
+            ) : (
+              <div className="candidate-context-controls">
+                <label className="candidate-context-select candidate-context-search">
+                  Search candidates by name
+                  <span className="candidate-search-input">
+                    <Search size={16} aria-hidden="true" />
+                    <input
+                      type="search"
+                      value={candidateQuery}
+                      onChange={(event) => setCandidateQuery(event.target.value)}
+                      placeholder="Type a candidate name"
+                      autoComplete="off"
+                    />
+                  </span>
+                </label>
+                <label className="candidate-context-select candidate-context-picker">
+                  Select candidate
+                  <select
+                    value={selectedCandidateId}
+                    onChange={(event) => chooseCandidate(event.target.value)}
+                    aria-label="Select candidate"
+                  >
+                    <option value="">Select a candidate</option>
+                    {selectedCandidateOutsideSearch && (
+                      <option value={selectedCandidateOutsideSearch.id}>
+                        Current selection — {selectedCandidateOutsideSearch.full_name}
+                      </option>
+                    )}
+                    {visibleCandidates.map((candidate) => (
+                      <option value={candidate.id} key={candidate.id}>
+                        {candidate.full_name}
+                        {candidate.current_job_title ? ` — ${candidate.current_job_title}` : ""}
+                      </option>
+                    ))}
+                    {visibleCandidates.length === 0 && !selectedCandidateOutsideSearch && (
+                      <option value="" disabled>No candidates match that name</option>
+                    )}
+                  </select>
+                  <small className="candidate-picker-hint">
+                    {!searchTerm
+                      ? `${candidates.length} candidates available`
+                      : `${visibleCandidates.length} matching candidate${visibleCandidates.length === 1 ? "" : "s"}`}
+                  </small>
+                </label>
+              </div>
+            )}
+            {selectedCandidate ? (
+              <>
+                <div className={`candidate-context-summary ${context === "jobs" ? "candidate-context-summary--jobs" : ""}`}>
+                  <span className="candidate-context-avatar" aria-hidden="true">
+                    {selectedCandidate.full_name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "?"}
+                  </span>
+                  <div className="candidate-context-info">
+                    <strong>{selectedCandidate.full_name}</strong>
+                    <span>
+                      {selectedCandidate.current_job_title ||
+                        selectedCandidate.professional_headline ||
+                        selectedCandidate.target_roles[0] ||
+                        "Role not specified"}
+                      {selectedCandidate.experience_years !== null &&
+                        ` · ${selectedCandidate.experience_years} years`}
+                      {(selectedCandidate.preferred_location || selectedCandidate.location) &&
+                        ` · ${selectedCandidate.preferred_location || selectedCandidate.location}`}
+                    </span>
+                    {context !== "jobs" && selectedCandidate.skills.length > 0 && (
+                      <div className="candidate-context-skills">
+                        {selectedCandidate.skills.slice(0, 6).map((skill) => (
+                          <span key={skill}>{skill}</span>
+                        ))}
+                      </div>
+                    )}
+                    {context !== "jobs" && (
+                      <small>
+                        {selectedCandidate.resume_count > 0
+                          ? `${selectedCandidate.resume_count} of 5 candidate resumes${selectedCandidate.resume_filename ? ` · Latest: ${selectedCandidate.resume_filename}` : ""}`
+                          : "No resume uploaded"}
+                      </small>
+                    )}
+                  </div>
+                  {context === "jobs" && (
+                    <div className="candidate-resume-choice">
+                    <label>
+                      <span>Matching resume</span>
+                      <select
+                        value={selectedCandidateResumeId}
+                        onChange={(event) => setSelectedCandidateResumeId(event.target.value)}
+                        disabled={candidateResumesLoading || candidateResumes.length === 0}
+                      >
+                        {candidateResumes.length === 0 ? (
+                          <option value="">
+                            {candidateResumesLoading ? "Loading candidate resumes..." : "Use candidate profile only"}
+                          </option>
+                        ) : (
+                          candidateResumes.map((resume) => (
+                            <option key={resume.id} value={resume.id}>
+                              {resume.filename}{resume.is_active ? " · Active" : ""}
+                            </option>
+                          ))
+                        )}
+                      </select>
+                    </label>
+                    {(candidateResumesError || candidateResumes.length === 0) && (
+                      <small role={candidateResumesError ? "alert" : undefined}>
+                        {candidateResumesError ||
+                          (candidateResumesLoading
+                            ? "Loading resumes..."
+                            : "No resume attached; matching will use the saved profile.")}
+                      </small>
+                    )}
+                    </div>
+                  )}
+                </div>
+              </>
             ) : (
               <p className="candidate-context-hint">Select a candidate to continue.</p>
             )}
@@ -3765,7 +3969,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                 ? `Matched for ${selectedCandidate.full_name} across Belgium and Germany`
                 : "Select a candidate to see candidate-specific recommendations"}
               {selectedCandidate &&
-                " across LinkedIn, Indeed, Glassdoor, and Jobicy. Naukri's current listing integration is India-only."}
+                " across LinkedIn, Indeed, Glassdoor."}
               {recommendationLastUpdated &&
                 ` Last updated ${new Date(recommendationLastUpdated).toLocaleString()}.`}
             </p>
@@ -4112,7 +4316,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
             <Sparkles size={20} />
           </div>
           <div>
-            <strong>CareerPilot AI</strong>
+            <strong>ThoughtLabs CoPilot</strong>
             <span>Recruiter workspace</span>
           </div>
         </div>
@@ -4507,7 +4711,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                   <BriefcaseBusiness size={18} />
                 </span>
                 <div>
-                  <h2>Choose a job board</h2>
+                  <h2>2. Choose a job board</h2>
                   <p>Search listings from one source at a time.</p>
                 </div>
               </div>
@@ -4532,7 +4736,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                 ))}
               </div>
               <p className="source-disclaimer">
-                Search LinkedIn, Indeed, or Glassdoor with JobSpy. Listings stay here until you save them; application form filling remains review-first and is only supported on select employer sites.
+                Listings stay here until saved. Applications are always reviewed and submitted manually.
               </p>
             </section>
 
@@ -4540,8 +4744,12 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
             <section className="panel search-card linkedin-search-card">
               <div className="panel-head criteria-panel-head">
                 <div>
-                  <h2>Search criteria</h2>
-                  <p>Find listings on {JOB_SEARCH_SOURCES.find((source) => source.id === jobSource)?.label}.</p>
+                  <h2>3. Search criteria</h2>
+                  <p>
+                    {selectedCandidate
+                      ? `Find relevant ${JOB_SEARCH_SOURCES.find((source) => source.id === jobSource)?.label} listings for ${selectedCandidate.full_name}.`
+                      : `Choose your search details for ${JOB_SEARCH_SOURCES.find((source) => source.id === jobSource)?.label}.`}
+                  </p>
                 </div>
               </div>
 
@@ -4639,12 +4847,14 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                   <button
                     className="primary-button"
                     type="button"
-                    disabled={discoveryBusy || !selectedCandidate || linkedinKeywords.trim().length < 2}
+                    disabled={discoveryBusy || !selectedCandidate || candidateResumesLoading || linkedinKeywords.trim().length < 2}
                     onClick={() => void searchJobBoard()}
                   >
                     {discoveryBusy
                       ? `Searching (${discoveryElapsed}s)...`
-                      : `Search ${JOB_SEARCH_SOURCES.find((source) => source.id === jobSource)?.label} jobs`}
+                      : selectedCandidate
+                        ? `Search jobs for ${selectedCandidate.full_name.split(/\s+/)[0]}`
+                        : "Select a candidate to search"}
                     <Search size={14} />
                   </button>
                   {discoveryBusy && (
@@ -5171,7 +5381,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                   <Bot size={20} />
                 </span>
                 <div>
-                  <strong>CareerPilot AI Copilot</strong>
+                  <strong>ThoughtLabs CoPilot Copilot</strong>
                   <small>Answers come from your saved jobs, profile and applications</small>
                 </div>
               </div>
@@ -5786,7 +5996,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
         )}
 
         <footer>
-          CareerPilot AI <span>·</span> CareerPilot automation, human decisions.
+          ThoughtLabs CoPilot <span>·</span> CareerPilot automation, human decisions.
         </footer>
       </main>
 

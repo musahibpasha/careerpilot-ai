@@ -1,11 +1,12 @@
 import hashlib
+from datetime import datetime, timezone
 
 import mongomock
 import pytest
 from bson import ObjectId
 from fastapi.testclient import TestClient
 
-from app import jobspy_search
+from app import jobspy_search, main
 from app.database import get_db
 from app.main import app
 
@@ -635,6 +636,80 @@ def test_board_discovery_scores_for_user_and_sorts_by_match_score(monkeypatch, d
         (expected_profile, expected_preferences),
         (expected_profile, expected_preferences),
     ]
+
+
+def test_board_discovery_uses_selected_candidate_resume_and_rejects_foreign_resume(
+    monkeypatch, discovery_db
+):
+    candidate_resume_id = discovery_db.resumes.insert_one(
+        {
+            "candidate_id": ObjectId(CANDIDATE_ID),
+            "filename": "selected.pdf",
+            "uploaded_at": datetime.now(timezone.utc),
+            "extracted": {"skills": ["Rust"], "target_roles": ["Platform Engineer"]},
+        }
+    ).inserted_id
+    other_candidate_id = ObjectId()
+    discovery_db.candidates.insert_one(
+        {"_id": other_candidate_id, "full_name": "Other Candidate", "archived": False}
+    )
+    other_resume_id = discovery_db.resumes.insert_one(
+        {
+            "candidate_id": other_candidate_id,
+            "filename": "other.pdf",
+            "uploaded_at": datetime.now(timezone.utc),
+            "extracted": {"skills": ["Java"]},
+        }
+    ).inserted_id
+
+    score_inputs = []
+    monkeypatch.setattr(
+        "app.main.search_jobspy_jobs",
+        lambda **kwargs: {"source": kwargs["site"], "results": [
+            {"source_job_id": "job-1", "title": "Platform Engineer", "company": "Example",
+             "url": "https://example.com/job"}
+        ]},
+    )
+    monkeypatch.setattr(
+        "app.main.score_fields",
+        lambda job, profile, preferences: (
+            score_inputs.append(profile)
+            or {
+                "match_score": 50,
+                "match_reasons": [],
+                "match_confidence": "medium",
+                "match_breakdown": [],
+            }
+        ),
+    )
+
+    response = client.get(
+        "/api/jobs/discover/board",
+        params={
+            "site": "linkedin",
+            "candidate_id": CANDIDATE_ID,
+            "resume_id": str(candidate_resume_id),
+            "what": "platform engineer",
+        },
+    )
+
+    assert response.status_code == 200
+    expected = main._candidate_matching_data(
+        CANDIDATE_ID, discovery_db, resume_id=str(candidate_resume_id)
+    )[1]
+    assert score_inputs == [expected]
+    assert "Rust" in score_inputs[0]["skills"]
+
+    foreign_resume = client.get(
+        "/api/jobs/discover/board",
+        params={
+            "site": "linkedin",
+            "candidate_id": CANDIDATE_ID,
+            "resume_id": str(other_resume_id),
+            "what": "platform engineer",
+        },
+    )
+    assert foreign_resume.status_code == 404
 
 
 @pytest.mark.parametrize(

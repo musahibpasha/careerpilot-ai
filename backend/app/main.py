@@ -53,6 +53,7 @@ from app.matching import build_application_plan, score_job
 from app.preferences import clean_preferences, preferences_problems
 from app.resumes import (
     MAX_RESUME_BYTES,
+    MAX_CANDIDATE_RESUMES,
     MAX_RESUMES,
     check_resume_file,
     clean_label,
@@ -123,7 +124,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="CareerPilot AI API",
+    title="ThoughtLabs CoPilot API",
     version="0.2.0",
     lifespan=lifespan,
 )
@@ -940,6 +941,7 @@ def list_saved_jobs(db: Database = Depends(get_db)):
 def discover_board_jobs(
     site: str = Query(..., min_length=2, max_length=30),
     candidate_id: str = Query(..., min_length=1),
+    resume_id: str | None = Query(default=None, min_length=1),
     what: str = Query(default="software engineer", min_length=2, max_length=100),
     where: str = Query(default="", max_length=100),
     job_type: str | None = Query(
@@ -985,7 +987,11 @@ def discover_board_jobs(
             status_code=422,
             detail="Choose a salary currency when filtering by salary.",
         )
-    _, profile, preferences = _candidate_matching_data(candidate_id, db)
+    _, profile, preferences = _candidate_matching_data(
+        candidate_id,
+        db,
+        resume_id=resume_id,
+    )
     try:
         search_options = {
             "site": site,
@@ -1116,6 +1122,7 @@ def _candidate_matching_data(
     candidate_id: str,
     db: Database,
     *,
+    resume_id: str | None = None,
     include_archived: bool = False,
 ) -> tuple[dict, dict, dict]:
     candidate_oid = to_oid(candidate_id, "Candidate")
@@ -1126,11 +1133,22 @@ def _candidate_matching_data(
     if candidate is None:
         raise HTTPException(status_code=404, detail="Candidate not found.")
 
-    resume = db.resumes.find_one(
-        {"candidate_id": candidate_oid},
-        {"data": 0},
-        sort=[("uploaded_at", -1)],
-    )
+    resume_query = {"candidate_id": candidate_oid}
+    if resume_id:
+        resume_oid = to_oid(resume_id, "Resume")
+        resume_query["_id"] = resume_oid
+        resume = db.resumes.find_one(resume_query, {"data": 0})
+        if resume is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Resume not found for this candidate.",
+            )
+    else:
+        resume = db.resumes.find_one(
+            resume_query,
+            {"data": 0},
+            sort=[("uploaded_at", -1)],
+        )
     extracted = resume.get("extracted") if isinstance(resume, dict) else {}
     profile = _recommendation_profile(candidate, extracted if isinstance(extracted, dict) else {})
     location = (
@@ -1872,7 +1890,7 @@ def download_job_cover_letter_pdf(
         canvas.drawRightString(
             LETTER[0] - document.rightMargin,
             0.45 * inch,
-            f"CareerPilot AI · {document.page}",
+            f"ThoughtLabs CoPilot · {document.page}",
         )
         canvas.restoreState()
 
@@ -1918,7 +1936,7 @@ def download_job_cover_letter_pdf(
         topMargin=0.7 * inch,
         bottomMargin=0.7 * inch,
         title=f"Cover Letter - {job.get('title', 'Job application')}",
-        author=full_name or "CareerPilot AI user",
+        author=full_name or "ThoughtLabs CoPilot user",
     )
     document.build(story, onFirstPage=draw_footer, onLaterPages=draw_footer)
 
@@ -2136,7 +2154,7 @@ def download_job_tailored_resume_pdf(
         topMargin=0.6 * inch,
         bottomMargin=0.6 * inch,
         title=f"Resume - {materials.title}",
-        author=str(profile.get("full_name") or "CareerPilot AI user"),
+        author=str(profile.get("full_name") or "ThoughtLabs CoPilot user"),
     )
     document.build(story)
     filename = safe_filename(f"Resume - {materials.title} - {materials.company}.pdf")
@@ -2780,6 +2798,13 @@ async def upload_resume(
             status_code=409,
             detail=f"You can keep at most {MAX_RESUMES} resumes. Delete one first.",
         )
+    if candidate_oid is not None and db.resumes.count_documents(
+        {"candidate_id": candidate_oid}
+    ) >= MAX_CANDIDATE_RESUMES:
+        raise HTTPException(
+            status_code=409,
+            detail=f"This candidate already has the maximum of {MAX_CANDIDATE_RESUMES} resumes.",
+        )
 
     filename = file.filename or ""
     page_count, problems = check_resume_file(
@@ -3175,6 +3200,11 @@ def attach_resume_to_candidate(
         raise HTTPException(
             status_code=409,
             detail="This resume is already attached to another candidate.",
+        )
+    if db.resumes.count_documents({"candidate_id": candidate_oid}) >= MAX_CANDIDATE_RESUMES:
+        raise HTTPException(
+            status_code=409,
+            detail=f"This candidate already has the maximum of {MAX_CANDIDATE_RESUMES} resumes.",
         )
 
     result = db.resumes.update_one(

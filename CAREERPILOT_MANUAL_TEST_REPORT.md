@@ -1,4 +1,4 @@
-# CareerPilot AI Manual Test Report
+# ThoughtLabs CoPilot Manual Test Report
 
 ## Status
 

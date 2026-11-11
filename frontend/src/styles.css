@@ -1,5 +1,5 @@
 /* =========================================================
-   CareerPilot AI — shared design system
+   ThoughtLabs CoPilot — shared design system
    Light recruiter workspace with a dark plum navigation shell.
    All tokens live in :root so every screen shares one look.
    ========================================================= */
@@ -1640,6 +1640,23 @@ footer { margin-top: 32px; font-size: 12px; color: var(--faint); }
   border-radius: 13px;
 }
 .candidate-context-error { margin: 0; color: var(--bad); font-size: 12px; }
+.candidate-resume-choice {
+  display: grid;
+  gap: 7px;
+  width: 100%;
+  margin-top: 4px;
+}
+.candidate-resume-choice label { display: grid; gap: 6px; color: var(--ink-2); font-size: 11px; font-weight: 600; }
+.candidate-resume-choice select {
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  color: var(--ink);
+  background: var(--surface);
+}
+.candidate-resume-choice small { color: var(--muted); font-size: 10px; line-height: 1.5; }
 .job-candidate-link { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; }
 .job-source-card {
   margin-bottom: 10px;
@@ -2527,6 +2544,7 @@ footer { margin-top: 32px; font-size: 12px; color: var(--faint); }
 .bench-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .bench-form-grid label { display: grid; gap: 5px; color: var(--muted); font-size: 10px; }
 .bench-form-grid label.wide { grid-column: 1 / -1; }
+.bench-form-grid > .wide { grid-column: 1 / -1; }
 .bench-form-grid input,
 .bench-form-grid select,
 .bench-form-grid textarea { width: 100%; min-height: 37px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: rgba(11, 15, 31, .76); color: var(--ink-2); font-size: 11px; }
@@ -2560,7 +2578,25 @@ footer { margin-top: 32px; font-size: 12px; color: var(--faint); }
 .bench-resume-scan > div > p { margin-top: 3px; color: var(--muted); font-size: 9px; line-height: 1.5; }
 .bench-resume-scan > .bench-success,
 .bench-resume-scan > .bench-inline-error,
-.bench-selected-resume { grid-column: 1 / -1; }
+.bench-selected-resume,
+.bench-existing-resume-fill,
+.bench-resume-scan > .bench-tab-help { grid-column: 1 / -1; }
+.bench-existing-resume-fill {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px 10px;
+  padding: 10px;
+  border: 1px solid rgba(169, 154, 255, .18);
+  border-radius: 8px;
+  background: rgba(11, 15, 31, .3);
+}
+.bench-existing-resume-fill label { display: grid; min-width: 0; gap: 5px; color: var(--ink-2); font-size: 10px; }
+.bench-existing-resume-fill label > small { color: var(--muted); font-size: 9px; line-height: 1.45; }
+.bench-existing-resume-fill select { width: 100%; min-width: 0; min-height: 34px; padding: 6px 8px; border: 1px solid var(--line-strong); border-radius: 7px; color: var(--ink-2); background: rgba(11, 15, 31, .76); font-size: 10px; }
+.bench-existing-resume-fill > .secondary-button { min-height: 34px; white-space: nowrap; }
+.bench-existing-resume-fill > .bench-inline-error,
+.bench-existing-resume-fill > .bench-success { grid-column: 1 / -1; margin: 0; }
 .bench-selected-resume { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 8px; }
 .bench-selected-resume small { overflow: hidden; color: var(--ink-2); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .bench-selected-resume button { flex: none; padding: 3px 6px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font-size: 9px; text-decoration: underline; }
@@ -2599,8 +2635,12 @@ footer { margin-top: 32px; font-size: 12px; color: var(--faint); }
   .bench-filters .bench-search { grid-column: auto; }
   .bench-contact-grid,
   .bench-fact-list { grid-template-columns: 1fr; }
-  .bench-resume-scan { grid-template-columns: 1fr; }
+  .bench-resume-scan,
+  .bench-existing-resume-fill { grid-template-columns: 1fr; }
   .bench-resume-scan > .bench-upload-button { justify-self: start; }
+  .bench-existing-resume-fill > .secondary-button { justify-self: start; }
+  .bench-existing-resume-fill > .bench-inline-error,
+  .bench-existing-resume-fill > .bench-success { grid-column: auto; }
   .bench-resume-scan > .bench-success,
   .bench-resume-scan > .bench-inline-error,
   .bench-selected-resume { grid-column: auto; }
@@ -2946,9 +2986,9 @@ footer { margin-top: 32px; font-size: 12px; color: var(--faint); }
 }
 
 /* Find Jobs: keep candidate context and search actions visually grouped. */
-.jobs-page { display: grid; align-content: start; gap: 16px; }
+.jobs-page { display: grid; align-content: start; gap: 18px; }
 .jobs-page .candidate-context {
-  gap: 16px;
+  gap: 14px;
   margin: 0;
   padding: 20px 22px;
   border-color: #e7e3ed;
@@ -2978,6 +3018,18 @@ footer { margin-top: 32px; font-size: 12px; color: var(--faint); }
   align-items: start;
   gap: 14px;
 }
+.candidate-context-controls--jobs { grid-template-columns: minmax(0, 1fr); }
+.candidate-picker { position: relative; display: grid; gap: 7px; }
+.candidate-picker > label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  color: #555064;
+  font-size: 12px;
+  font-weight: 600;
+}
+.candidate-picker > label small { color: #817a90; font-size: 11px; font-weight: 450; }
 .candidate-context--jobs .candidate-context-select {
   max-width: none;
   gap: 7px;
@@ -2993,30 +3045,72 @@ footer { margin-top: 32px; font-size: 12px; color: var(--faint); }
 .candidate-search-input > svg {
   position: absolute;
   left: 13px;
+  z-index: 1;
   color: #817a90;
   pointer-events: none;
 }
-.candidate-context--jobs .candidate-search-input input,
-.candidate-context--jobs .candidate-context-picker select {
+.candidate-context--jobs .candidate-search-input input {
   width: 100%;
-  min-height: 44px;
-  padding: 10px 13px;
+  min-height: 46px;
+  padding: 10px 14px 10px 41px;
   border: 1px solid #dcd8e4;
-  border-radius: 9px;
+  border-radius: 10px;
   color: #302b3e;
   background: #fff;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 450;
-  box-shadow: 0 1px 2px rgba(37, 27, 49, 0.03);
+  box-shadow: 0 1px 2px rgba(37, 27, 49, 0.025);
   transition: border-color .16s ease, box-shadow .16s ease;
 }
-.candidate-context--jobs .candidate-search-input input { padding-left: 39px; }
-.candidate-context--jobs .candidate-search-input input:focus,
-.candidate-context--jobs .candidate-context-picker select:focus {
+.candidate-context--jobs .candidate-search-input input:focus {
   border-color: #8d6ac3 !important;
   box-shadow: 0 0 0 3px rgba(112, 72, 184, 0.12);
   outline: none;
 }
+.candidate-picker-options {
+  position: absolute;
+  z-index: 12;
+  top: calc(100% + 5px);
+  right: 0;
+  left: 0;
+  display: grid;
+  max-height: 280px;
+  overflow: auto;
+  padding: 5px;
+  border: 1px solid #e5e1eb;
+  border-radius: 11px;
+  background: #fff;
+  box-shadow: 0 12px 30px rgba(38, 29, 49, .14);
+}
+.candidate-picker-options button {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  padding: 10px 11px;
+  border: 0;
+  border-radius: 7px;
+  color: #302b3e;
+  text-align: left;
+  background: transparent;
+  cursor: pointer;
+}
+.candidate-picker-options button:hover,
+.candidate-picker-options button.active { background: #f5f1fb; }
+.candidate-picker-options button:focus-visible {
+  outline: 2px solid #8d6ac3;
+  outline-offset: -2px;
+}
+.candidate-picker-options button > span { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; }
+.candidate-picker-options button > small { color: #777184; font-size: 11px; }
+.candidate-picker-selected {
+  padding: 2px 6px;
+  border-radius: 999px;
+  color: #68479d;
+  background: #f0eafa;
+  font-size: 9px;
+  font-weight: 600;
+}
+.candidate-picker-empty { padding: 12px; color: #777184; font-size: 12px; }
 .candidate-context--jobs .candidate-picker-hint {
   min-height: 16px;
   color: #817a90;
@@ -3025,19 +3119,24 @@ footer { margin-top: 32px; font-size: 12px; color: var(--faint); }
 }
 .candidate-context--jobs .candidate-context-summary {
   align-items: center;
-  gap: 13px;
-  min-height: 76px;
-  padding: 13px 15px;
+  gap: 14px;
+  min-height: 74px;
+  padding: 12px 14px;
   border-color: #ebe7f1;
-  border-radius: 11px;
+  border-radius: 12px;
   background: #faf9fc;
 }
+.candidate-context--jobs .candidate-context-summary--jobs {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) minmax(270px, .8fr);
+  gap: 12px;
+}
 .candidate-context--jobs .candidate-context-avatar {
-  width: 42px;
-  height: 42px;
-  border-radius: 12px;
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
   background: #714bb0;
-  font-size: 13px;
+  font-size: 12px;
 }
 .candidate-context--jobs .candidate-context-info {
   grid-template-columns: minmax(0, 1fr);
@@ -3065,6 +3164,30 @@ footer { margin-top: 32px; font-size: 12px; color: var(--faint); }
   color: #5d4388;
   background: #f3eff8;
   font-size: 11px;
+}
+.candidate-context--jobs .candidate-resume-choice {
+  min-width: 0;
+  margin: 0;
+  gap: 0;
+}
+.candidate-context--jobs .candidate-resume-choice label {
+  gap: 5px;
+  color: #6b6678;
+  font-size: 10px;
+  font-weight: 600;
+}
+.candidate-context--jobs .candidate-resume-choice select {
+  min-width: 0;
+  min-height: 38px;
+  padding: 7px 10px;
+  border-color: #e0dce7;
+  border-radius: 8px;
+  font-size: 12px;
+}
+.candidate-context--jobs .candidate-resume-choice > small {
+  margin-top: 4px;
+  color: #777184;
+  font-size: 10px;
 }
 .job-source-card {
   margin: 0;
@@ -3115,10 +3238,11 @@ footer { margin-top: 32px; font-size: 12px; color: var(--faint); }
 .criteria-panel-head h2 { font-size: 17px; letter-spacing: -0.25px; }
 .criteria-panel-head p { margin-top: 4px; font-size: 12px; }
 .linkedin-criteria-grid {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   align-items: end;
-  gap: 16px 18px;
+  gap: 14px 16px;
 }
+.linkedin-criteria-grid > label:nth-child(-n + 2) { grid-column: span 2; }
 .linkedin-criteria-grid label {
   gap: 7px;
   color: #555064;
@@ -3187,6 +3311,7 @@ footer { margin-top: 32px; font-size: 12px; color: var(--faint); }
 @media (max-width: 900px) {
   .candidate-context-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .linkedin-criteria-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .linkedin-criteria-grid > label:nth-child(-n + 2) { grid-column: auto; }
   .criteria-search-action > small { max-width: 340px; }
 }
 @media (max-width: 720px) {
@@ -3195,6 +3320,11 @@ footer { margin-top: 32px; font-size: 12px; color: var(--faint); }
   .job-source-card,
   .linkedin-search-card { padding: 16px; }
   .candidate-context-controls { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .candidate-context--jobs .candidate-context-summary--jobs {
+    grid-template-columns: 36px minmax(0, 1fr);
+    gap: 10px;
+  }
+  .candidate-context--jobs .candidate-resume-choice { grid-column: 1 / -1; }
   .candidate-context--jobs .candidate-context-heading {
     align-items: flex-start;
     flex-direction: column;
@@ -3213,15 +3343,15 @@ footer { margin-top: 32px; font-size: 12px; color: var(--faint); }
   .criteria-search-action > small { max-width: none; text-align: left; }
 }
 @media (max-width: 460px) {
-  .candidate-context--jobs .candidate-context-heading > button { width: 100%; justify-content: center; }
+  .candidate-context--jobs .candidate-context-heading > button { width: auto; justify-content: center; }
   .job-source-options,
   .linkedin-criteria-grid { grid-template-columns: minmax(0, 1fr); }
+  .linkedin-criteria-grid > label:nth-child(-n + 2) { grid-column: auto; }
   .criteria-search-primary { width: 100%; }
   .criteria-search-primary .primary-button { width: 100%; }
 }
 @media (prefers-reduced-motion: reduce) {
   .candidate-context--jobs .candidate-search-input input,
-  .candidate-context--jobs .candidate-context-picker select,
   .linkedin-criteria-grid input,
   .linkedin-criteria-grid select { transition: none; }
 }
@@ -3461,3 +3591,131 @@ footer { margin-top: 32px; font-size: 12px; color: var(--faint); }
 }
 .bench-match.missing { border: 1px solid #f0cbd0; }
 .bench-match.missing small { color: #a42e40; }
+
+/* Keep resume population controls readable inside the light candidate editor. */
+.bench-candidate-form .bench-resume-scan {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  padding: 16px;
+  border-color: #e8e1f2;
+  border-radius: 12px;
+  background: #faf8fd;
+}
+.bench-candidate-form .bench-resume-scan > div:first-child > strong {
+  color: #302b3e;
+  font-size: 13px;
+}
+.bench-candidate-form .bench-resume-scan > div:first-child {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 16px;
+}
+.bench-candidate-form .bench-resume-scan > div:first-child > strong,
+.bench-candidate-form .bench-resume-scan > div:first-child > p { grid-column: 1; }
+.bench-candidate-form .bench-resume-scan > div:first-child > p {
+  max-width: 620px;
+  margin-top: 0;
+  color: #716b7d;
+  font-size: 11px;
+}
+.bench-candidate-form .bench-resume-scan > div:first-child > .bench-upload-button {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  justify-self: end;
+  min-width: 174px;
+  min-height: 38px;
+  padding: 8px 12px;
+  border: 1px solid #d9cde9;
+  border-radius: 8px;
+  color: #5d4388;
+  background: #fff;
+  font-size: 11px;
+  font-weight: 600;
+}
+.bench-candidate-form .bench-resume-scan > div:first-child > .bench-upload-button:hover:not(.disabled) {
+  border-color: #8d6ac3;
+  background: #f7f3fc;
+}
+.bench-candidate-form .bench-existing-resume-fill {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px 12px;
+  padding: 14px;
+  border-color: #e8e3ee;
+  border-radius: 10px;
+  background: #fff;
+}
+.bench-candidate-form .bench-existing-resume-fill label {
+  gap: 7px;
+  color: #4b4558;
+  font-size: 11px;
+  font-weight: 600;
+}
+.bench-candidate-form .bench-existing-resume-fill select {
+  min-height: 42px;
+  padding: 9px 12px;
+  border-color: #dcd7e4;
+  border-radius: 8px;
+  color: #302b3e;
+  background: #fff;
+  color-scheme: light;
+  font-size: 12px;
+}
+.bench-candidate-form .bench-existing-resume-fill select:focus-visible {
+  border-color: #8d6ac3;
+  outline: 3px solid rgba(112, 72, 184, .14);
+  outline-offset: 1px;
+}
+.bench-candidate-form .bench-existing-resume-fill label > small {
+  color: #716b7d;
+  font-size: 10px;
+}
+.bench-candidate-form .bench-existing-resume-hint {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #716b7d;
+  font-size: 10px;
+  line-height: 1.4;
+}
+.bench-candidate-form .bench-existing-resume-fill > .secondary-button {
+  min-height: 42px;
+  padding: 9px 14px;
+  border-color: #7048b8;
+  border-radius: 8px;
+  color: #fff;
+  background: #7048b8;
+  font-size: 12px;
+  font-weight: 600;
+}
+.bench-candidate-form .bench-existing-resume-fill > .secondary-button:hover:not(:disabled) {
+  border-color: #5f399f;
+  color: #fff;
+  background: #5f399f;
+}
+.bench-candidate-form .bench-resume-scan > .bench-tab-help {
+  margin: 0;
+  color: #716b7d;
+  font-size: 10px;
+}
+.bench-candidate-form .bench-resume-scan .bench-success,
+.bench-candidate-form .bench-resume-scan .bench-inline-error {
+  margin: 0;
+}
+@media (max-width: 600px) {
+  .bench-candidate-form .bench-existing-resume-fill { grid-template-columns: minmax(0, 1fr); }
+  .bench-candidate-form .bench-existing-resume-fill > .secondary-button { width: 100%; justify-content: center; }
+  .bench-candidate-form .bench-resume-scan > div:first-child {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .bench-candidate-form .bench-resume-scan > div:first-child > strong,
+  .bench-candidate-form .bench-resume-scan > div:first-child > p,
+  .bench-candidate-form .bench-resume-scan > div:first-child > .bench-upload-button {
+    grid-column: 1;
+    grid-row: auto;
+  }
+  .bench-candidate-form .bench-resume-scan > div:first-child > .bench-upload-button {
+    width: 100%;
+    justify-self: stretch;
+  }
+}

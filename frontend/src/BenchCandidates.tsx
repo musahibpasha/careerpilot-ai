@@ -23,6 +23,7 @@ import type { FormEvent, ReactNode } from "react";
 import { apiFetch } from "./api";
 
 const API = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? "http://127.0.0.1:8000" : "");
+const MAX_CANDIDATE_RESUMES = 5;
 
 type CandidateStatus = "active" | "on_bench" | "under_review" | "temporarily_unavailable" | "placed" | "not_set";
 type EditableEntry = Record<string, string | boolean | string[]>;
@@ -207,6 +208,11 @@ type ResumeParseResponse = {
   extracted: ExtractedResume;
   requires_confirmation: boolean;
 };
+type StoredResumeExtraction = {
+  extracted: ExtractedResume;
+  cached: boolean;
+  extracted_at: string;
+};
 type CandidateListResponse = {
   items: Candidate[];
   summary: {
@@ -387,6 +393,14 @@ export default function BenchCandidates() {
   const [resumeScanMessage, setResumeScanMessage] = useState("");
   const [resumeExtracted, setResumeExtracted] = useState<ExtractedResume | null>(null);
   const resumeScanRequestId = useRef(0);
+  const [formResumes, setFormResumes] = useState<CandidateResume[]>([]);
+  const [formResumeId, setFormResumeId] = useState("");
+  const [formResumesLoading, setFormResumesLoading] = useState(false);
+  const [formResumesError, setFormResumesError] = useState("");
+  const [formResumeReadBusy, setFormResumeReadBusy] = useState(false);
+  const [formResumeReadError, setFormResumeReadError] = useState("");
+  const [formResumeReadMessage, setFormResumeReadMessage] = useState("");
+  const formResumeRequestId = useRef(0);
   const [notesDraft, setNotesDraft] = useState("");
   const [notesBusy, setNotesBusy] = useState(false);
   const [notesMessage, setNotesMessage] = useState("");
@@ -559,6 +573,7 @@ export default function BenchCandidates() {
   }, [items, search, skillTerms, statusFilter, locationFilter, availabilityFilter, experienceFilter]);
 
   function openCreateForm() {
+    formResumeRequestId.current += 1;
     setEditingCandidate(null);
     setForm(emptyForm());
     setProfileDetails(emptyProfileDetails());
@@ -567,10 +582,17 @@ export default function BenchCandidates() {
     setResumeExtracted(null);
     setResumeScanError("");
     setResumeScanMessage("");
+    setFormResumes([]);
+    setFormResumeId("");
+    setFormResumesLoading(false);
+    setFormResumesError("");
+    setFormResumeReadError("");
+    setFormResumeReadMessage("");
     setFormOpen(true);
   }
 
   function openEditForm(candidate: Candidate) {
+    const requestId = ++formResumeRequestId.current;
     setEditingCandidate(candidate);
     setForm(formFromCandidate(candidate));
     setProfileDetails({ ...emptyProfileDetails(), ...candidate });
@@ -579,7 +601,89 @@ export default function BenchCandidates() {
     setResumeExtracted(null);
     setResumeScanError("");
     setResumeScanMessage("");
+    setFormResumes([]);
+    setFormResumeId("");
+    setFormResumesLoading(true);
+    setFormResumesError("");
+    setFormResumeReadError("");
+    setFormResumeReadMessage("");
     setFormOpen(true);
+    void request<CandidateDetail>(`/api/candidates/${candidate.id}`)
+      .then((result) => {
+        if (requestId !== formResumeRequestId.current) return;
+        setFormResumes(result.resumes);
+        const preferredResume =
+          result.resumes.find((resume) => resume.is_active) ?? result.resumes[0];
+        setFormResumeId(preferredResume?.id ?? "");
+      })
+      .catch((error) => {
+        if (requestId !== formResumeRequestId.current) return;
+        setFormResumesError(
+          error instanceof Error ? error.message : "Could not load this candidate's resumes.",
+        );
+      })
+      .finally(() => {
+        if (requestId === formResumeRequestId.current) setFormResumesLoading(false);
+      });
+  }
+
+  function applyResumeToForm(extracted: ExtractedResume) {
+    setResumeExtracted(extracted);
+    setProfileDetails((current) => ({ ...current, ...extracted }));
+    setForm((current) => ({
+      ...current,
+      full_name: extracted.full_name || current.full_name,
+      role: extracted.target_roles?.length
+        ? extracted.target_roles.join(", ")
+        : extracted.current_job_title || extracted.professional_headline || current.role,
+      email: extracted.email || current.email,
+      phone: extracted.phone || current.phone,
+      location: extracted.location || current.location,
+      skills: extracted.skills?.length ? extracted.skills.join(", ") : current.skills,
+      experience_summary: extracted.experience_summary || current.experience_summary,
+      experience_years: extracted.experience_years == null
+        ? current.experience_years
+        : String(extracted.experience_years),
+    }));
+  }
+
+  async function populateFormFromSelectedResume() {
+    if (!editingCandidate || !formResumeId) return;
+    const selected = formResumes.find((resume) => resume.id === formResumeId);
+    if (!selected) {
+      setFormResumeReadError("Select a resume attached to this candidate.");
+      return;
+    }
+    setFormResumeReadBusy(true);
+    setFormResumeReadError("");
+    setFormResumeReadMessage("");
+    try {
+      const result = await request<StoredResumeExtraction>(
+        `/api/resumes/${selected.id}/extract`,
+        { method: "POST" },
+      );
+      if (Object.keys(result.extracted ?? {}).length === 0) {
+        setFormResumeReadError(`No profile details could be read from ${selected.filename}.`);
+        return;
+      }
+      applyResumeToForm(result.extracted);
+      setFormResumes((current) =>
+        current.map((resume) =>
+          resume.id === selected.id
+            ? { ...resume, extracted_at: result.extracted_at }
+            : resume,
+        ),
+      );
+      setFormResumeReadMessage(
+        `Details read from ${selected.filename}. Review the fields and save to update the candidate.`,
+      );
+    } catch (error) {
+      setFormResumeReadError(
+        error instanceof Error ? error.message : "Could not read the selected resume.",
+      );
+    } finally {
+      setFormResumeReadBusy(false);
+    }
   }
 
   async function scanCandidateResume(file: File | undefined) {
@@ -616,23 +720,7 @@ export default function BenchCandidates() {
       });
       if (requestId !== resumeScanRequestId.current) return;
       const extracted = result.extracted ?? {};
-      setResumeExtracted(extracted);
-      setProfileDetails((current) => ({ ...current, ...extracted }));
-      setForm((current) => ({
-        ...current,
-        full_name: extracted.full_name || current.full_name,
-        role: extracted.target_roles?.length
-          ? extracted.target_roles.join(", ")
-          : extracted.current_job_title || extracted.professional_headline || current.role,
-        email: extracted.email || current.email,
-        phone: extracted.phone || current.phone,
-        location: extracted.location || current.location,
-        skills: extracted.skills?.length ? extracted.skills.join(", ") : current.skills,
-        experience_summary: extracted.experience_summary || current.experience_summary,
-        experience_years: extracted.experience_years == null
-          ? current.experience_years
-          : String(extracted.experience_years),
-      }));
+      applyResumeToForm(extracted);
       setResumeScanMessage("Resume scanned. Review the extracted fields before saving.");
     } catch (error) {
       if (requestId === resumeScanRequestId.current) {
@@ -1197,14 +1285,17 @@ export default function BenchCandidates() {
                     <section className="bench-detail-section">
                       <div className="bench-section-heading">
                         <h3><FileText size={15} /> Resumes</h3>
-                        <label className={`bench-upload-button ${resumeBusy ? "disabled" : ""}`}>
+                        <label className={`bench-upload-button ${resumeBusy || detail.resumes.length >= MAX_CANDIDATE_RESUMES ? "disabled" : ""}`}>
                           <FileUp size={14} /> Upload resume
-                          <input type="file" accept="application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx" disabled={resumeBusy} onChange={(event) => {
+                          <input type="file" accept="application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx" disabled={resumeBusy || detail.resumes.length >= MAX_CANDIDATE_RESUMES} onChange={(event) => {
                             void uploadResume(event.target.files?.[0]);
                             event.currentTarget.value = "";
                           }} />
                         </label>
                       </div>
+                      <p className="bench-tab-help">
+                        {detail.resumes.length} of {MAX_CANDIDATE_RESUMES} resumes attached to this candidate. Up to {MAX_CANDIDATE_RESUMES} per candidate; 50 resumes total per workspace.
+                      </p>
                       {resumeError && <p className="bench-inline-error" role="alert">{resumeError}</p>}
                       {unassignedResumeError && (
                         <p className="bench-inline-error" role="alert">
@@ -1214,7 +1305,7 @@ export default function BenchCandidates() {
                       {unassignedResumesLoading && (
                         <p className="bench-tab-help" role="status">Checking for unassigned resumes...</p>
                       )}
-                      {unassignedResumes.length > 0 && (
+                      {unassignedResumes.length > 0 && detail.resumes.length < MAX_CANDIDATE_RESUMES && (
                         <div className="bench-attach-resume">
                           <label className="bench-resume-select">
                             <span>Attach an existing unassigned resume</span>
@@ -1332,31 +1423,95 @@ export default function BenchCandidates() {
 
       {formOpen && (
         <div className="bench-modal-backdrop" onMouseDown={(event) => {
-          if (event.target === event.currentTarget && !formBusy && !resumeScanBusy) setFormOpen(false);
+          if (event.target === event.currentTarget && !formBusy && !resumeScanBusy && !formResumeReadBusy) setFormOpen(false);
         }}>
           <form className="bench-candidate-form" role="dialog" aria-modal="true" aria-label={editingCandidate ? "Edit candidate" : "Add candidate"} onSubmit={(event) => void saveCandidate(event)}>
             <div className="bench-modal-heading">
               <div><span className="eyebrow">{editingCandidate ? "CANDIDATE PROFILE" : "NEW CANDIDATE"}</span><h2>{editingCandidate ? "Edit candidate" : "Add candidate"}</h2></div>
-              <button type="button" className="bench-close" aria-label="Close form" disabled={formBusy || resumeScanBusy} onClick={() => setFormOpen(false)}><X size={18} /></button>
+              <button type="button" className="bench-close" aria-label="Close form" disabled={formBusy || resumeScanBusy || formResumeReadBusy} onClick={() => setFormOpen(false)}><X size={18} /></button>
             </div>
             {formError && <p className="bench-inline-error" role="alert">{formError}</p>}
             <section className="bench-resume-scan">
               <div>
-                <strong><Sparkles size={14} /> Add resume and auto-fill</strong>
-                <p>Upload a PDF or DOCX. OpenRouter will extract details into the form for you to review before saving.</p>
+                <strong><Sparkles size={14} /> Read a resume into this form</strong>
+                <p>Choose an attached resume to fill these fields, or upload a new PDF or DOCX. Review everything before saving.</p>
+                <label className={`bench-upload-button ${resumeScanBusy || formBusy || formResumeReadBusy || (editingCandidate && (formResumesLoading || !!formResumesError || formResumes.length >= MAX_CANDIDATE_RESUMES)) ? "disabled" : ""}`}>
+                  <FileUp size={14} /> {resumeScanBusy ? "Scanning..." : candidateResumeFile ? "Choose another file" : "Upload a new resume"}
+                  <input
+                    type="file"
+                    accept="application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx"
+                    disabled={
+                      resumeScanBusy ||
+                      formBusy ||
+                      formResumeReadBusy ||
+                      !!(editingCandidate && (
+                        formResumesLoading ||
+                        formResumesError ||
+                        formResumes.length >= MAX_CANDIDATE_RESUMES
+                      ))
+                    }
+                    onChange={(event) => {
+                      void scanCandidateResume(event.target.files?.[0]);
+                      event.currentTarget.value = "";
+                    }}
+                  />
+                </label>
               </div>
-              <label className={`bench-upload-button ${resumeScanBusy || formBusy ? "disabled" : ""}`}>
-                <FileUp size={14} /> {resumeScanBusy ? "Scanning..." : candidateResumeFile ? "Choose another file" : "Add resume"}
-                <input
-                  type="file"
-                  accept="application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx"
-                  disabled={resumeScanBusy || formBusy}
-                  onChange={(event) => {
-                    void scanCandidateResume(event.target.files?.[0]);
-                    event.currentTarget.value = "";
-                  }}
-                />
-              </label>
+              {editingCandidate && (
+                <div className="bench-existing-resume-fill">
+                  <label>
+                    <span>Use an existing resume for {editingCandidate.full_name}</span>
+                    <select
+                      value={formResumeId}
+                      disabled={formResumesLoading || formResumeReadBusy || formBusy || formResumes.length === 0}
+                      onChange={(event) => {
+                        setFormResumeId(event.target.value);
+                        setFormResumeReadError("");
+                        setFormResumeReadMessage("");
+                      }}
+                    >
+                      {formResumesLoading ? (
+                        <option value="">Loading attached resumes...</option>
+                      ) : formResumes.length === 0 ? (
+                        <option value="">No attached resumes available</option>
+                      ) : (
+                        formResumes.map((resume) => (
+                          <option key={resume.id} value={resume.id}>
+                            {resume.filename}{resume.is_active ? " · Active" : ""}
+                          </option>
+                        ))
+                      )}
+                    </select>
+                  </label>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    disabled={!formResumeId || formResumesLoading || formResumeReadBusy || formBusy}
+                    onClick={() => void populateFormFromSelectedResume()}
+                  >
+                    <Sparkles size={14} />
+                    {formResumeReadBusy ? "Reading resume..." : "Populate form"}
+                  </button>
+                  {formResumeId && (
+                    <small className="bench-existing-resume-hint">
+                      {formResumes.find((resume) => resume.id === formResumeId)?.extracted_at
+                        ? "Previously read. Populate again to use these details in the form."
+                        : "Not read yet. Populate to extract its details into the form."}
+                    </small>
+                  )}
+                  {formResumesError && <p className="bench-inline-error" role="alert">{formResumesError}</p>}
+                  {formResumeReadError && <p className="bench-inline-error" role="alert">{formResumeReadError}</p>}
+                  {formResumeReadMessage && <p className="bench-success" role="status">{formResumeReadMessage}</p>}
+                </div>
+              )}
+              {editingCandidate && formResumesLoading && (
+                <p className="bench-tab-help" role="status">Loading this candidate’s attached resumes...</p>
+              )}
+              {editingCandidate && formResumes.length >= MAX_CANDIDATE_RESUMES && (
+                <p className="bench-tab-help">
+                  This candidate already has {MAX_CANDIDATE_RESUMES} resumes. Remove one before attaching another.
+                </p>
+              )}
               {candidateResumeFile && (
                 <div className="bench-selected-resume">
                   <small>{candidateResumeFile.name}</small>
@@ -1483,8 +1638,8 @@ export default function BenchCandidates() {
               </details>
             </div>
             <div className="bench-form-actions">
-              <button type="button" className="secondary-button" disabled={formBusy || resumeScanBusy} onClick={() => setFormOpen(false)}>Cancel</button>
-              <button type="submit" className="primary-button" disabled={formBusy || resumeScanBusy}>{resumeScanBusy ? "Scanning resume..." : formBusy ? "Saving..." : editingCandidate ? "Save changes" : "Create candidate"}</button>
+              <button type="button" className="secondary-button" disabled={formBusy || resumeScanBusy || formResumeReadBusy} onClick={() => setFormOpen(false)}>Cancel</button>
+              <button type="submit" className="primary-button" disabled={formBusy || resumeScanBusy || formResumeReadBusy}>{resumeScanBusy ? "Scanning resume..." : formResumeReadBusy ? "Reading resume..." : formBusy ? "Saving..." : editingCandidate ? "Save changes" : "Create candidate"}</button>
             </div>
           </form>
         </div>

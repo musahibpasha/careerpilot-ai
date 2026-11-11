@@ -40,7 +40,7 @@ def test_default_profile_is_dedicated_outside_the_repository(tmp_path, monkeypat
 
     profile = Path(assistant_fill._automation_profile_path())
 
-    assert profile == (tmp_path / "CareerPilot AI" / "AutomationChromeProfile").resolve()
+    assert profile == (tmp_path / "ThoughtLabs CoPilot" / "AutomationChromeProfile").resolve()
     assert profile.is_dir()
     assert not profile.is_relative_to(Path(assistant_fill.__file__).resolve().parents[2])
 

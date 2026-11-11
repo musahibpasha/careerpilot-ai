@@ -1,4 +1,4 @@
-# CareerPilot AI Candidate-Scoped Workflow Test Plan
+# ThoughtLabs CoPilot Candidate-Scoped Workflow Test Plan
 
 ## Scope
 

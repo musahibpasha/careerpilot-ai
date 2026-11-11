@@ -205,6 +205,38 @@ def test_unassigned_resume_can_be_explicitly_attached_to_candidate(db):
     assert conflict.status_code == 409
 
 
+def test_candidate_resume_limit_is_five_for_upload_and_attachment(db):
+    candidate = client.post("/api/candidates", json=make_candidate_payload()).json()
+    candidate_id = candidate["id"]
+
+    for index in range(5):
+        uploaded = client.post(
+            "/api/resumes",
+            data={"candidate_id": candidate_id},
+            files={"file": (f"jordan-{index}.pdf", make_pdf(), "application/pdf")},
+        )
+        assert uploaded.status_code == 201, uploaded.text
+
+    sixth_upload = client.post(
+        "/api/resumes",
+        data={"candidate_id": candidate_id},
+        files={"file": ("jordan-6.pdf", make_pdf(), "application/pdf")},
+    )
+    assert sixth_upload.status_code == 409
+    assert "maximum of 5 resumes" in sixth_upload.json()["detail"]
+
+    unassigned = client.post(
+        "/api/resumes",
+        files={"file": ("unassigned.pdf", make_pdf(), "application/pdf")},
+    )
+    assert unassigned.status_code == 201, unassigned.text
+    attach_over_limit = client.post(
+        f"/api/candidates/{candidate_id}/resumes/{unassigned.json()['id']}/attach",
+    )
+    assert attach_over_limit.status_code == 409
+    assert "maximum of 5 resumes" in attach_over_limit.json()["detail"]
+
+
 def test_candidate_can_store_and_download_original_docx(db):
     candidate = client.post("/api/candidates", json=make_candidate_payload()).json()
     data = make_docx()

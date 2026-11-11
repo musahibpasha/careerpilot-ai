@@ -211,7 +211,7 @@ export default function AuthBoundary({ children }: { children?: ReactNode }) {
           <p className="auth-card__subtitle">
             {mode === "reset"
               ? "We’ll email you a secure password reset link."
-              : "Sign in to continue to the CareerPilot AI recruiter workspace."}
+              : "Sign in to continue to the ThoughtLabs CoPilot recruiter workspace."}
           </p>
           {mode !== "reset" && <div className="auth-divider"><span>or use email</span></div>}
           <form onSubmit={submit} className="auth-form">

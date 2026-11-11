@@ -844,7 +844,7 @@ def _automation_profile_path(configured_path: str | None = None) -> str:
     else:
         local_app_data = os.environ.get("LOCALAPPDATA")
         base = Path(local_app_data) if local_app_data else Path.home() / ".careerpilot"
-        profile = (base / "CareerPilot AI" / "AutomationChromeProfile").resolve()
+        profile = (base / "ThoughtLabs CoPilot" / "AutomationChromeProfile").resolve()
     repository = Path(__file__).resolve().parents[2]
     try:
         profile.relative_to(repository)

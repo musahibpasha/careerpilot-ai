@@ -1,4 +1,4 @@
-# CareerPilot AI Regression Checklist
+# ThoughtLabs CoPilot Regression Checklist
 
 Legend: **Automated pass** means covered by the focused backend tests or production build; **Manual** means not established in this run.
 

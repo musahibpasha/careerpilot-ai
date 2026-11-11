@@ -1,4 +1,4 @@
-# CareerPilot AI Bug and Limitation Report
+# ThoughtLabs CoPilot Bug and Limitation Report
 
 ## Test failures
 

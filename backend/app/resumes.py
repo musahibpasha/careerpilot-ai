@@ -8,6 +8,7 @@ from zipfile import BadZipFile, ZipFile
 from pypdf import PdfReader
 #resumes limitations
 MAX_RESUMES = 50
+MAX_CANDIDATE_RESUMES = 5
 MAX_RESUME_BYTES = 5 * 1024 * 1024
 MAX_LABEL_LENGTH = 100
 MAX_DOCX_XML_BYTES = 10 * 1024 * 1024

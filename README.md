@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🚀 CareerPilot AI
+# 🚀 ThoughtLabs CoPilot
 
 ### 🤖 Your AI-Powered Job Hunt Copilot
 
@@ -25,7 +25,7 @@ An AI-assisted job-search platform for organizing opportunities, understanding r
 
 ## 📌 About the Project
 
-CareerPilot AI includes recruiter-managed candidate onboarding alongside its existing job-search workspace. Recruiters can store candidate profiles and original resumes in their authenticated MongoDB workspace, review extracted information, and track candidate-linked applications.
+ThoughtLabs CoPilot includes recruiter-managed candidate onboarding alongside its existing job-search workspace. Recruiters can store candidate profiles and original resumes in their authenticated MongoDB workspace, review extracted information, and track candidate-linked applications.
 
 The long-term goal is to support a human-approved workflow: find relevant opportunities, understand why a role may fit, prepare truthful application materials, and let the user review and approve any application before a submission action.
 
@@ -54,16 +54,16 @@ The long-term goal is to support a human-approved workflow: find relevant opport
 - **Application preparation plan** — Match analysis shows a deterministic fit summary, strengths, gaps, resume focus, positioning guidance, and interview prompts based on the saved job and profile. It is guidance, not AI-generated document text.
 - **AI cover-letter and resume wording drafts** — from a job's Match analysis, choose **Generate cover letter and resume drafts** to request a tailored cover letter, professional-summary rewrite, relevant saved skills to emphasize, and suggestions for rewriting existing experience/project bullets. Drafts use the saved profile and job posting, are editable in the panel, and are not submitted or saved automatically. Contact details are excluded from the AI request. Review all text for accuracy. The reviewed cover letter can be downloaded as a real PDF containing the candidate's saved contact details and the selected job context.
 - **Tailored resume export** — Match analysis retains its printable HTML resume export, built from the saved profile and edited AI summary/bullet suggestions. The Apply workflow additionally provides a genuine server-rendered PDF from the same saved profile and reviewed material. Existing education, work history, projects, and skills are preserved; generated wording is only used where its source still matches the saved profile. The original uploaded PDF and saved profile are not changed.
-- **Application Assistant / Automate** — open from a job card or tracker entry for a persistent, job-specific workflow. It combines grounded answer drafts, AI-tailored cover-letter/resume wording, the active saved PDF resume, and listing navigation for LinkedIn, Naukri, Indeed, and Glassdoor. Clicking Automate for a supported application flow launches installed Google Chrome as a normal process with the dedicated CareerPilot profile, then connects Playwright over a loopback-only CDP endpoint. Chrome is not launched with `--enable-automation`; a separate cross-process profile lock prevents concurrent CareerPilot runs. The default profile is `%LOCALAPPDATA%\CareerPilot AI\AutomationChromeProfile`; it is separate from everyday Chrome and Edge profiles. CareerPilot does not terminate the launched Chrome process after disconnecting Playwright, so the user can finish manual login or review the open form. Google/LinkedIn may still reject or challenge an automated session; changing the launch method does not guarantee acceptance. Credentials are never entered or stored, CAPTCHA/MFA/security restrictions are not bypassed, and CareerPilot never clicks the final Submit Application button. Login and access challenges stop for manual intervention. Submit on the employer site yourself and separately record that action in CareerPilot.
+- **Application Assistant / Automate** — open from a job card or tracker entry for a persistent, job-specific workflow. It combines grounded answer drafts, AI-tailored cover-letter/resume wording, the active saved PDF resume, and listing navigation for LinkedIn, Naukri, Indeed, and Glassdoor. Clicking Automate for a supported application flow launches installed Google Chrome as a normal process with the dedicated CareerPilot profile, then connects Playwright over a loopback-only CDP endpoint. Chrome is not launched with `--enable-automation`; a separate cross-process profile lock prevents concurrent CareerPilot runs. The default profile is `%LOCALAPPDATA%\ThoughtLabs CoPilot\AutomationChromeProfile`; it is separate from everyday Chrome and Edge profiles. CareerPilot does not terminate the launched Chrome process after disconnecting Playwright, so the user can finish manual login or review the open form. Google/LinkedIn may still reject or challenge an automated session; changing the launch method does not guarantee acceptance. Credentials are never entered or stored, CAPTCHA/MFA/security restrictions are not bypassed, and CareerPilot never clicks the final Submit Application button. Login and access challenges stop for manual intervention. Submit on the employer site yourself and separately record that action in CareerPilot.
 
 #### Connect Chrome for listing-only navigation
 
 Start Google Chrome with the dedicated CareerPilot profile (the default is
-`%LOCALAPPDATA%\CareerPilot AI\AutomationChromeProfile`) and a loopback-only
+`%LOCALAPPDATA%\ThoughtLabs CoPilot\AutomationChromeProfile`) and a loopback-only
 debugging port. In Windows PowerShell:
 
 ```powershell
-$profile = Join-Path $env:LOCALAPPDATA 'CareerPilot AI\AutomationChromeProfile'
+$profile = Join-Path $env:LOCALAPPDATA 'ThoughtLabs CoPilot\AutomationChromeProfile'
 & "$env:ProgramFiles\Google\Chrome\Application\chrome.exe" `
   --remote-debugging-port=9222 `
   "--user-data-dir=$profile" `
@@ -374,7 +374,7 @@ Use the test command configured in the repository if it differs.
 
 ## 🔐 Safety and Privacy
 
-CareerPilot AI is designed around human oversight.
+ThoughtLabs CoPilot is designed around human oversight.
 
 - **No invented qualifications:** generated material should be based on the user's actual profile and resume.
 - **Review before saving:** AI-extracted resume fields should be reviewed by the user before being saved.
@@ -439,7 +439,7 @@ If the image does not appear, check that the workflow ran successfully, that the
 
 ## 🛣️ Project Status
 
-CareerPilot AI is an active work in progress. The profile editor, PDF resume parsing and review, explainable matching, job discovery/import, application tracking, editable AI cover-letter and resume-wording drafts, printable tailored-resume export, Firebase authentication, and per-user workspace isolation are implemented. Browser-assisted workflows, analytics, and further production hardening remain in progress.
+ThoughtLabs CoPilot is an active work in progress. The profile editor, PDF resume parsing and review, explainable matching, job discovery/import, application tracking, editable AI cover-letter and resume-wording drafts, printable tailored-resume export, Firebase authentication, and per-user workspace isolation are implemented. Browser-assisted workflows, analytics, and further production hardening remain in progress.
 
 ## 🤝 Contributing
 
