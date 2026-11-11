@@ -8,6 +8,7 @@ import {
   type User,
 } from "firebase/auth";
 import { reload } from "firebase/auth";
+import { Sparkles } from "lucide-react";
 import App from "./App";
 import { firebaseAuth, firebaseConfigured, persistenceReady } from "./firebase";
 
@@ -193,13 +194,16 @@ export default function AuthBoundary({ children }: { children?: ReactNode }) {
     <main className="auth-page">
       <section className="auth-layout">
         <aside className="auth-intro">
-          <div className="auth-card__brand"></div>
+          <div className="auth-brand">
+            <span className="auth-brand-mark"><Sparkles size={18} aria-hidden="true" /></span>
+            <span>CareerPilot <strong>AI</strong></span>
+          </div>
           <h1>Your recruiting workspace.</h1>
           <p>Sign in to securely manage candidates, resumes, jobs, and applications.</p>
           <div className="auth-steps">
-            <span>01 <b>Secure recruiter sign in</b></span>
-            <span>02 <b>Private candidate workspace</b></span>
-            <span>03 <b>Review candidate profiles</b></span>
+            <span><b>01</b><strong>Secure recruiter sign in</strong></span>
+            <span><b>02</b><strong>Private candidate workspace</strong></span>
+            <span><b>03</b><strong>Review candidate profiles</strong></span>
           </div>
         </aside>
         <section className="auth-card">

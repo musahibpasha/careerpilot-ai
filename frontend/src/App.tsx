@@ -123,7 +123,7 @@ function saveSetting(key: string, value: string) {
   }
 }
 
-type Page = "dashboard" | "bench" | "jobs" | "saved" | "applications" | "copilot";
+type Page = "dashboard" | "bench" | "jobs" | "saved" | "applications" | "analytics" | "copilot";
 type JobSearchView = "recommended" | "searching" | "results" | "empty" | "error";
 
 const PAGE_HASH: Record<Page, string> = {
@@ -132,6 +132,7 @@ const PAGE_HASH: Record<Page, string> = {
   jobs: "#/jobs",
   saved: "#/saved",
   applications: "#/applications",
+  analytics: "#/analytics",
   copilot: "#/copilot",
 };
 
@@ -143,6 +144,7 @@ function pageFromHash(): Page {
   if (h.startsWith("#/jobs")) return "jobs";
   if (h.startsWith("#/saved")) return "saved";
   if (h.startsWith("#/applications")) return "applications";
+  if (h.startsWith("#/analytics")) return "analytics";
   if (h.startsWith("#/copilot")) return "copilot";
   return "dashboard";
 }
@@ -832,6 +834,8 @@ type RecruiterCandidate = {
   work_arrangement_preference?: string;
   resume_count: number;
   resume_filename: string;
+  status?: "active" | "on_bench" | "under_review" | "temporarily_unavailable" | "placed" | "not_set";
+  availability?: string;
   archived: boolean;
 };
 
@@ -1243,6 +1247,11 @@ function App({
   const [jobs, setJobs] = useState<Job[]>([]);
   const [savedJobs, setSavedJobs] = useState<Job[]>([]);
   const [applications, setApplications] = useState<Application[]>([]);
+  const [metricLoadErrors, setMetricLoadErrors] = useState({
+    candidates: "",
+    savedJobs: "",
+    applications: "",
+  });
   const [recommendedJobs, setRecommendedJobs] = useState<DiscoveredJob[]>([]);
   const [recommendationLoading, setRecommendationLoading] = useState(false);
   const [recommendationLastUpdated, setRecommendationLastUpdated] = useState<string | null>(null);
@@ -1436,6 +1445,17 @@ function App({
       get("/api/resumes"),
       get("/api/candidates"),
     ]);
+    setMetricLoadErrors({
+      candidates: candidatesResult.status === "rejected"
+        ? String(candidatesResult.reason?.message ?? "Could not load candidates.")
+        : "",
+      savedJobs: savedJobsResult.status === "rejected"
+        ? String(savedJobsResult.reason?.message ?? "Could not load saved jobs.")
+        : "",
+      applications: applicationsResult.status === "rejected"
+        ? String(applicationsResult.reason?.message ?? "Could not load applications.")
+        : "",
+    });
 
     const problems: string[] = [];
 
@@ -2015,9 +2035,11 @@ function App({
     applicationDateFilter,
   ]);
   const appliedCount = confirmedApplications.length;
-
-  const reviewCount = confirmedApplications.filter(
-    (a) => ["under_review", "ready_for_approval"].includes(a.status),
+  const activeApplicationCount = confirmedApplications.filter(
+    (application) => !["rejected", "withdrawn"].includes(application.apply_status),
+  ).length;
+  const availableCandidateCount = candidates.filter(
+    (candidate) => candidate.status === "active",
   ).length;
 
   // "Not interested" (with a reason), or restore the job (value "").
@@ -2808,10 +2830,15 @@ function App({
     dashboard: {
       eyebrow: "DASHBOARD",
       title: firstName ? `Welcome back, ${firstName}` : "Welcome back",
-      sub:
-        savedJobCount === 0
-          ? "Search job boards and save opportunities that interest you."
-          : `${savedJobCount} saved job${savedJobCount === 1 ? "" : "s"} · ${appliedCount} confirmed application${appliedCount === 1 ? "" : "s"}`,
+      sub: [
+        metricLoadErrors.candidates
+          ? "Candidate data unavailable"
+          : `${candidates.length} candidate profiles · ${availableCandidateCount} available`,
+        metricLoadErrors.savedJobs ? "Saved job data unavailable" : `${savedJobCount} saved jobs`,
+        metricLoadErrors.applications
+          ? "Application data unavailable"
+          : `${activeApplicationCount} active applications`,
+      ].join(" · "),
     },
     bench: {
       eyebrow: "RECRUITER WORKSPACE",
@@ -2832,6 +2859,11 @@ function App({
       eyebrow: "YOUR PIPELINE",
       title: "Applications",
       sub: "Applications you confirmed submitting, with status and notes.",
+    },
+    analytics: {
+      eyebrow: "WORKSPACE INSIGHTS",
+      title: "Analytics",
+      sub: "A clear view of your candidate bench and application pipeline.",
     },
     copilot: {
       eyebrow: "AI COPILOT",
@@ -3790,6 +3822,27 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
       return timestamp(b) - timestamp(a);
     })
     .slice(0, 4);
+  const candidateStatusCounts: Record<string, number> = {
+    Available: candidates.filter((candidate) => candidate.status === "active").length,
+    "On bench": candidates.filter((candidate) => candidate.status === "on_bench").length,
+    "In review": candidates.filter((candidate) => candidate.status === "under_review").length,
+    "Temporarily unavailable": candidates.filter(
+      (candidate) => candidate.status === "temporarily_unavailable",
+    ).length,
+    Placed: candidates.filter((candidate) => candidate.status === "placed").length,
+    "Not set": candidates.filter(
+      (candidate) => !candidate.status || candidate.status === "not_set",
+    ).length,
+  };
+  const analyticsCandidateStatuses = Object.entries(candidateStatusCounts).filter(
+    ([, count]) => count > 0,
+  );
+  const analyticsApplicationStatuses = APPLY_BOARD_STATUSES
+    .map((status) => [
+      APPLY_STATUS_LABELS[status] ?? status,
+      confirmedApplications.filter((application) => application.apply_status === status).length,
+    ] as [string, number])
+    .filter(([, count]) => count > 0);
 
   const setup = [
     { label: "Add a candidate", done: candidates.length > 0 },
@@ -3816,7 +3869,8 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
     { key: "jobs", label: "Find Jobs", icon: <Search size={18} />, page: "jobs" },
     { key: "saved", label: "Saved Jobs", icon: <Bookmark size={18} />, page: "saved", count: savedJobCount },
     { key: "applications", label: "Applications", icon: <Kanban size={18} />, page: "applications", count: appliedCount },
-    { key: "copilot", label: "Analytics", icon: <Bot size={18} />, page: "copilot" },
+    { key: "analytics", label: "Analytics", icon: <Activity size={18} />, page: "analytics" },
+    { key: "copilot", label: "Copilot", icon: <Bot size={18} />, page: "copilot" },
     { key: "settings", label: "Settings", icon: <Settings size={18} />, onClick: openPreferences },
   ];
 
@@ -4030,6 +4084,36 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                 className="stat-card clickable"
                 role="button"
                 tabIndex={0}
+                onClick={() => goTo("bench")}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") goTo("bench");
+                }}
+              >
+                <div className="stat-top">
+                  <span>Candidate profiles</span>
+                  <span className="stat-icon blue">
+                    <UsersRound size={18} />
+                  </span>
+                </div>
+                <strong>{metricLoadErrors.candidates ? "—" : candidates.length}</strong>
+                <small>{metricLoadErrors.candidates ? "Candidate data unavailable" : "Active recruiter records"}</small>
+              </div>
+
+              <div className="stat-card">
+                <div className="stat-top">
+                  <span>Available bench</span>
+                  <span className="stat-icon green">
+                    <CheckCircle2 size={18} />
+                  </span>
+                </div>
+                <strong>{metricLoadErrors.candidates ? "—" : availableCandidateCount}</strong>
+                <small>{metricLoadErrors.candidates ? "Candidate data unavailable" : "Candidates marked available"}</small>
+              </div>
+
+              <div
+                className="stat-card clickable"
+                role="button"
+                tabIndex={0}
                 onClick={() => goTo("saved")}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" || e.key === " ") goTo("saved");
@@ -4041,8 +4125,8 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                     <BriefcaseBusiness size={18} />
                   </span>
                 </div>
-                <strong>{savedJobCount}</strong>
-                <small>Saved by you</small>
+                <strong>{metricLoadErrors.savedJobs ? "—" : savedJobCount}</strong>
+                <small>{metricLoadErrors.savedJobs ? "Saved job data unavailable" : "Recruiter shortlist"}</small>
               </div>
 
               <div
@@ -4055,35 +4139,13 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                 }}
               >
                 <div className="stat-top">
-                  <span>Applications</span>
-                  <span className="stat-icon blue">
+                  <span>Active applications</span>
+                  <span className="stat-icon amber">
                     <Activity size={18} />
                   </span>
                 </div>
-                <strong>{appliedCount}</strong>
-                <small>Confirmed by you</small>
-              </div>
-
-              <div className="stat-card">
-                <div className="stat-top">
-                  <span>Awaiting your review</span>
-                  <span className="stat-icon amber">
-                    <ShieldCheck size={18} />
-                  </span>
-                </div>
-                <strong>{reviewCount}</strong>
-                <small>Human approval queue</small>
-              </div>
-
-              <div className="stat-card">
-                <div className="stat-top">
-                  <span>Bench Candidates</span>
-                  <span className="stat-icon green">
-                    <UsersRound size={18} />
-                  </span>
-                </div>
-                <strong>{candidates.length}</strong>
-                <small>Managed candidate profiles</small>
+                <strong>{metricLoadErrors.applications ? "—" : activeApplicationCount}</strong>
+                <small>{metricLoadErrors.applications ? "Application data unavailable" : "Excludes rejected and withdrawn"}</small>
               </div>
             </section>
 
@@ -4814,6 +4876,94 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
               </details>
             )}
           </div>
+        )}
+
+        {page === "analytics" && (
+          <section className="analytics-page page-view">
+            <div className="analytics-kpis">
+              <article className="stat-card">
+                <div className="stat-top"><span>Candidate profiles</span><UsersRound size={17} /></div>
+                <strong>{metricLoadErrors.candidates ? "—" : candidates.length}</strong>
+                <small>Non-archived recruiter records</small>
+              </article>
+              <article className="stat-card">
+                <div className="stat-top"><span>Available candidates</span><CheckCircle2 size={17} /></div>
+                <strong>{metricLoadErrors.candidates ? "—" : availableCandidateCount}</strong>
+                <small>Marked available in the bench</small>
+              </article>
+              <article className="stat-card">
+                <div className="stat-top"><span>Saved jobs</span><Bookmark size={17} /></div>
+                <strong>{metricLoadErrors.savedJobs ? "—" : savedJobCount}</strong>
+                <small>Current recruiter shortlist</small>
+              </article>
+              <article className="stat-card">
+                <div className="stat-top"><span>Active applications</span><Activity size={17} /></div>
+                <strong>{metricLoadErrors.applications ? "—" : activeApplicationCount}</strong>
+                <small>Confirmed, excluding rejected or withdrawn</small>
+              </article>
+            </div>
+
+            <div className="analytics-grid">
+              <section className="panel analytics-panel">
+                <div className="panel-head">
+                  <div><h2>Candidate availability</h2><p>Distribution from your current, non-archived candidate records.</p></div>
+                  <UsersRound size={18} aria-hidden="true" />
+                </div>
+                {metricLoadErrors.candidates ? (
+                  <div className="analytics-empty" role="alert">Candidate availability could not be loaded: {metricLoadErrors.candidates}</div>
+                ) : candidates.length === 0 ? (
+                  <div className="analytics-empty">Candidate status data will appear here when candidates are added.</div>
+                ) : analyticsCandidateStatuses.length === 0 ? (
+                  <div className="analytics-empty">No availability statuses are recorded for these candidates.</div>
+                ) : (
+                  <div className="analytics-breakdown">
+                    {analyticsCandidateStatuses.map(([label, count]) => (
+                      <div className="analytics-breakdown-row" key={label}>
+                        <div className="analytics-breakdown-label"><span>{label}</span><strong>{count}</strong></div>
+                        <div
+                          className="analytics-track"
+                          role="img"
+                          aria-label={`${label}: ${count} of ${candidates.length} candidates`}
+                        >
+                          <span style={{ width: `${Math.round((count / candidates.length) * 100)}%` }} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              <section className="panel analytics-panel">
+                <div className="panel-head">
+                  <div><h2>Application status</h2><p>User-facing application status, separate from workflow approval status.</p></div>
+                  <Kanban size={18} aria-hidden="true" />
+                </div>
+                {metricLoadErrors.applications ? (
+                  <div className="analytics-empty" role="alert">Application status could not be loaded: {metricLoadErrors.applications}</div>
+                ) : confirmedApplications.length === 0 ? (
+                  <div className="analytics-empty">Confirmed applications will be summarized here. Saving a job does not count as an application.</div>
+                ) : (
+                  <div className="analytics-breakdown">
+                    {analyticsApplicationStatuses.map(([label, count]) => (
+                      <div className="analytics-breakdown-row" key={label}>
+                        <div className="analytics-breakdown-label"><span>{label}</span><strong>{count}</strong></div>
+                        <div
+                          className="analytics-track"
+                          role="img"
+                          aria-label={`${label}: ${count} of ${confirmedApplications.length} confirmed applications`}
+                        >
+                          <span style={{ width: `${Math.round((count / confirmedApplications.length) * 100)}%` }} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <button className="link-button analytics-link" type="button" onClick={() => goTo("applications")}>
+                  View applications <ArrowUpRight size={14} />
+                </button>
+              </section>
+            </div>
+          </section>
         )}
 
         {page === "copilot" && (
@@ -6239,64 +6389,70 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                 type="button"
                 className="close-button"
                 onClick={() => setShowPreferences(false)}
+                aria-label="Close job preferences"
               >
                 <X size={18} />
               </button>
             </div>
 
-            <small className="muted-note">
-              Everything here is optional. Your target roles are kept in your
-              profile. Preferences are saved only for now and do not change
-              match scores yet.
-            </small>
+            <p className="muted-note preferences-note">
+              These saved preferences help shape the jobs you discover. Target
+              roles are managed in the selected candidate&apos;s profile.
+            </p>
 
-            <Field label="Preferred locations" hint="separate with commas">
-              <input
-                value={preferencesForm.locations}
-                placeholder="e.g. Bengaluru, Pune, Remote"
-                onChange={(e) =>
-                  setPreferencesForm({
-                    ...preferencesForm,
-                    locations: e.target.value,
-                  })
-                }
-              />
-            </Field>
-
-            <Field label="Experience level">
-              <select
-                value={preferencesForm.experience_level}
-                onChange={(e) =>
-                  setPreferencesForm({
-                    ...preferencesForm,
-                    experience_level: e.target.value,
-                  })
-                }
-              >
-                {Object.entries(EXPERIENCE_LEVELS).map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </Field>
-
-            <div className="check-group-label">Work arrangement</div>
-            <div className="check-group">
-              {Object.entries(WORK_ARRANGEMENTS).map(([value, label]) => (
-                <label key={value} className="check-item">
+            <section className="preferences-section" aria-labelledby="preferences-search-heading">
+              <h3 id="preferences-search-heading">Search preferences</h3>
+              <div className="grid-2">
+                <Field label="Preferred locations" hint="separate with commas">
                   <input
-                    type="checkbox"
-                    checked={preferencesForm.work_arrangements.includes(value)}
-                    onChange={() => toggleArrangement(value)}
+                    value={preferencesForm.locations}
+                    placeholder="e.g. Bengaluru, Pune, Remote"
+                    onChange={(e) =>
+                      setPreferencesForm({
+                        ...preferencesForm,
+                        locations: e.target.value,
+                      })
+                    }
                   />
-                  {label}
-                </label>
-              ))}
-            </div>
+                </Field>
 
-            <h3 className="section-title">Salary expectation</h3>
-            <div className="grid-2">
+                <Field label="Experience level">
+                  <select
+                    value={preferencesForm.experience_level}
+                    onChange={(e) =>
+                      setPreferencesForm({
+                        ...preferencesForm,
+                        experience_level: e.target.value,
+                      })
+                    }
+                  >
+                    {Object.entries(EXPERIENCE_LEVELS).map(([value, label]) => (
+                      <option key={value} value={value}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              </div>
+
+              <div className="check-group-label">Work arrangement</div>
+              <div className="check-group">
+                {Object.entries(WORK_ARRANGEMENTS).map(([value, label]) => (
+                  <label key={value} className="check-item">
+                    <input
+                      type="checkbox"
+                      checked={preferencesForm.work_arrangements.includes(value)}
+                      onChange={() => toggleArrangement(value)}
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+            </section>
+
+            <section className="preferences-section" aria-labelledby="preferences-salary-heading">
+              <h3 id="preferences-salary-heading">Salary expectation</h3>
+              <div className="grid-2">
               <Field label="Minimum" error={preferencesErrors.salary_min}>
                 <input
                   type="number"
@@ -6354,6 +6510,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                 </select>
               </Field>
             </div>
+            </section>
 
             {preferencesError && (
               <div className="form-error" role="alert">
