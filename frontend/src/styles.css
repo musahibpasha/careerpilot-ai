@@ -2297,7 +2297,7 @@ footer { margin-top: 32px; font-size: 12px; color: var(--faint); }
 .bench-summary-accent { position: absolute; right: 12px; bottom: 11px; width: 20px; height: 2px; border-radius: 2px; background: var(--teal); opacity: .7; }
 .bench-filters {
   display: grid;
-  grid-template-columns: minmax(190px, 1.8fr) repeat(5, minmax(100px, 1fr));
+  grid-template-columns: minmax(240px, 2fr) repeat(4, minmax(100px, 1fr));
   align-items: center;
   gap: 8px;
   padding: 10px;
@@ -3411,3 +3411,39 @@ footer { margin-top: 32px; font-size: 12px; color: var(--faint); }
   .trending-job-card:hover { transform: none; }
   .trending-loading-mark { animation: none; }
 }
+
+.bench-table { min-width: 1080px; }
+.bench-resume-status {
+  display: inline-flex;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.bench-resume-status.available {
+  border-color: #cfe8dc;
+  background: #edf8f2;
+  color: #236947;
+}
+.bench-resume-status.missing,
+.bench-skill-missing,
+.bench-match.missing {
+  border-color: #f0cbd0;
+  background: #fff0f1;
+  color: #a42e40;
+}
+.bench-skill-missing {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 7px;
+  border: 1px solid #f0cbd0;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.bench-match.missing { border: 1px solid #f0cbd0; }
+.bench-match.missing small { color: #a42e40; }

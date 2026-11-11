@@ -357,7 +357,6 @@ export default function BenchCandidates() {
   const [listError, setListError] = useState("");
   const [includeArchived, setIncludeArchived] = useState(false);
   const [search, setSearch] = useState("");
-  const [skillCriteria, setSkillCriteria] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [experienceFilter, setExperienceFilter] = useState("all");
   const [locationFilter, setLocationFilter] = useState("all");
@@ -484,14 +483,22 @@ export default function BenchCandidates() {
     };
   }, [detail, resumeId, activeTab]);
 
-  const skillTerms = useMemo(
-    () => [...new Set(splitList(skillCriteria).map((skill) => skill.toLocaleLowerCase()))],
-    [skillCriteria],
-  );
   const locations = useMemo(
     () => [...new Set(items.map((item) => item.location.trim()).filter(Boolean))].sort(),
     [items],
   );
+  const skillTerms = useMemo(() => {
+    const query = search.trim().toLocaleLowerCase();
+    if (!query) return [];
+    const explicitTerms = query
+      .split(/\s+\bor\b\s+|[,;]/i)
+      .map((term) => term.trim())
+      .filter(Boolean);
+    if (explicitTerms.length > 1) return [...new Set(explicitTerms)];
+    return items.some((candidate) =>
+      allCandidateSkills(candidate).some((skill) => skill.toLocaleLowerCase().includes(query)),
+    ) ? [query] : [];
+  }, [items, search]);
   const availabilityOptions = useMemo(
     () => [...new Set(items.map((item) => item.availability.trim()).filter(Boolean))].sort(),
     [items],
@@ -499,14 +506,18 @@ export default function BenchCandidates() {
   const filtered = useMemo(() => {
     const query = search.trim().toLocaleLowerCase();
     return items.filter((candidate) => {
+      const skills = allCandidateSkills(candidate);
       const searchable = [
         candidate.full_name,
         candidate.email,
         candidate.location,
-        ...allCandidateSkills(candidate),
+        ...skills,
         ...candidate.target_roles,
       ].join(" ").toLocaleLowerCase();
-      if (query && !searchable.includes(query)) return false;
+      const matchedSearchSkill = skillTerms.some((term) =>
+        skills.some((skill) => skill.toLocaleLowerCase().includes(term)),
+      );
+      if (query && !searchable.includes(query) && !matchedSearchSkill) return false;
       if (statusFilter !== "all" && candidate.status !== statusFilter) return false;
       if (locationFilter !== "all" && candidate.location !== locationFilter) return false;
       if (availabilityFilter !== "all" && candidate.availability !== availabilityFilter) return false;
@@ -515,7 +526,7 @@ export default function BenchCandidates() {
       if (experienceFilter === "over5" && (candidate.experience_years == null || candidate.experience_years <= 5)) return false;
       return true;
     });
-  }, [items, search, statusFilter, locationFilter, availabilityFilter, experienceFilter]);
+  }, [items, search, skillTerms, statusFilter, locationFilter, availabilityFilter, experienceFilter]);
 
   function openCreateForm() {
     setEditingCandidate(null);
@@ -877,23 +888,13 @@ export default function BenchCandidates() {
 
       <section className="bench-filters panel" aria-label="Candidate search and filters">
         <label className="bench-search">
-          <span className="sr-only">Search candidate name, skills, or location</span>
+          <span className="sr-only">Search candidate names, skills, or locations. Use “or” or commas between skills.</span>
           <Search size={16} />
           <input
             type="search"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search candidates by name, skills, location..."
-          />
-        </label>
-        <label>
-          <span className="sr-only">Required skills for match</span>
-          <input
-            type="search"
-            value={skillCriteria}
-            onChange={(event) => setSkillCriteria(event.target.value)}
-            placeholder="Required skills"
-            aria-label="Required skills for match and highlighting"
+            placeholder="Search by name or skills (e.g. Ruby or Python)..."
           />
         </label>
         <label>
@@ -951,7 +952,6 @@ export default function BenchCandidates() {
           {items.length ? (
             <button type="button" className="secondary-button" onClick={() => {
               setSearch("");
-              setSkillCriteria("");
               setStatusFilter("all");
               setExperienceFilter("all");
               setLocationFilter("all");
@@ -973,11 +973,12 @@ export default function BenchCandidates() {
                 <tr>
                   <th>Candidate</th>
                   <th>Skills</th>
+                  <th>Resume</th>
                   <th>Experience</th>
                   <th>Location</th>
                   <th>Availability</th>
                   <th>Status</th>
-                  <th>Match</th>
+                  <th>Skill match</th>
                   <th>Actions</th>
                 </tr>
               </thead>
@@ -985,13 +986,19 @@ export default function BenchCandidates() {
                 {filtered.map((candidate) => {
                   const candidateSkills = allCandidateSkills(candidate);
                   const matchedSkills = candidateSkills.filter((skill) =>
-                    requestedSkills.some((required) => skill.toLocaleLowerCase() === required),
+                    requestedSkills.some((required) => skill.toLocaleLowerCase().includes(required)),
                   );
                   const match = requestedSkills.length > 0 && candidateSkills.length > 0
                     ? Math.round((matchedSkills.length / requestedSkills.length) * 100)
                     : null;
                   return (
-                    <tr key={candidate.id} className={candidate.id === candidateId ? "selected" : ""}>
+                    <tr
+                      key={candidate.id}
+                      className={[
+                        candidate.id === candidateId ? "selected" : "",
+                        requestedSkills.length > 0 && matchedSkills.length === 0 ? "missing-search-skills" : "",
+                      ].filter(Boolean).join(" ")}
+                    >
                       <td>
                         <div className="bench-candidate-cell">
                           <span className="bench-avatar">{initials(candidate.full_name)}</span>
@@ -1004,11 +1011,21 @@ export default function BenchCandidates() {
                       <td>
                         <div className="bench-skill-tags">
                           {candidateSkills.length ? candidateSkills.slice(0, 5).map((skill) => {
-                            const matched = requestedSkills.some((required) => skill.toLocaleLowerCase() === required);
+                            const matched = requestedSkills.some((required) => skill.toLocaleLowerCase().includes(required));
                             return <span key={skill} className={matched ? "matched" : ""}>{skill}</span>;
                           }) : <span className="bench-muted">No skills provided</span>}
                           {candidateSkills.length > 5 && <small>+{candidateSkills.length - 5}</small>}
+                          {requestedSkills.length > 0 && matchedSkills.length === 0 && (
+                            <span className="bench-skill-missing" role="status">
+                              Missing {requestedSkills.join(" / ")}
+                            </span>
+                          )}
                         </div>
+                      </td>
+                      <td>
+                        <span className={`bench-resume-status ${candidate.resume_count > 0 ? "available" : "missing"}`}>
+                          {candidate.resume_count > 0 ? "Resume uploaded" : "No resume"}
+                        </span>
                       </td>
                       <td>{experienceLabel(candidate)}</td>
                       <td>{candidate.location || "Not provided"}</td>
@@ -1017,7 +1034,7 @@ export default function BenchCandidates() {
                       <td>
                         {match == null
                           ? <span className="bench-muted">-</span>
-                          : <span className="bench-match" title={`${matchedSkills.length} of ${requestedSkills.length} required skills matched`}>
+                          : <span className={`bench-match ${matchedSkills.length === 0 ? "missing" : ""}`} title={`${matchedSkills.length} of ${requestedSkills.length} searched skills matched`}>
                               {match}%<small>{matchedSkills.length}/{requestedSkills.length}</small>
                             </span>}
                       </td>
@@ -1043,7 +1060,7 @@ export default function BenchCandidates() {
           </div>
           <footer className="bench-table-footer">
             Showing {filtered.length} of {items.length} candidate{items.length === 1 ? "" : "s"}
-            {requestedSkills.length > 0 && <span> · Skill matches are calculated from the entered required skills.</span>}
+            {requestedSkills.length > 0 && <span> · Matching searched skills are highlighted; missing skills and resumes are marked in red.</span>}
           </footer>
         </section>
       )}
