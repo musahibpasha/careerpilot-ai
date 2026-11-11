@@ -2491,6 +2491,18 @@ footer { margin-top: 32px; font-size: 12px; color: var(--faint); }
 .bench-resume-card .secondary-button,
 .bench-resume-actions .secondary-button { min-height: 30px; padding: 5px 8px; font-size: 9px; }
 .bench-resume-actions { justify-content: flex-start; flex-wrap: wrap; }
+.bench-attach-resume {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 9px;
+  padding: 11px;
+  border: 1px solid var(--blue-100);
+  border-radius: 9px;
+  background: var(--blue-50);
+}
+.bench-attach-resume .bench-resume-select { color: var(--ink-2); }
+.bench-attach-resume .secondary-button { min-height: 36px; white-space: nowrap; }
 .bench-resume-preview { width: 100%; height: 350px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
 .bench-preview-placeholder { display: grid; min-height: 120px; place-items: center; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); font-size: 10px; }
 .bench-tab-help { color: var(--muted); font-size: 10px; line-height: 1.55; }
@@ -2574,6 +2586,8 @@ footer { margin-top: 32px; font-size: 12px; color: var(--faint); }
   .bench-filters .bench-search { grid-column: 1 / -1; }
   .bench-table { min-width: 980px; }
   .bench-drawer { width: min(440px, 100%); }
+  .bench-attach-resume { grid-template-columns: minmax(0, 1fr); }
+  .bench-attach-resume .secondary-button { width: 100%; justify-content: center; }
 }
 @media (max-width: 420px) {
   .bench-summary { gap: 7px; }

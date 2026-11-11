@@ -2722,6 +2722,7 @@ def update_preferences(
 def resume_out(doc: dict) -> dict:
     return {
         "id": str(doc["_id"]),
+        "candidate_id": str(doc["candidate_id"]) if doc.get("candidate_id") else None,
         "label": doc["label"],
         "filename": doc["filename"],
         "size": doc["size"],
@@ -3025,7 +3026,11 @@ def list_candidates(
             "under_review": sum(
                 item.get("status") == "under_review" for item in all_current
             ),
-            "resumes_uploaded": sum(item.get("resume_count", 0) for item in all_current),
+            "resumes_uploaded": sum(
+                item.get("resume_count", 0)
+                for item in items
+                if not item.get("archived")
+            ),
             "archived": sum(bool(item.get("archived")) for item in documents),
         },
         "profile_import_available": db.profiles.find_one({}) is not None
@@ -3142,6 +3147,52 @@ def get_candidate(candidate_id: str, db: Database = Depends(get_db)):
         "resumes": resumes,
         "applications": candidate_applications,
     }
+
+
+@app.post(
+    "/api/candidates/{candidate_id}/resumes/{resume_id}/attach",
+    response_model=schemas.ResumeRead,
+)
+def attach_resume_to_candidate(
+    candidate_id: str,
+    resume_id: str,
+    db: Database = Depends(get_db),
+):
+    candidate_oid = to_oid(candidate_id, "Candidate")
+    resume_oid = to_oid(resume_id, "Resume")
+    if db.candidates.find_one(
+        {"_id": candidate_oid, "archived": {"$ne": True}},
+        {"_id": 1},
+    ) is None:
+        raise HTTPException(status_code=404, detail="Candidate not found.")
+
+    resume = db.resumes.find_one({"_id": resume_oid})
+    if resume is None:
+        raise HTTPException(status_code=404, detail="Resume not found.")
+    if resume.get("candidate_id") == candidate_oid:
+        return resume_out(resume)
+    if resume.get("candidate_id") is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="This resume is already attached to another candidate.",
+        )
+
+    result = db.resumes.update_one(
+        {
+            "_id": resume_oid,
+            "$or": [
+                {"candidate_id": {"$exists": False}},
+                {"candidate_id": None},
+            ],
+        },
+        {"$set": {"candidate_id": candidate_oid}},
+    )
+    if result.matched_count == 0:
+        raise HTTPException(
+            status_code=409,
+            detail="This resume was attached to another candidate. Refresh and try again.",
+        )
+    return resume_out(db.resumes.find_one({"_id": resume_oid}))
 
 
 @app.post("/api/candidates/{candidate_id}/applications", status_code=201)

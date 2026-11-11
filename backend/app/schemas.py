@@ -711,6 +711,7 @@ class ResumeRead(BaseModel):
     """Details of a stored resume file. The file itself is downloaded separately."""
 
     id: str
+    candidate_id: str | None = None
     label: str
     filename: str
     size: int

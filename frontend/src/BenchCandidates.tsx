@@ -134,6 +134,7 @@ type ExtractedResume = Partial<CandidateProfileDetails> & {
 };
 type CandidateResume = {
   id: string;
+  candidate_id?: string | null;
   label: string;
   filename: string;
   size: number;
@@ -370,6 +371,10 @@ export default function BenchCandidates() {
   const [previewUrl, setPreviewUrl] = useState("");
   const [resumeBusy, setResumeBusy] = useState(false);
   const [resumeError, setResumeError] = useState("");
+  const [unassignedResumes, setUnassignedResumes] = useState<CandidateResume[]>([]);
+  const [unassignedResumeId, setUnassignedResumeId] = useState("");
+  const [unassignedResumeError, setUnassignedResumeError] = useState("");
+  const [unassignedResumesLoading, setUnassignedResumesLoading] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
   const [editingCandidate, setEditingCandidate] = useState<Candidate | null>(null);
   const [form, setForm] = useState<CandidateForm>(emptyForm());
@@ -404,6 +409,27 @@ export default function BenchCandidates() {
       setListError(error instanceof Error ? error.message : "Could not load candidates.");
     } finally {
       if (showLoading) setLoading(false);
+    }
+  }
+
+  async function loadUnassignedResumes() {
+    setUnassignedResumesLoading(true);
+    setUnassignedResumeError("");
+    try {
+      const resumes = await request<CandidateResume[]>("/api/resumes");
+      const unassigned = resumes.filter((resume) => !resume.candidate_id);
+      setUnassignedResumes(unassigned);
+      setUnassignedResumeId((current) =>
+        unassigned.some((resume) => resume.id === current)
+          ? current
+          : unassigned[0]?.id ?? "",
+      );
+    } catch (error) {
+      setUnassignedResumeError(
+        error instanceof Error ? error.message : "Could not load unassigned resumes.",
+      );
+    } finally {
+      setUnassignedResumesLoading(false);
     }
   }
 
@@ -445,6 +471,10 @@ export default function BenchCandidates() {
       setDetail(null);
       setPreviewUrl("");
     }
+  }, [candidateId]);
+
+  useEffect(() => {
+    if (candidateId) void loadUnassignedResumes();
   }, [candidateId]);
 
   useEffect(() => {
@@ -781,6 +811,29 @@ export default function BenchCandidates() {
       setActiveTab("resume");
     } catch (error) {
       setResumeError(error instanceof Error ? error.message : "Could not upload resume.");
+    } finally {
+      setResumeBusy(false);
+    }
+  }
+
+  async function attachExistingResume() {
+    if (!detail || !unassignedResumeId) return;
+    setResumeBusy(true);
+    setResumeError("");
+    try {
+      await request<CandidateResume>(
+        `/api/candidates/${detail.id}/resumes/${unassignedResumeId}/attach`,
+        { method: "POST" },
+      );
+      await Promise.all([
+        loadDetail(detail.id),
+        loadCandidates(false),
+        loadUnassignedResumes(),
+      ]);
+    } catch (error) {
+      setResumeError(
+        error instanceof Error ? error.message : "Could not attach the existing resume.",
+      );
     } finally {
       setResumeBusy(false);
     }
@@ -1153,6 +1206,40 @@ export default function BenchCandidates() {
                         </label>
                       </div>
                       {resumeError && <p className="bench-inline-error" role="alert">{resumeError}</p>}
+                      {unassignedResumeError && (
+                        <p className="bench-inline-error" role="alert">
+                          Existing resumes could not be checked: {unassignedResumeError}
+                        </p>
+                      )}
+                      {unassignedResumesLoading && (
+                        <p className="bench-tab-help" role="status">Checking for unassigned resumes...</p>
+                      )}
+                      {unassignedResumes.length > 0 && (
+                        <div className="bench-attach-resume">
+                          <label className="bench-resume-select">
+                            <span>Attach an existing unassigned resume</span>
+                            <select
+                              value={unassignedResumeId}
+                              onChange={(event) => setUnassignedResumeId(event.target.value)}
+                              disabled={resumeBusy}
+                            >
+                              {unassignedResumes.map((resume) => (
+                                <option key={resume.id} value={resume.id}>
+                                  {resume.filename} · Uploaded {displayDate(resume.uploaded_at)}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <button
+                            type="button"
+                            className="secondary-button"
+                            disabled={resumeBusy || !unassignedResumeId}
+                            onClick={() => void attachExistingResume()}
+                          >
+                            {resumeBusy ? "Attaching..." : "Attach to this candidate"}
+                          </button>
+                        </div>
+                      )}
                       {detail.resumes.length === 0 ? (
                         <div className="bench-detail-empty"><p>No resume is attached to this candidate.</p></div>
                       ) : (

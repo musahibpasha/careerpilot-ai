@@ -158,10 +158,51 @@ def test_candidate_resume_upload_download_and_detail(db):
     assert detail.json()["resumes"][0]["id"] == resume_id
     assert detail.json()["resumes"][0]["extracted"]["skills"] == ["Python", "FastAPI"]
     assert detail.json()["resume_extracted"]["experience_summary"] == "Backend engineer."
+    assert client.get("/api/candidates").json()["summary"]["resumes_uploaded"] == 1
 
     downloaded = client.get(f"/api/resumes/{resume_id}/file")
     assert downloaded.status_code == 200
     assert downloaded.content == data
+
+
+def test_unassigned_resume_can_be_explicitly_attached_to_candidate(db):
+    uploaded = client.post(
+        "/api/resumes",
+        files={"file": ("unassigned.pdf", make_pdf(), "application/pdf")},
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    resume_id = uploaded.json()["id"]
+    assert uploaded.json()["candidate_id"] is None
+
+    candidate = client.post("/api/candidates", json=make_candidate_payload())
+    assert candidate.status_code == 201, candidate.text
+    candidate_id = candidate.json()["id"]
+    assert candidate.json()["resume_count"] == 0
+    assert client.get("/api/candidates").json()["summary"]["resumes_uploaded"] == 0
+
+    attached = client.post(
+        f"/api/candidates/{candidate_id}/resumes/{resume_id}/attach",
+    )
+    assert attached.status_code == 200, attached.text
+    assert attached.json()["candidate_id"] == candidate_id
+
+    detail = client.get(f"/api/candidates/{candidate_id}")
+    assert detail.status_code == 200
+    assert detail.json()["resume_count"] == 1
+    assert detail.json()["resumes"][0]["id"] == resume_id
+    assert client.get("/api/candidates").json()["summary"]["resumes_uploaded"] == 1
+
+    other_candidate = client.post(
+        "/api/candidates",
+        json=make_candidate_payload(
+            full_name="Morgan Lee",
+            email="morgan@example.com",
+        ),
+    ).json()
+    conflict = client.post(
+        f"/api/candidates/{other_candidate['id']}/resumes/{resume_id}/attach",
+    )
+    assert conflict.status_code == 409
 
 
 def test_candidate_can_store_and_download_original_docx(db):
