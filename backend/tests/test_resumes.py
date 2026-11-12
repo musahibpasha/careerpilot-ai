@@ -165,7 +165,7 @@ def test_duplicate_names_are_refused_ignoring_case(db):
     assert db.resumes.count_documents({}) == 1
 
 
-def test_resume_limit(db):
+def test_unassigned_resume_limit_does_not_block_candidate_resumes(db):
     for i in range(MAX_RESUMES):
         db.resumes.insert_one({
             "label": f"R{i}", "filename": f"r{i}.pdf", "size": 1, "page_count": 1,
@@ -176,6 +176,17 @@ def test_resume_limit(db):
 
     assert response.status_code == 409
     assert db.resumes.count_documents({}) == MAX_RESUMES
+
+    candidate_id = db.candidates.insert_one({"archived": False}).inserted_id
+    candidate_resume = client.post(
+        "/api/resumes",
+        data={"candidate_id": str(candidate_id)},
+        files={"file": ("candidate.pdf", make_pdf(), "application/pdf")},
+    )
+
+    assert candidate_resume.status_code == 201, candidate_resume.text
+    assert candidate_resume.json()["candidate_id"] == str(candidate_id)
+    assert db.resumes.count_documents({}) == MAX_RESUMES + 1
 
 
 # ---------- choosing the active resume, renaming, downloading ----------

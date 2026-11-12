@@ -141,6 +141,25 @@ def test_candidate_summary_active_includes_unarchived_pipeline_statuses(db):
     assert summary["under_review"] == 1
 
 
+def test_candidate_list_has_no_fixed_500_candidate_cap(db):
+    db.candidates.insert_many([
+        {
+            **make_candidate_payload(
+                full_name=f"Candidate {index}",
+                email=f"candidate{index}@example.com",
+            ),
+            "archived": False,
+        }
+        for index in range(501)
+    ])
+
+    response = client.get("/api/candidates")
+
+    assert response.status_code == 200
+    assert len(response.json()["items"]) == 501
+    assert response.json()["summary"]["total"] == 501
+
+
 def test_candidate_email_duplicates_are_rejected_case_insensitively(db):
     created = client.post("/api/candidates", json=make_candidate_payload())
     assert created.status_code == 201

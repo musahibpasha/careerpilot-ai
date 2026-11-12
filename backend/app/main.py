@@ -2798,7 +2798,13 @@ async def upload_resume(
             raise HTTPException(status_code=404, detail="Candidate not found.")
 
     existing = list(db.resumes.find({}, {"data": 0}))
-    if len(existing) >= MAX_RESUMES:
+    unassigned_resume_count = db.resumes.count_documents({
+        "$or": [
+            {"candidate_id": {"$exists": False}},
+            {"candidate_id": None},
+        ]
+    })
+    if candidate_oid is None and unassigned_resume_count >= MAX_RESUMES:
         raise HTTPException(
             status_code=409,
             detail=f"You can keep at most {MAX_RESUMES} resumes. Delete one first.",
@@ -3042,7 +3048,7 @@ def list_candidates(
     db: Database = Depends(get_db),
 ):
     query = {} if include_archived else {"archived": {"$ne": True}}
-    documents = list(db.candidates.find(query).sort("updated_at", -1).limit(500))
+    documents = list(db.candidates.find(query).sort("updated_at", -1))
     all_current = [
         item for item in documents if not item.get("archived")
     ] if include_archived else documents
