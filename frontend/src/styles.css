@@ -1321,7 +1321,26 @@ footer { margin-top: 32px; font-size: 12px; color: var(--faint); }
 .job-card:focus-within { border-color: var(--blue-100); box-shadow: 0 0 0 3px var(--blue-50), var(--shadow-sm); }
 .company-logo { width: 42px; height: 42px; border: 1px solid rgba(231, 199, 245, 0.18); border-radius: 12px; color: #f7eaff; background: linear-gradient(145deg, #603574, #26162f); }
 .job-info { align-self: center; }
+.job-title-row { display: flex; min-width: 0; flex-wrap: nowrap; align-items: flex-start; gap: 8px; }
+.job-title-row h3 { min-width: 0; flex: 1; }
 .job-title-row h3 { font-size: 16px; font-weight: 600; letter-spacing: -0.3px; line-height: 1.35; overflow-wrap: anywhere; }
+.saved-job-delete {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  place-items: center;
+  margin: -4px -4px 0 0;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  color: var(--muted);
+  background: transparent;
+}
+.saved-job-delete:hover {
+  color: var(--bad);
+  border-color: var(--bad-50);
+  background: var(--bad-50);
+}
 .job-info > p, .job-meta { color: var(--muted); }
 .job-meta { gap: 6px 12px; margin-top: 10px; }
 .job-meta span, .skill-list span {
@@ -1364,6 +1383,28 @@ footer { margin-top: 32px; font-size: 12px; color: var(--faint); }
   border-color: var(--line-strong);
   background: var(--surface-2);
 }
+.job-action-main,
+.job-action-secondary { display: contents; }
+.job-card.saved-job-card .job-actions {
+  align-items: stretch;
+  flex-direction: column;
+  gap: 8px;
+}
+.job-card.saved-job-card .job-action-main {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.job-card.saved-job-card .job-action-secondary {
+  display: flex;
+  flex: none;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.job-card.saved-job-card .job-action-secondary:empty { display: none; }
 .application-filters {
   display: grid;
   grid-template-columns: minmax(180px, 2fr) repeat(3, minmax(140px, 1fr));
@@ -1547,7 +1588,7 @@ footer { margin-top: 32px; font-size: 12px; color: var(--faint); }
   .job-actions .row { justify-content: flex-start; }
 }
 @media (max-width: 420px) {
-  .job-actions .analyze-button, .job-actions > .primary-button { flex: 1 1 130px; }
+  .job-actions .analyze-button, .job-actions > .primary-button, .job-action-main > .primary-button { flex: 1 1 130px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .job-card, .brand-mark, .nav, .stat-card, .primary-button { animation: none !important; transition: none !important; }

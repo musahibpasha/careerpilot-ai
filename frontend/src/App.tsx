@@ -4080,6 +4080,17 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
           <div className="job-info">
             <div className="job-title-row">
               <h3>{job.title}</h3>
+              {page === "saved" && (
+                <button
+                  type="button"
+                  className="saved-job-delete"
+                  aria-label={`Remove ${job.title} from saved jobs`}
+                  title="Remove saved job"
+                  onClick={() => void removeSavedJob(job)}
+                >
+                  <Trash2 size={15} />
+                </button>
+              )}
             </div>
             <p>
               {job.company}
@@ -4116,7 +4127,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
     }
 
     return (
-      <article className="job-card" key={job.id}>
+      <article className={`job-card${page === "saved" ? " saved-job-card" : ""}`} key={job.id}>
         <div className="company-logo">{companyInitials(job.company)}</div>
 
         <div className="job-info">
@@ -4185,72 +4196,61 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
         </div>
 
         <div className="job-actions">
-          <div className="job-score">{ring}</div>
-          <button
-            type="button"
-            className="secondary-button analyze-button"
-            onClick={() => setAnalysisJob(job)}
-          >
-            <Sparkles size={14} /> Match analysis
-          </button>
-          <button
-            type="button"
-            className="secondary-button"
-            onClick={() => setAssistantJobId(job.id)}
-          >
-            <Bot size={14} /> Automate
-          </button>
-          {recruiterEmail && (
-            <a href={`mailto:${recruiterEmail}`} className="secondary-button">
-              Contact Recruiter ({recruiterEmail})
-            </a>
-          )}
-          {alreadyApplied ? (
-            <>
-              <span className="applied-indicator">Applied</span>
-              <button type="button" className="secondary-button" onClick={() => goTo("applications")}>
-                View Application
+          <div className="job-action-main">
+            <div className="job-score">{ring}</div>
+            <button
+              type="button"
+              className="secondary-button analyze-button"
+              onClick={() => setAnalysisJob(job)}
+            >
+              <Sparkles size={14} /> Match analysis
+            </button>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => setAssistantJobId(job.id)}
+            >
+              <Bot size={14} /> Automate
+            </button>
+            {recruiterEmail && (
+              <a href={`mailto:${recruiterEmail}`} className="secondary-button">
+                Contact Recruiter ({recruiterEmail})
+              </a>
+            )}
+            {alreadyApplied ? (
+              <>
+                <span className="applied-indicator">Applied</span>
+                <button type="button" className="secondary-button" onClick={() => goTo("applications")}>
+                  View Application
+                </button>
+              </>
+            ) : (
+              <button
+                className="primary-button"
+                onClick={() => void openApplyWorkflow(job)}
+                disabled={busy}
+              >
+                Apply
               </button>
-            </>
-          ) : (
-            <button
-              className="primary-button"
-              onClick={() => void openApplyWorkflow(job)}
-              disabled={busy}
-            >
-              Apply
-            </button>
-          )}
-          {page === "saved" && (
-            <button
-              type="button"
-              className="ghost-button job-icon-action"
-              aria-label={`Remove ${job.title} from saved jobs`}
-              title="Remove saved job"
-              onClick={() => void removeSavedJob(job)}
-            >
-              <Trash2 size={15} />
-              <span className="sr-only">Remove saved</span>
-            </button>
-          )}
-          <div className="row">
-            <button
-              type="button"
-              className={`ghost-button${page === "saved" ? " job-icon-action" : ""}`}
-              aria-expanded={dismissingId === job.id}
-              aria-label={page === "saved" ? `Mark ${job.title} as not interested` : undefined}
-              title={page === "saved" ? "Not interested" : undefined}
-              onClick={() => setDismissingId(dismissingId === job.id ? null : job.id)}
-            >
-              <EyeOff size={15} />
-              <span className={page === "saved" ? "sr-only" : undefined}>Not interested</span>
-            </button>
+            )}
+          </div>
+          <div className={`job-action-secondary${page === "saved" ? " saved-job-icon-actions" : ""}`}>
+            {page !== "saved" && (
+              <button
+                type="button"
+                className="ghost-button"
+                aria-expanded={dismissingId === job.id}
+                onClick={() => setDismissingId(dismissingId === job.id ? null : job.id)}
+              >
+                <EyeOff size={15} /> Not interested
+              </button>
+            )}
             {job.url && (
               <a
                 href={job.url}
                 target="_blank"
                 rel="noreferrer"
-                className="icon-link"
+                className={`icon-link${page === "saved" ? " job-icon-action" : ""}`}
                 aria-label="Open job posting"
                 title="Open job posting"
               >
@@ -4916,12 +4916,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                 </small>
               </div>
 
-              {profile && (profile.target_roles.length > 0 || profile.skills.length > 0) ? (
-                <small>
-                  Profile suggestions use only your saved target roles and skills; no
-                  qualifications are generated.
-                </small>
-              ) : (
+              {!(profile && (profile.target_roles.length > 0 || profile.skills.length > 0)) && (
                 <>
                   <small>
                     Add and save your confirmed target roles or skills in My Profile to
@@ -4939,10 +4934,6 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                   </div>
                 </>
               )}
-
-              <small className="criteria-disclaimer">
-                CareerPilot applies filters using board data and job descriptions where available. Listings missing details needed by a selected filter may be excluded; confirm details on the original posting.
-              </small>
             </section>
 
             {jobSearchView !== "recommended" && (
