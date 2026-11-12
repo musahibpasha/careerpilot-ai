@@ -6,11 +6,26 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app import main
-from app.database import get_base_db
+from app.database import ensure_indexes, get_base_db
 from app.main import app
 
 
 _SUPER_ADMIN = {"uid": "super-admin", "email": "ADMIN@example.com"}
+
+
+def test_database_indexes_are_idempotent_with_recruiter_email_collation():
+    db = mongomock.MongoClient().indexes
+    db.recruiters.create_index(
+        "email",
+        unique=True,
+        name="uq_recruiter_email",
+        collation={"locale": "en", "strength": 2},
+    )
+
+    ensure_indexes(db)
+    ensure_indexes(db)
+
+    assert db.recruiters.index_information()["uq_recruiter_email"]["unique"] is True
 
 
 def test_super_admin_email_allowlist_is_case_insensitive(monkeypatch):

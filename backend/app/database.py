@@ -221,4 +221,9 @@ def ensure_indexes(db: Database) -> None:
         name="ix_job_duplicate_company",
     )
     db.recruiters.create_index("uid", unique=True, name="uq_recruiter_uid")
-    db.recruiters.create_index("email", unique=True, name="uq_recruiter_email")
+    db.recruiters.create_index(
+        "email",
+        unique=True,
+        name="uq_recruiter_email",
+        collation={"locale": "en", "strength": 2},
+    )
