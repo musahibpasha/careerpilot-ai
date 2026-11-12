@@ -1383,6 +1383,30 @@ footer { margin-top: 32px; font-size: 12px; color: var(--faint); }
   border-color: var(--line-strong);
   background: var(--surface-2);
 }
+.copy-link-action {
+  transition: color 160ms ease, border-color 160ms ease, background 160ms ease;
+}
+.copy-link-action--copied {
+  color: var(--good) !important;
+  border-color: rgba(58, 181, 133, 0.55) !important;
+  background: var(--good-50) !important;
+  animation: cp-copy-success 260ms ease-out;
+}
+.copy-link-check { animation: cp-copy-check 220ms ease-out; }
+@keyframes cp-copy-success {
+  0% { transform: scale(0.88); }
+  65% { transform: scale(1.12); }
+  100% { transform: scale(1); }
+}
+@keyframes cp-copy-check {
+  from { opacity: 0; transform: scale(0.55) rotate(-35deg); }
+  to { opacity: 1; transform: scale(1) rotate(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .copy-link-action,
+  .copy-link-action--copied,
+  .copy-link-check { animation: none; transition: none; }
+}
 .job-action-main,
 .job-action-secondary { display: contents; }
 .job-card.saved-job-card .job-actions {

@@ -295,16 +295,23 @@ def test_board_discovery_endpoint_groups_listings_across_requests(monkeypatch):
         assert saved.status_code == 201
         assert saved.json()["source"] == "linkedin"
 
-        application_id = ObjectId()
-        applied_at = datetime(2026, 10, 26, tzinfo=timezone.utc)
-        db.applications.insert_one({
-            "_id": application_id,
-            "candidate_id": ObjectId(_CANDIDATE_ID),
-            "job_id": ObjectId(saved.json()["id"]),
-            "apply_status": "applied",
-            "applied_at": applied_at,
-            "apply_status_history": [],
-        })
+        created_application = client.post(
+            "/api/applications",
+            json={
+                "job_id": saved.json()["id"],
+                "candidate_id": _CANDIDATE_ID,
+                "status": "saved",
+            },
+        )
+        assert created_application.status_code == 201
+        application_id = created_application.json()["id"]
+        marked_applied = client.patch(
+            f"/api/applications/{application_id}/apply",
+            json={"status": "applied"},
+        )
+        assert marked_applied.status_code == 200
+        assert marked_applied.json()["apply_status"] == "applied"
+        applied_at = marked_applied.json()["applied_at"]
 
         active_source["value"] = "indeed"
         applied_response = client.get(
@@ -318,10 +325,8 @@ def test_board_discovery_endpoint_groups_listings_across_requests(monkeypatch):
         assert applied_response.status_code == 200
         applied_result = applied_response.json()["results"][0]
         assert applied_result["already_applied"] is True
-        assert applied_result["applied_application_id"] == str(application_id)
-        assert applied_result["applied_at"] == applied_at.isoformat().replace(
-            "+00:00", "Z"
-        )
+        assert applied_result["applied_application_id"] == application_id
+        assert applied_result["applied_at"] == applied_at
 
         other_candidate_id = ObjectId()
         db.candidates.insert_one({

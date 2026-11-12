@@ -12,6 +12,7 @@ import {
   CheckCircle2,
   Circle,
   CircleAlert,
+  Copy,
   EyeOff,
   FileText,
   Kanban,
@@ -1333,6 +1334,8 @@ function App({
     applications: "",
   });
   const [recommendedJobs, setRecommendedJobs] = useState<DiscoveredJob[]>([]);
+  const [copiedJobLinkKey, setCopiedJobLinkKey] = useState<string | null>(null);
+  const copiedJobLinkTimer = useRef<number | null>(null);
   const [recommendationLoading, setRecommendationLoading] = useState(false);
   const [recommendationLastUpdated, setRecommendationLastUpdated] = useState<string | null>(null);
   const [recommendationSourceFailures, setRecommendationSourceFailures] = useState<string[]>([]);
@@ -2007,14 +2010,109 @@ function App({
   }
 
   async function applyToDiscoveredJob(job: DiscoveredJob) {
-    const existing = jobs.find(
-      (item) => item.source === job.source && item.source_job_id === job.source_job_id,
-    );
-    const persisted = existing && existing.is_saved !== false
-      ? existing
-      : await saveDiscoveredJob(job);
-    if (persisted) await openApplyWorkflow(persisted);
+    const candidateId = selectedCandidateId;
+    if (!candidateId) {
+      setNotice("Select a candidate before recording an application.");
+      return;
+    }
+
+    if (job.already_applied) {
+      setNotice("This candidate has already applied to this vacancy.");
+      goTo("applications");
+      return;
+    }
+
+    setBusy(true);
+    setNotice("");
+    try {
+      const existing = jobs.find(
+        (item) => item.source === job.source && item.source_job_id === job.source_job_id,
+      );
+      const persisted = existing && existing.is_saved !== false
+        ? existing
+        : await saveDiscoveredJob(job);
+      if (!persisted) return;
+
+      let application = applications.find((item) => item.job_id === persisted.id);
+      if (application?.candidate_id && application.candidate_id !== candidateId) {
+        throw new Error("This job is already linked to another candidate.");
+      }
+
+      if (!application || application.candidate_id !== candidateId) {
+        const createResponse = await fetch(`${API}/api/applications`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            job_id: persisted.id,
+            status: "saved",
+            candidate_id: candidateId,
+          }),
+        });
+        const createData = await createResponse.json().catch(() => null);
+        if (!createResponse.ok) {
+          throw new Error(errorText(createData, "Could not create the candidate application."));
+        }
+        application = createData as Application;
+      }
+
+      if (!hasConfirmedApplication(application)) {
+        const updateResponse = await fetch(
+          `${API}/api/applications/${application.id}/apply`,
+          {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ status: "applied" }),
+          },
+        );
+        const updateData = await updateResponse.json().catch(() => null);
+        if (!updateResponse.ok) {
+          throw new Error(errorText(updateData, "Could not mark this candidate as applied."));
+        }
+        application = updateData as Application;
+      }
+
+      setApplications((current) => [
+        application as Application,
+        ...current.filter((item) => item.id !== application?.id),
+      ]);
+      setNotice(`${job.title} marked as applied for the selected candidate.`);
+      goTo("applications");
+    } catch (reason) {
+      setNotice(
+        reason instanceof Error ? reason.message : "Could not record this application.",
+      );
+    } finally {
+      setBusy(false);
+    }
   }
+
+  async function copyJobPostingLink(job: DiscoveredJob) {
+    if (!navigator.clipboard?.writeText) {
+      setNotice("Clipboard access is unavailable. Copy the job link from the browser address bar.");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(job.url);
+      const key = `${job.source}:${job.source_job_id}`;
+      setCopiedJobLinkKey(key);
+      if (copiedJobLinkTimer.current !== null) {
+        window.clearTimeout(copiedJobLinkTimer.current);
+      }
+      copiedJobLinkTimer.current = window.setTimeout(() => {
+        setCopiedJobLinkKey((current) => current === key ? null : current);
+        copiedJobLinkTimer.current = null;
+      }, 1800);
+      setNotice(`Job posting link copied for ${job.title}.`);
+    } catch {
+      setNotice("Could not copy the job posting link. Copy it from the browser address bar.");
+    }
+  }
+
+  useEffect(() => () => {
+    if (copiedJobLinkTimer.current !== null) {
+      window.clearTimeout(copiedJobLinkTimer.current);
+    }
+  }, []);
 
   useEffect(() => {
     void load(true);
@@ -3530,7 +3628,8 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
   function renderRecommendationCard(job: DiscoveredJob) {
     const application = applicationForListing(job);
     const alreadyApplied = Boolean(
-      (application && hasConfirmedApplication(application)) ||
+      (application?.candidate_id === selectedCandidateId &&
+        hasConfirmedApplication(application)) ||
       job.already_applied,
     );
     const id = `discovery:${job.source}:${job.source_job_id}`;
@@ -3638,6 +3737,25 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
           >
             <ArrowUpRight size={17} />
           </a>
+          <button
+            type="button"
+            className={`secondary-button job-icon-action copy-link-action${
+              copiedJobLinkKey === `${job.source}:${job.source_job_id}`
+                ? " copy-link-action--copied"
+                : ""
+            }`}
+            aria-label={copiedJobLinkKey === `${job.source}:${job.source_job_id}`
+              ? `Job posting link copied for ${job.title}`
+              : `Copy job posting link for ${job.title}`}
+            title={copiedJobLinkKey === `${job.source}:${job.source_job_id}`
+              ? "Copied!"
+              : "Copy job posting link"}
+            onClick={() => void copyJobPostingLink(job)}
+          >
+            {copiedJobLinkKey === `${job.source}:${job.source_job_id}`
+              ? <CheckCircle2 size={16} className="copy-link-check" />
+              : <Copy size={16} />}
+          </button>
         </div>
       </article>
     );
@@ -5186,6 +5304,25 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                                     : "Save job"}
                               </button>
                             )}
+                            <button
+                              type="button"
+                              aria-label={copiedJobLinkKey === `${job.source}:${job.source_job_id}`
+                                ? `Job posting link copied for ${job.title}`
+                                : `Copy job posting link for ${job.title}`}
+                              title={copiedJobLinkKey === `${job.source}:${job.source_job_id}`
+                                ? "Copied!"
+                                : "Copy job posting link"}
+                              className={`secondary-button job-icon-action copy-link-action${
+                                copiedJobLinkKey === `${job.source}:${job.source_job_id}`
+                                  ? " copy-link-action--copied"
+                                  : ""
+                              }`}
+                              onClick={() => void copyJobPostingLink(job)}
+                            >
+                              {copiedJobLinkKey === `${job.source}:${job.source_job_id}`
+                                ? <CheckCircle2 size={16} className="copy-link-check" />
+                                : <Copy size={16} />}
+                            </button>
                             {alreadyApplied ? (
                               <>
                                 <span className="applied-indicator">Applied</span>
@@ -5197,10 +5334,10 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                               <button
                                 type="button"
                                 className="secondary-button"
-                                disabled={busy}
+                                disabled={busy || savingDiscoveryId === job.source_job_id}
                                 onClick={() => void applyToDiscoveredJob(job)}
                               >
-                                Apply
+                                {busy ? "Recording..." : "Apply"}
                               </button>
                             )}
                             <a
