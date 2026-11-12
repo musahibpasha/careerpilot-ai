@@ -378,10 +378,6 @@ export default function BenchCandidates() {
   const [previewUrl, setPreviewUrl] = useState("");
   const [resumeBusy, setResumeBusy] = useState(false);
   const [resumeError, setResumeError] = useState("");
-  const [unassignedResumes, setUnassignedResumes] = useState<CandidateResume[]>([]);
-  const [unassignedResumeId, setUnassignedResumeId] = useState("");
-  const [unassignedResumeError, setUnassignedResumeError] = useState("");
-  const [unassignedResumesLoading, setUnassignedResumesLoading] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
   const [editingCandidate, setEditingCandidate] = useState<Candidate | null>(null);
   const [form, setForm] = useState<CandidateForm>(emptyForm());
@@ -427,27 +423,6 @@ export default function BenchCandidates() {
     }
   }
 
-  async function loadUnassignedResumes() {
-    setUnassignedResumesLoading(true);
-    setUnassignedResumeError("");
-    try {
-      const resumes = await request<CandidateResume[]>("/api/resumes");
-      const unassigned = resumes.filter((resume) => !resume.candidate_id);
-      setUnassignedResumes(unassigned);
-      setUnassignedResumeId((current) =>
-        unassigned.some((resume) => resume.id === current)
-          ? current
-          : unassigned[0]?.id ?? "",
-      );
-    } catch (error) {
-      setUnassignedResumeError(
-        error instanceof Error ? error.message : "Could not load unassigned resumes.",
-      );
-    } finally {
-      setUnassignedResumesLoading(false);
-    }
-  }
-
   async function loadDetail(id: string) {
     setDetailLoading(true);
     setDetailError("");
@@ -486,10 +461,6 @@ export default function BenchCandidates() {
       setDetail(null);
       setPreviewUrl("");
     }
-  }, [candidateId]);
-
-  useEffect(() => {
-    if (candidateId) void loadUnassignedResumes();
   }, [candidateId]);
 
   useEffect(() => {
@@ -747,7 +718,6 @@ export default function BenchCandidates() {
           await Promise.all([
             loadCandidates(false),
             loadDetail(editingCandidate.id),
-            loadUnassignedResumes(),
           ]);
         } catch (error) {
           if (requestId === resumeScanRequestId.current) {
@@ -945,29 +915,6 @@ export default function BenchCandidates() {
     }
   }
 
-  async function attachExistingResume() {
-    if (!detail || !unassignedResumeId) return;
-    setResumeBusy(true);
-    setResumeError("");
-    try {
-      await request<CandidateResume>(
-        `/api/candidates/${detail.id}/resumes/${unassignedResumeId}/attach`,
-        { method: "POST" },
-      );
-      await Promise.all([
-        loadDetail(detail.id),
-        loadCandidates(false),
-        loadUnassignedResumes(),
-      ]);
-    } catch (error) {
-      setResumeError(
-        error instanceof Error ? error.message : "Could not attach the existing resume.",
-      );
-    } finally {
-      setResumeBusy(false);
-    }
-  }
-
   async function extractResume(id: string) {
     setResumeBusy(true);
     setResumeError("");
@@ -993,7 +940,6 @@ export default function BenchCandidates() {
       await Promise.all([
         loadDetail(detail.id),
         loadCandidates(false),
-        loadUnassignedResumes(),
       ]);
     } catch (error) {
       setResumeError(error instanceof Error ? error.message : "Could not delete resume.");
@@ -1354,43 +1300,9 @@ export default function BenchCandidates() {
                         </label>
                       </div>
                       <p className="bench-tab-help">
-                        {detail.resumes.length} of {MAX_CANDIDATE_RESUMES} resumes attached to this candidate. Up to {MAX_CANDIDATE_RESUMES} per candidate; 50 resumes total per workspace.
+                        Upload a resume here to attach it directly to this candidate. {detail.resumes.length} of {MAX_CANDIDATE_RESUMES} resumes attached; resumes assigned to other candidates cannot be selected here.
                       </p>
                       {resumeError && <p className="bench-inline-error" role="alert">{resumeError}</p>}
-                      {unassignedResumeError && (
-                        <p className="bench-inline-error" role="alert">
-                          Existing resumes could not be checked: {unassignedResumeError}
-                        </p>
-                      )}
-                      {unassignedResumesLoading && (
-                        <p className="bench-tab-help" role="status">Checking for unassigned resumes...</p>
-                      )}
-                      {unassignedResumes.length > 0 && detail.resumes.length < MAX_CANDIDATE_RESUMES && (
-                        <div className="bench-attach-resume">
-                          <label className="bench-resume-select">
-                            <span>Attach an existing unassigned resume</span>
-                            <select
-                              value={unassignedResumeId}
-                              onChange={(event) => setUnassignedResumeId(event.target.value)}
-                              disabled={resumeBusy}
-                            >
-                              {unassignedResumes.map((resume) => (
-                                <option key={resume.id} value={resume.id}>
-                                  {resume.filename} · Uploaded {displayDate(resume.uploaded_at)}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                          <button
-                            type="button"
-                            className="secondary-button"
-                            disabled={resumeBusy || !unassignedResumeId}
-                            onClick={() => void attachExistingResume()}
-                          >
-                            {resumeBusy ? "Attaching..." : "Attach to this candidate"}
-                          </button>
-                        </div>
-                      )}
                       {detail.resumes.length === 0 ? (
                         <div className="bench-detail-empty"><p>No resume is attached to this candidate.</p></div>
                       ) : (
