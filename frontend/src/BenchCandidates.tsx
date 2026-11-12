@@ -722,7 +722,47 @@ export default function BenchCandidates() {
       if (requestId !== resumeScanRequestId.current) return;
       const extracted = result.extracted ?? {};
       applyResumeToForm(extracted);
-      setResumeScanMessage("Resume scanned. Review the extracted fields before saving.");
+      if (editingCandidate) {
+        const resumeForm = new FormData();
+        resumeForm.set("file", file);
+        resumeForm.set("candidate_id", editingCandidate.id);
+        resumeForm.set(
+          "label",
+          `${form.full_name.trim() || editingCandidate.full_name} - ${file.name.replace(/\.(pdf|docx)$/i, "").trim()} (${editingCandidate.id.slice(-6)})`,
+        );
+        resumeForm.set("extracted_data", JSON.stringify(extracted));
+        try {
+          const savedResume = await request<CandidateResume>("/api/resumes", {
+            method: "POST",
+            body: resumeForm,
+          });
+          if (requestId !== resumeScanRequestId.current) return;
+          setCandidateResumeFile(null);
+          setFormResumes((current) => [
+            savedResume,
+            ...current.filter((resume) => resume.id !== savedResume.id),
+          ]);
+          setFormResumeId(savedResume.id);
+          setResumeScanMessage("Resume scanned and attached. The candidate's resume status is updated.");
+          await Promise.all([
+            loadCandidates(false),
+            loadDetail(editingCandidate.id),
+            loadUnassignedResumes(),
+          ]);
+        } catch (error) {
+          if (requestId === resumeScanRequestId.current) {
+            setResumeScanError(
+              `Resume was read but could not be attached: ${
+                error instanceof Error ? error.message : "Upload failed."
+              } Save the candidate form to retry.`,
+            );
+          }
+        }
+      } else {
+        setResumeScanMessage(
+          "Resume scanned. Save the new candidate to attach the resume and show it in the Bench list.",
+        );
+      }
     } catch (error) {
       if (requestId === resumeScanRequestId.current) {
         setResumeScanError(
