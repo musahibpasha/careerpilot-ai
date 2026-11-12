@@ -111,6 +111,9 @@ export default function AuthBoundary({ children }: { children?: ReactNode }) {
     setError("");
     try {
       await reload(firebaseAuth.currentUser);
+      if (firebaseAuth.currentUser.emailVerified) {
+        await firebaseAuth.currentUser.getIdToken(true);
+      }
       setUser(firebaseAuth.currentUser);
       if (!firebaseAuth.currentUser.emailVerified) {
         setError("The email is not verified yet. Open the link in your inbox first.");
