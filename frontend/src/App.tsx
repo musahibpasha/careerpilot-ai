@@ -868,6 +868,11 @@ type RecruiterCandidate = {
 
 type CandidateResumeFile = ResumeFile & {
   candidate_id?: string | null;
+  extracted?: {
+    current_job_title?: string;
+    professional_headline?: string;
+    target_roles?: string[];
+  } | null;
 };
 
 type Profile = {
@@ -1419,6 +1424,15 @@ function App({
   const selectedCandidate = candidates.find(
     (candidate) => candidate.id === selectedCandidateId,
   ) ?? null;
+  const selectedMatchingResume = candidateResumes.find(
+    (resume) => resume.id === selectedCandidateResumeId,
+  ) ?? null;
+  const selectedResumeHeadline = selectedMatchingResume
+    ? selectedMatchingResume.extracted?.current_job_title ||
+      selectedMatchingResume.extracted?.professional_headline ||
+      selectedMatchingResume.extracted?.target_roles?.[0] ||
+      selectedMatchingResume.filename
+    : null;
   const candidateName = (candidateId?: string | null) =>
     candidates.find((candidate) => candidate.id === candidateId)?.full_name ?? "Unassigned";
   const threadRef = useRef<HTMLDivElement>(null);
@@ -3898,10 +3912,12 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                   <div className="candidate-context-info">
                     <strong>{selectedCandidate.full_name}</strong>
                     <span>
-                      {selectedCandidate.current_job_title ||
-                        selectedCandidate.professional_headline ||
-                        selectedCandidate.target_roles[0] ||
-                        "Role not specified"}
+                      {context === "jobs" && selectedResumeHeadline
+                        ? selectedResumeHeadline
+                        : selectedCandidate.current_job_title ||
+                          selectedCandidate.professional_headline ||
+                          selectedCandidate.target_roles[0] ||
+                          "Role not specified"}
                       {selectedCandidate.experience_years !== null &&
                         ` · ${selectedCandidate.experience_years} years`}
                       {(selectedCandidate.preferred_location || selectedCandidate.location) &&
