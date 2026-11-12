@@ -3051,7 +3051,7 @@ def list_candidates(
         "items": items,
         "summary": {
             "total": len(all_current),
-            "active": sum(item.get("status") == "active" for item in all_current),
+            "active": sum(item.get("status") != "placed" for item in all_current),
             "on_bench": sum(item.get("status") == "on_bench" for item in all_current),
             "under_review": sum(
                 item.get("status") == "under_review" for item in all_current

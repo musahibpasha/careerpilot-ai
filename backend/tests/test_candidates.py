@@ -119,6 +119,28 @@ def test_candidate_create_update_and_archive_persist(db):
     assert archived_list["summary"]["archived"] == 1
 
 
+def test_candidate_summary_active_includes_unarchived_pipeline_statuses(db):
+    for index, status in enumerate(
+        ("active", "on_bench", "under_review", "temporarily_unavailable", "not_set", "placed")
+    ):
+        response = client.post(
+            "/api/candidates",
+            json=make_candidate_payload(
+                full_name=f"Candidate {index}",
+                email=f"candidate{index}@example.com",
+                status=status,
+            ),
+        )
+        assert response.status_code == 201, response.text
+
+    summary = client.get("/api/candidates").json()["summary"]
+
+    assert summary["total"] == 6
+    assert summary["active"] == 5
+    assert summary["on_bench"] == 1
+    assert summary["under_review"] == 1
+
+
 def test_candidate_email_duplicates_are_rejected_case_insensitively(db):
     created = client.post("/api/candidates", json=make_candidate_payload())
     assert created.status_code == 201
