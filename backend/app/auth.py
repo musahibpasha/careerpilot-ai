@@ -4,7 +4,7 @@ import json
 from functools import lru_cache
 
 import firebase_admin
-from fastapi import Header, HTTPException
+from fastapi import Depends, Header, HTTPException
 from firebase_admin import auth, credentials
 from firebase_admin.exceptions import FirebaseError
 
@@ -36,7 +36,9 @@ def _firebase_app():
         ) from exc
 
 
-def get_current_user_id(authorization: str | None = Header(default=None)) -> str:
+def get_current_user_claims(
+    authorization: str | None = Header(default=None),
+) -> dict:
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Sign in to continue.")
 
@@ -62,4 +64,8 @@ def get_current_user_id(authorization: str | None = Header(default=None)) -> str
             status_code=403,
             detail="Verify your email address before using CareerPilot.",
         )
-    return user_id
+    return claims
+
+
+def get_current_user_id(authorization: str | None = Header(default=None)) -> str:
+    return get_current_user_claims(authorization)["uid"]

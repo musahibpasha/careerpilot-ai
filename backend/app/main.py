@@ -14,6 +14,8 @@ import httpx
 import reportlab
 from bson import Binary, ObjectId
 from bson.errors import InvalidId
+from firebase_admin import auth as firebase_auth
+from firebase_admin.exceptions import FirebaseError
 from fastapi import (
     Depends,
     FastAPI,
@@ -41,7 +43,7 @@ from starlette.datastructures import Headers
 from xml.sax.saxutils import escape
 
 from app import jobicy, schemas
-from app.auth import get_current_user_id
+from app.auth import _firebase_app, get_current_user_claims, get_current_user_id
 from app.config import settings
 from app.database import ensure_indexes, get_base_db, get_db
 from app.assistant_urls import UrlRejected, check_fill_url
@@ -214,6 +216,41 @@ def _mark_applied_duplicate_jobs(
                 listing["applied_application_id"] = str(application["_id"])
                 listing["applied_at"] = application.get("applied_at")
                 break
+
+
+def _require_super_admin(
+    claims: dict = Depends(get_current_user_claims),
+) -> dict:
+    allowed_emails = settings.super_admin_email_list
+    email = str(claims.get("email") or "").strip().casefold()
+    if not allowed_emails:
+        raise HTTPException(
+            status_code=503,
+            detail="Super-admin access is not configured on the backend.",
+        )
+    if email not in allowed_emails:
+        raise HTTPException(status_code=403, detail="Super-admin access is required.")
+    return claims
+
+
+def _recruiter_workspace_summary(db: Database, uid: str) -> dict:
+    return {
+        "candidates": db.candidates.count_documents({"owner_uid": uid}),
+        "jobs": db.jobs.count_documents({"owner_uid": uid}),
+        "applications": db.applications.count_documents({"owner_uid": uid}),
+        "resumes": db.resumes.count_documents({"owner_uid": uid}),
+    }
+
+
+def _recruiter_out(record: dict, db: Database) -> dict:
+    return {
+        "uid": record["uid"],
+        "display_name": record["display_name"],
+        "email": record["email"],
+        "created_at": record["created_at"],
+        "created_by_email": record["created_by_email"],
+        "workspace": _recruiter_workspace_summary(db, record["uid"]),
+    }
 
 
 # ---------------------------------------------------------
@@ -3088,6 +3125,100 @@ def delete_resume(
             db.resumes.update_one({"_id": oldest["_id"]}, {"$set": {"is_active": True}})
 
     return Response(status_code=204)
+
+
+@app.get("/api/admin/session")
+def admin_session(
+    claims: dict = Depends(_require_super_admin),
+):
+    return {
+        "role": "super_admin",
+        "email": str(claims.get("email") or "").strip().casefold(),
+    }
+
+
+@app.get(
+    "/api/admin/recruiters",
+    response_model=schemas.RecruiterListResponse,
+)
+def list_recruiters(
+    _claims: dict = Depends(_require_super_admin),
+    db: Database = Depends(get_base_db),
+):
+    records = list(db.recruiters.find({}).sort("created_at", -1))
+    return {"items": [_recruiter_out(record, db) for record in records]}
+
+
+@app.post(
+    "/api/admin/recruiters",
+    response_model=schemas.RecruiterRead,
+    status_code=201,
+)
+def create_recruiter(
+    payload: schemas.RecruiterCreate,
+    claims: dict = Depends(_require_super_admin),
+    db: Database = Depends(get_base_db),
+):
+    if db.recruiters.find_one({"email": payload.email}, {"_id": 1}):
+        raise HTTPException(status_code=409, detail="A recruiter with this email already exists.")
+
+    try:
+        firebase_user = firebase_auth.create_user(
+            email=payload.email,
+            display_name=payload.display_name,
+            email_verified=False,
+            app=_firebase_app(),
+        )
+    except firebase_auth.EmailAlreadyExistsError:
+        raise HTTPException(
+            status_code=409,
+            detail="An account with this email already exists in Firebase.",
+        ) from None
+    except FirebaseError:
+        logger.exception("Could not create recruiter Firebase account.")
+        raise HTTPException(
+            status_code=502,
+            detail="Could not create the recruiter account with the identity provider.",
+        ) from None
+
+    record = {
+        "uid": firebase_user.uid,
+        "display_name": payload.display_name,
+        "email": payload.email,
+        "created_at": now(),
+        "created_by_email": str(claims.get("email") or "").strip().casefold(),
+    }
+    try:
+        db.recruiters.insert_one(record)
+    except DuplicateKeyError:
+        logger.error(
+            "Recruiter metadata uniqueness conflict after Firebase account creation uid=%s",
+            firebase_user.uid,
+        )
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "The identity account was created, but recruiter registration conflicted. "
+                "Contact support before retrying."
+            ),
+        ) from None
+
+    return _recruiter_out(record, db)
+
+
+@app.get(
+    "/api/admin/recruiters/{uid}",
+    response_model=schemas.RecruiterRead,
+)
+def get_recruiter(
+    uid: str,
+    _claims: dict = Depends(_require_super_admin),
+    db: Database = Depends(get_base_db),
+):
+    record = db.recruiters.find_one({"uid": uid})
+    if record is None:
+        raise HTTPException(status_code=404, detail="Recruiter not found.")
+    return _recruiter_out(record, db)
 
 
 def candidate_out(doc: dict, db: Database) -> dict:

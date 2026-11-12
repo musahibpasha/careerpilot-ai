@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     vercel: bool = False
     firebase_project_id: str = ""
     firebase_service_account_json: str = ""
+    super_admin_emails: str = ""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -47,6 +48,14 @@ class Settings(BaseSettings):
             for origin in self.cors_origins.split(",")
             if origin.strip()
         ]
+
+    @property
+    def super_admin_email_list(self) -> set[str]:
+        return {
+            email.strip().casefold()
+            for email in self.super_admin_emails.split(",")
+            if email.strip()
+        }
 
 
 settings = Settings()

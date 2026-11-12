@@ -220,3 +220,5 @@ def ensure_indexes(db: Database) -> None:
         [("owner_uid", 1), ("company_root", 1), ("updated_at", -1)],
         name="ix_job_duplicate_company",
     )
+    db.recruiters.create_index("uid", unique=True, name="uq_recruiter_uid")
+    db.recruiters.create_index("email", unique=True, name="uq_recruiter_email")

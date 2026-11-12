@@ -21,6 +21,43 @@ class JobSourceReference(BaseModel):
     repost_dates: list[datetime] = Field(default_factory=list)
 
 
+class RecruiterCreate(BaseModel):
+    display_name: str = Field(min_length=1, max_length=120)
+    email: str = Field(min_length=3, max_length=254)
+
+    @field_validator("display_name", "email")
+    @classmethod
+    def _strip_text(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("email")
+    @classmethod
+    def _validate_email(cls, value: str) -> str:
+        if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value):
+            raise ValueError("Enter a valid email address.")
+        return value.casefold()
+
+
+class RecruiterWorkspaceSummary(BaseModel):
+    candidates: int = 0
+    jobs: int = 0
+    applications: int = 0
+    resumes: int = 0
+
+
+class RecruiterRead(BaseModel):
+    uid: str
+    display_name: str
+    email: str
+    created_at: datetime
+    created_by_email: str
+    workspace: RecruiterWorkspaceSummary
+
+
+class RecruiterListResponse(BaseModel):
+    items: list[RecruiterRead] = Field(default_factory=list)
+
+
 DuplicateStatus = Literal[
     "new", "known", "reposted", "cross_board_duplicate", "potential_duplicate"
 ]

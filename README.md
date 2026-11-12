@@ -220,6 +220,17 @@ Set these backend environment variables in the Vercel project:
 - `OPENROUTER_API_KEY` — optional; required for AI-generated drafts.
 - `FIREBASE_PROJECT_ID` — Firebase project ID used by the Admin SDK.
 - `FIREBASE_SERVICE_ACCOUNT_JSON` — private service-account JSON, stored as a backend-only secret.
+- `SUPER_ADMIN_EMAILS` — comma-separated allowlist of verified Firebase email addresses allowed to administer recruiter accounts.
+
+The configured super-admin account must first be created in Firebase Authentication.
+After signing in with that email, the **Recruiters** workspace becomes available.
+Super admins can create recruiter accounts, view the recruiter list and workspace
+record counts, and send or resend a Firebase password-setup email. Recruiters set
+their own passwords; passwords are never entered or displayed by the admin UI.
+Recruiter candidate, resume, job, and application records remain isolated by
+Firebase UID. The admin view reports counts only and does not expose workspace
+records. There are intentionally no recruiter delete, disable, suspend, or
+deactivation actions.
 
 Set `VITE_API_URL` in the frontend project to the backend's deployed origin
 (for example `https://your-api.vercel.app`) and redeploy the frontend. Never

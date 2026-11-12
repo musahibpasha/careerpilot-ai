@@ -3,6 +3,7 @@ import ApplicationAssistant, { type AssistantMaterials } from "./ApplicationAssi
 import ApplyWorkflow from "./ApplyWorkflow";
 import BenchCandidates from "./BenchCandidates";
 import { apiFetch as fetch } from "./api";
+import RecruiterAdmin from "./RecruiterAdmin";
 import {
   Activity,
   ArrowUpRight,
@@ -125,7 +126,7 @@ function saveSetting(key: string, value: string) {
   }
 }
 
-type Page = "dashboard" | "bench" | "jobs" | "saved" | "applications" | "analytics" | "copilot";
+type Page = "dashboard" | "bench" | "jobs" | "saved" | "applications" | "analytics" | "copilot" | "recruiters";
 type JobSearchView = "recommended" | "searching" | "results" | "empty" | "error";
 
 const PAGE_HASH: Record<Page, string> = {
@@ -136,6 +137,7 @@ const PAGE_HASH: Record<Page, string> = {
   applications: "#/applications",
   analytics: "#/analytics",
   copilot: "#/copilot",
+  recruiters: "#/recruiters",
 };
 
 // Simple page switching with the URL hash, so refresh and the browser Back
@@ -148,6 +150,7 @@ function pageFromHash(): Page {
   if (h.startsWith("#/applications")) return "applications";
   if (h.startsWith("#/analytics")) return "analytics";
   if (h.startsWith("#/copilot")) return "copilot";
+  if (h.startsWith("#/recruiters")) return "recruiters";
   return "dashboard";
 }
 
@@ -1328,6 +1331,9 @@ function App({
   const [jobs, setJobs] = useState<Job[]>([]);
   const [savedJobs, setSavedJobs] = useState<Job[]>([]);
   const [applications, setApplications] = useState<Application[]>([]);
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
+  const [adminAccessChecked, setAdminAccessChecked] = useState(false);
+  const [adminAccessError, setAdminAccessError] = useState("");
   const [metricLoadErrors, setMetricLoadErrors] = useState({
     candidates: "",
     savedJobs: "",
@@ -2156,6 +2162,37 @@ function App({
 
   useEffect(() => {
     void load(true);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    void fetch(`${API}/api/admin/session`)
+      .then(async (response) => {
+        const data = await response.json().catch(() => null);
+        if (!active) return;
+        if (response.ok && data?.role === "super_admin") {
+          setIsSuperAdmin(true);
+          setAdminAccessError("");
+        } else {
+          setIsSuperAdmin(false);
+          if (response.status !== 403) {
+            setAdminAccessError(errorText(data, "Could not verify super-admin access."));
+          }
+        }
+      })
+      .catch((reason: unknown) => {
+        if (!active) return;
+        setIsSuperAdmin(false);
+        setAdminAccessError(
+          reason instanceof Error ? reason.message : "Could not verify super-admin access.",
+        );
+      })
+      .finally(() => {
+        if (active) setAdminAccessChecked(true);
+      });
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -3205,6 +3242,11 @@ function App({
       eyebrow: "AI COPILOT",
       title: "ThoughtLabs CoPilot Copilot",
       sub: "Quick answers about your matches, gaps and approvals.",
+    },
+    recruiters: {
+      eyebrow: "SUPER ADMIN",
+      title: "Recruiter workspace",
+      sub: "Create recruiter accounts and view workspace summaries.",
     },
   };
 
@@ -4608,6 +4650,14 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
     { key: "applications", label: "Applications", icon: <Kanban size={18} />, page: "applications", count: appliedCount },
     { key: "analytics", label: "Analytics", icon: <Activity size={18} />, page: "analytics" },
     { key: "copilot", label: "Copilot", icon: <Bot size={18} />, page: "copilot" },
+    ...(isSuperAdmin
+      ? [{
+          key: "recruiters",
+          label: "Recruiters",
+          icon: <ShieldCheck size={18} />,
+          page: "recruiters" as Page,
+        }]
+      : []),
     { key: "settings", label: "Settings", icon: <Settings size={18} />, onClick: openPreferences },
   ];
 
@@ -4762,6 +4812,19 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
         )}
 
         {page === "bench" && <BenchCandidates />}
+
+        {page === "recruiters" && (
+          !adminAccessChecked ? (
+            <section className="panel"><p>Checking administrator access…</p></section>
+          ) : isSuperAdmin ? (
+            <RecruiterAdmin />
+          ) : (
+            <section className="panel">
+              <h2>Administrator access required</h2>
+              <p>{adminAccessError || "This page is available only to the configured super admin."}</p>
+            </section>
+          )
+        )}
 
         {page === "dashboard" && (
           <div className="dashboard-page page-view">
