@@ -1393,6 +1393,7 @@ async def recommended_jobs(
         unique_jobs.values(),
         key=lambda listing: -listing["match_score"],
     )[:6]
+    _mark_applied_duplicate_jobs(ranked_jobs, candidate["_id"], db)
     return {
         "candidate_id": str(candidate["_id"]),
         "results": ranked_jobs,
