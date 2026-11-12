@@ -715,10 +715,7 @@ export default function BenchCandidates() {
           ]);
           setFormResumeId(savedResume.id);
           setResumeScanMessage("Resume scanned and attached. The candidate's resume status is updated.");
-          await Promise.all([
-            loadCandidates(false),
-            loadDetail(editingCandidate.id),
-          ]);
+          void loadCandidates(false);
         } catch (error) {
           if (requestId === resumeScanRequestId.current) {
             setResumeScanError(
