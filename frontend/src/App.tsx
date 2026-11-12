@@ -20,6 +20,7 @@ import {
   List,
   Lock,
   LogOut,
+  Mail,
   MapPin,
   Menu,
   Plus,
@@ -3519,10 +3520,12 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
         <div className="job-actions">
           <button
             type="button"
-            className="secondary-button analyze-button"
+            className="secondary-button analyze-button job-icon-action"
+            aria-label={`Match analysis for ${job.title}`}
+            title="Match analysis"
             onClick={() => setAnalysisJob({ ...job, id, is_saved: false })}
           >
-            <Sparkles size={14} /> Match Analysis
+            <Sparkles size={16} />
           </button>
           {alreadyApplied ? (
             <>
@@ -3553,15 +3556,24 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
           )}
           <button
             type="button"
-            className="ghost-button"
+            className="ghost-button job-icon-action"
+            aria-label={`Mark ${job.title} as not interested`}
+            title="Not interested"
             onClick={() => setRecommendedJobs((current) =>
               current.filter((item) => item.source !== job.source || item.source_job_id !== job.source_job_id),
             )}
           >
-            <EyeOff size={14} /> Not interested
+            <EyeOff size={16} />
           </button>
-          <a href={job.url} target="_blank" rel="noreferrer" className="secondary-button">
-            Open Original Listing <ArrowUpRight size={14} />
+          <a
+            href={job.url}
+            target="_blank"
+            rel="noreferrer"
+            className="secondary-button job-icon-action"
+            aria-label={`Open original posting for ${job.title}`}
+            title="Open original posting"
+          >
+            <ArrowUpRight size={17} />
           </a>
         </div>
       </article>
@@ -4194,18 +4206,28 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
             </button>
           )}
           {page === "saved" && (
-            <button type="button" className="ghost-button" onClick={() => void removeSavedJob(job)}>
-              <Trash2 size={14} /> Remove saved
+            <button
+              type="button"
+              className="ghost-button job-icon-action"
+              aria-label={`Remove ${job.title} from saved jobs`}
+              title="Remove saved job"
+              onClick={() => void removeSavedJob(job)}
+            >
+              <Trash2 size={15} />
+              <span className="sr-only">Remove saved</span>
             </button>
           )}
           <div className="row">
             <button
               type="button"
-              className="ghost-button"
+              className={`ghost-button${page === "saved" ? " job-icon-action" : ""}`}
               aria-expanded={dismissingId === job.id}
+              aria-label={page === "saved" ? `Mark ${job.title} as not interested` : undefined}
+              title={page === "saved" ? "Not interested" : undefined}
               onClick={() => setDismissingId(dismissingId === job.id ? null : job.id)}
             >
-              <EyeOff size={14} /> Not interested
+              <EyeOff size={15} />
+              <span className={page === "saved" ? "sr-only" : undefined}>Not interested</span>
             </button>
             {job.url && (
               <a
@@ -4214,6 +4236,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                 rel="noreferrer"
                 className="icon-link"
                 aria-label="Open job posting"
+                title="Open job posting"
               >
                 <ArrowUpRight size={17} />
               </a>
@@ -5022,8 +5045,10 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                           </div>
                           <div className="job-actions">
                             <button
-                              className="secondary-button analyze-button"
+                              className="secondary-button analyze-button job-icon-action"
                               type="button"
+                              aria-label={`Match analysis for ${job.title}`}
+                              title="Match analysis"
                               onClick={() => {
                                 const savedJob = jobs.find(
                                   (item) => item.source === job.source &&
@@ -5036,7 +5061,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                                 });
                               }}
                             >
-                              <Sparkles size={14} /> Match analysis
+                              <Sparkles size={16} />
                             </button>
                             {!alreadyApplied && (
                               <button
@@ -5069,23 +5094,37 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                                 Apply
                               </button>
                             )}
-                            <a href={job.url} target="_blank" rel="noreferrer" className="secondary-button">
-                              Original posting <ArrowUpRight size={14} />
+                            <a
+                              href={job.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="secondary-button job-icon-action"
+                              aria-label={`Open original posting for ${job.title}`}
+                              title="Open original posting"
+                            >
+                              <ArrowUpRight size={17} />
                             </a>
                             {recruiterEmail && (
-                              <a href={`mailto:${recruiterEmail}`} className="secondary-button">
-                                Contact Recruiter ({recruiterEmail})
+                              <a
+                                href={`mailto:${recruiterEmail}`}
+                                className="secondary-button job-icon-action"
+                                aria-label={`Contact recruiter at ${recruiterEmail}`}
+                                title={`Contact recruiter at ${recruiterEmail}`}
+                              >
+                                <Mail size={16} />
                               </a>
                             )}
                             <button
                               type="button"
-                              className="ghost-button"
+                              className="ghost-button job-icon-action"
+                              aria-label={`Mark ${job.title} as not interested`}
+                              title="Not interested"
                               onClick={() => {
                                 setDismissedDiscoveryIds((current) => new Set(current).add(`${job.source}:${job.source_job_id}`));
                                 setDiscoveryMessage("Listing hidden from these search results.");
                               }}
                             >
-                              <EyeOff size={14} /> Not interested
+                              <EyeOff size={16} />
                             </button>
                           </div>
                         </article>

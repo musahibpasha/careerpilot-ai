@@ -16,6 +16,7 @@ import {
   RefreshCw,
   Search,
   Sparkles,
+  Trash2,
   UserRound,
   X,
 } from "lucide-react";
@@ -942,6 +943,25 @@ export default function BenchCandidates() {
     }
   }
 
+  async function deleteResume(resume: CandidateResume) {
+    if (!detail) return;
+    if (!window.confirm(`Permanently delete ${resume.filename}? This cannot be undone.`)) return;
+    setResumeBusy(true);
+    setResumeError("");
+    try {
+      await request(`/api/resumes/${resume.id}`, { method: "DELETE" });
+      await Promise.all([
+        loadDetail(detail.id),
+        loadCandidates(false),
+        loadUnassignedResumes(),
+      ]);
+    } catch (error) {
+      setResumeError(error instanceof Error ? error.message : "Could not delete resume.");
+    } finally {
+      setResumeBusy(false);
+    }
+  }
+
   async function downloadResume(id: string, filename: string, open = false) {
     setResumeError("");
     const newWindow = open ? window.open("about:blank", "_blank") : null;
@@ -1347,6 +1367,16 @@ export default function BenchCandidates() {
                                 <span className="bench-resume-icon"><FileText size={18} /></span>
                                 <div><strong>{selectedResume.filename}</strong><small>{(selectedResume.size / (1024 * 1024)).toFixed(2)} MB · {selectedResume.filename.toLocaleLowerCase().endsWith(".docx") ? "DOCX document" : `${selectedResume.page_count} pages`} · Uploaded {displayDate(selectedResume.uploaded_at)} · Extraction {selectedResume.extracted_at ? "complete" : "not run"}</small></div>
                                 <button type="button" className="secondary-button" onClick={() => void downloadResume(selectedResume.id, selectedResume.filename)}><Download size={14} /> Download</button>
+                                <button
+                                  type="button"
+                                  className="bench-delete-resume"
+                                  aria-label={`Delete ${selectedResume.filename}`}
+                                  title="Delete resume"
+                                  disabled={resumeBusy}
+                                  onClick={() => void deleteResume(selectedResume)}
+                                >
+                                  <Trash2 size={15} />
+                                </button>
                               </div>
                               <div className="bench-resume-actions">
                                 {!selectedResume.filename.toLocaleLowerCase().endsWith(".docx") && <button type="button" className="secondary-button" onClick={() => void downloadResume(selectedResume.id, selectedResume.filename, true)}>View full resume</button>}

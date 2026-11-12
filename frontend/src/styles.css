@@ -1349,6 +1349,21 @@ footer { margin-top: 32px; font-size: 12px; color: var(--faint); }
   padding-top: 12px;
   border-top: 1px solid rgba(205, 176, 218, 0.14);
 }
+.job-actions .job-icon-action {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--muted);
+  background: var(--surface);
+}
+.job-actions .job-icon-action:hover {
+  color: var(--ink);
+  border-color: var(--line-strong);
+  background: var(--surface-2);
+}
 .application-filters {
   display: grid;
   grid-template-columns: minmax(180px, 2fr) repeat(3, minmax(140px, 1fr));
@@ -1451,6 +1466,7 @@ footer { margin-top: 32px; font-size: 12px; color: var(--faint); }
   padding: 7px 9px;
   font-size: 11px;
 }
+.recommendation-card .job-actions > .job-icon-action { padding: 0; }
 .applied-indicator {
   display: inline-flex;
   width: fit-content;
@@ -2505,6 +2521,9 @@ footer { margin-top: 32px; font-size: 12px; color: var(--faint); }
 .bench-resume-card > div { display: grid; flex: 1; min-width: 0; gap: 3px; }
 .bench-resume-card strong { overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .bench-resume-card small { color: var(--muted); font-size: 9px; }
+.bench-delete-resume { display: grid; width: 32px; height: 32px; flex: none; place-items: center; border: 1px solid var(--line); border-radius: 8px; color: var(--bad); background: var(--surface); }
+.bench-delete-resume:hover:not(:disabled) { border-color: var(--bad); background: var(--bad-50); }
+.bench-delete-resume:disabled { opacity: .55; cursor: not-allowed; }
 .bench-resume-card .secondary-button,
 .bench-resume-actions .secondary-button { min-height: 30px; padding: 5px 8px; font-size: 9px; }
 .bench-resume-actions { justify-content: flex-start; flex-wrap: wrap; }

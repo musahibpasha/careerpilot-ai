@@ -168,6 +168,41 @@ def test_parse_resume_success_uses_configured_model_and_chat_endpoint(
     assert "mock-test-key" not in caplog.text
 
 
+def test_parse_resume_prompt_limits_large_extraction_output(monkeypatch):
+    captured_prompt = ""
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_value, traceback):
+            return None
+
+        async def post(self, url, headers, json):
+            nonlocal captured_prompt
+            captured_prompt = json["messages"][0]["content"]
+            return FakeResponse(
+                200,
+                {"choices": [{"message": {"content": '{"full_name": "Jane"}'}}]},
+            )
+
+    monkeypatch.setattr(main.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(main.settings, "openrouter_api_key", "mock-test-key")
+    monkeypatch.setattr(main.settings, "openrouter_model", "mock/test-model")
+    monkeypatch.setattr(main.settings, "openrouter_fallback_models", "")
+
+    response = upload_resume()
+
+    assert response.status_code == 200
+    assert "at most 8 work experience entries" in captured_prompt
+    assert "3 responsibilities, 3 achievements, and 12 technologies" in captured_prompt
+    assert "Limit each" in captured_prompt
+    assert "description or summary to 300 characters" in captured_prompt
+
+
 def test_parse_resume_supports_docx_using_existing_extractor(monkeypatch):
     mock_openrouter(
         monkeypatch,
