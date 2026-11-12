@@ -28,6 +28,21 @@ def test_database_indexes_are_idempotent_with_recruiter_email_collation():
     assert db.recruiters.index_information()["uq_recruiter_email"]["unique"] is True
 
 
+def test_database_indexes_keep_legacy_case_sensitive_recruiter_email_index():
+    db = mongomock.MongoClient().legacy_indexes
+    db.recruiters.create_index(
+        "email",
+        unique=True,
+        name="uq_recruiter_email",
+    )
+
+    ensure_indexes(db)
+
+    email_index = db.recruiters.index_information()["uq_recruiter_email"]
+    assert email_index["unique"] is True
+    assert "collation" not in email_index
+
+
 def test_super_admin_email_allowlist_is_case_insensitive(monkeypatch):
     monkeypatch.setattr(main.settings, "super_admin_emails", "admin@example.com")
 

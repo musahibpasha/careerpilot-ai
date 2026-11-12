@@ -221,9 +221,26 @@ def ensure_indexes(db: Database) -> None:
         name="ix_job_duplicate_company",
     )
     db.recruiters.create_index("uid", unique=True, name="uq_recruiter_uid")
-    db.recruiters.create_index(
-        "email",
-        unique=True,
-        name="uq_recruiter_email",
-        collation={"locale": "en", "strength": 2},
+    recruiter_email_index = db.recruiters.index_information().get(
+        "uq_recruiter_email"
     )
+    if recruiter_email_index is None:
+        db.recruiters.create_index(
+            "email",
+            unique=True,
+            name="uq_recruiter_email",
+            collation={"locale": "en", "strength": 2},
+        )
+    elif (
+        recruiter_email_index.get("key") != [("email", 1)]
+        or not recruiter_email_index.get("unique")
+    ):
+        raise RuntimeError(
+            "The existing uq_recruiter_email index does not match the required "
+            "unique email index."
+        )
+    elif "collation" not in recruiter_email_index:
+        logger.warning(
+            "The existing uq_recruiter_email index is case-sensitive; retaining "
+            "it to avoid a destructive index migration during startup."
+        )
