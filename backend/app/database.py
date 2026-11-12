@@ -120,6 +120,7 @@ class UserScopedDatabase:
         "preferences",
         "resumes",
         "candidates",
+        "job_duplicate_groups",
     }
 
     def __init__(self, database: Database, user_id: str):
@@ -209,4 +210,13 @@ def ensure_indexes(db: Database) -> None:
         unique=True,
         name="uq_candidate_imported_profile",
         partialFilterExpression={"source_profile_id": {"$type": "objectId"}},
+    )
+    db.job_duplicate_groups.create_index(
+        [("owner_uid", 1), ("source_identities", 1)],
+        unique=True,
+        name="uq_job_duplicate_source_identity",
+    )
+    db.job_duplicate_groups.create_index(
+        [("owner_uid", 1), ("company_root", 1), ("updated_at", -1)],
+        name="ix_job_duplicate_company",
     )

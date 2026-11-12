@@ -33,7 +33,7 @@ def test_scan_queries_and_saves_only_supported_job_boards(monkeypatch):
         for _, what, where in searched_sites
     )
     assert result == {
-        "saved": 4,
+        "saved": len(SUPPORTED_SITES),
         "skipped": 0,
         "sources": {site: 1 for site in SUPPORTED_SITES},
     }

@@ -26,7 +26,7 @@ def _is_duplicate(db: Database, job: dict) -> bool:
 
 
 def scan_and_save(db: Database) -> dict:
-    """Search the four supported boards and save new matching listings."""
+    """Search the three supported boards and save new matching listings."""
     now = datetime.now(timezone.utc)
     profile = db.profiles.find_one({}) or {}
     prefs = db.preferences.find_one({}) or {}

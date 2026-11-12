@@ -48,6 +48,7 @@ from app.assistant_urls import UrlRejected, check_fill_url
 from app.job_scan import scan_and_save
 from app.job_fetch import JobFetchError, fetch_job_text, is_search_results_url
 from app.job_import import MIN_IMPORT_CHARS, extract_job
+from app.job_dedup import compare_listings, track_and_deduplicate
 from app.jobspy_search import JobSpyError, SUPPORTED_SITES, search_jobspy_jobs
 from app.matching import build_application_plan, score_job
 from app.preferences import clean_preferences, preferences_problems
@@ -152,6 +153,69 @@ def to_oid(value: str, what: str) -> ObjectId:
         )
 
 
+def _mark_applied_duplicate_jobs(
+    listings: list[dict],
+    candidate_id: ObjectId,
+    db: Database,
+) -> None:
+    applications = list(db.applications.find(
+        {
+            "candidate_id": candidate_id,
+            "$or": [
+                {"apply_status": {"$exists": True, "$ne": "not_applied"}},
+                {"apply_status_history.to_status": "applied"},
+                {"applied_at": {"$ne": None}},
+            ],
+        },
+        {"_id": 1, "job_id": 1, "applied_at": 1},
+    ))
+    if not applications:
+        return
+
+    saved_jobs = {
+        job["_id"]: job
+        for job in db.jobs.find(
+            {"_id": {"$in": [application["job_id"] for application in applications]}}
+        )
+    }
+    applied_entries = [
+        (application, saved_jobs[application["job_id"]])
+        for application in applications
+        if application.get("job_id") in saved_jobs
+    ]
+
+    for listing in listings:
+        listing_sources = {
+            (item.get("source"), str(item.get("source_job_id") or ""))
+            for item in listing.get("source_listings", [])
+        }
+        listing_sources.add((
+            listing.get("source"),
+            str(listing.get("source_job_id") or ""),
+        ))
+        for application, saved_job in applied_entries:
+            saved_sources = {
+                (item.get("source"), str(item.get("source_job_id") or ""))
+                for item in saved_job.get("source_listings", [])
+            }
+            saved_sources.add((
+                saved_job.get("source"),
+                str(saved_job.get("source_job_id") or ""),
+            ))
+            same_group = bool(
+                listing.get("duplicate_group_id")
+                and listing.get("duplicate_group_id")
+                == saved_job.get("duplicate_group_id")
+            )
+            source_match = bool(listing_sources & saved_sources)
+            high_confidence_match = compare_listings(listing, saved_job)[0] == "high"
+            if same_group or source_match or high_confidence_match:
+                listing["already_applied"] = True
+                listing["applied_application_id"] = str(application["_id"])
+                listing["applied_at"] = application.get("applied_at")
+                break
+
+
 # ---------------------------------------------------------
 # Response helpers
 # ---------------------------------------------------------
@@ -173,6 +237,15 @@ def job_out(d: dict) -> dict:
         "nice_to_have_skills": d.get("nice_to_have_skills", []),
         "employment_types": d.get("employment_types", []),
         "published_at": d.get("published_at"),
+        "duplicate_group_id": d.get("duplicate_group_id"),
+        "duplicate_status": d.get("duplicate_status"),
+        "duplicate_confidence": d.get("duplicate_confidence"),
+        "potential_duplicate_of": d.get("potential_duplicate_of"),
+        "available_sources": d.get("available_sources", []),
+        "source_listings": d.get("source_listings", []),
+        "original_published_at": d.get("original_published_at"),
+        "latest_repost_at": d.get("latest_repost_at"),
+        "repost_count": d.get("repost_count", 0),
         "work_arrangement": d.get("work_arrangement", ""),
         "experience_level": d.get("experience_level", ""),
         "salary_min": d.get("salary_min"),
@@ -264,7 +337,7 @@ def health():
 
 @app.post("/api/scan")
 def trigger_scan(db: Database = Depends(get_db)):
-    """Scan the four supported job boards for new matching jobs.
+    """Scan the three supported job boards for new matching jobs.
 
     Safe to call on a schedule — duplicates are detected and skipped.
     Returns a count of newly saved and skipped listings.
@@ -977,7 +1050,7 @@ def discover_board_jobs(
     hours_old: int | None = Query(default=None, ge=1, le=720),
     db: Database = Depends(get_db),
 ):
-    """Search one public job board using JobSpy; results stay transient until saved."""
+    """Search a supported board and deduplicate listings against prior observations."""
     if site not in SUPPORTED_SITES:
         raise HTTPException(status_code=422, detail="Choose a supported job-search source.")
     if not what.strip():
@@ -992,7 +1065,7 @@ def discover_board_jobs(
             status_code=422,
             detail="Choose a salary currency when filtering by salary.",
         )
-    _, profile, preferences = _candidate_matching_data(
+    candidate, profile, preferences = _candidate_matching_data(
         candidate_id,
         db,
         resume_id=resume_id,
@@ -1017,6 +1090,14 @@ def discover_board_jobs(
         if english_only:
             search_options["english_only"] = True
         response = search_jobspy_jobs(**search_options)
+        response["results"] = track_and_deduplicate(
+            db, site, response["results"]
+        )
+        _mark_applied_duplicate_jobs(
+            response["results"],
+            candidate["_id"],
+            db,
+        )
         for job in response["results"]:
             job.update(score_fields(job, profile, preferences))
         if sort_by == "newest":
@@ -1276,7 +1357,8 @@ async def recommended_jobs(
     source_failures: list[str] = []
     successful_sources: set[str] = set()
     unique_jobs: dict[str, dict] = {}
-    seen_titles: set[str] = set()
+    board_listings = {site: [] for site in SUPPORTED_SITES}
+    other_listings: dict[str, dict] = {}
     for (label, source, _), response in zip(calls, responses):
         if isinstance(response, Exception):
             logger.warning("Recommendation source failed: %s: %s", label, response)
@@ -1287,21 +1369,25 @@ async def recommended_jobs(
             country = _recommendation_country(listing.get("location"))
             if country not in {"Belgium", "Germany"}:
                 continue
-            listing["source"] = source
-            listing.update(score_fields(listing, profile, target_preferences))
-            parsed_url = urlsplit(str(listing["url"]))
+            listing = {**listing, "source": source}
+            if source in board_listings:
+                board_listings[source].append(listing)
+                continue
+            parsed_url = urlsplit(str(listing.get("url") or ""))
             url_key = (
                 f"{(parsed_url.hostname or '').casefold()}"
-                f"{parsed_url.path.rstrip('/').casefold()}"
+                f"{parsed_url.path.rstrip('/').casefold()}?{parsed_url.query}"
             )
-            title_key = "|".join(
-                str(listing.get(field) or "").strip().casefold()
-                for field in ("title", "company", "location")
-            )
-            if url_key in unique_jobs or title_key in seen_titles:
-                continue
-            unique_jobs[url_key] = listing
-            seen_titles.add(title_key)
+            if url_key:
+                other_listings.setdefault(f"{source}:{url_key}", listing)
+
+    for site, listings in board_listings.items():
+        for listing in track_and_deduplicate(db, site, listings):
+            listing.update(score_fields(listing, profile, target_preferences))
+            unique_jobs[f"{site}:{listing['duplicate_group_id']}"] = listing
+    for key, listing in other_listings.items():
+        listing.update(score_fields(listing, profile, target_preferences))
+        unique_jobs[key] = listing
 
     ranked_jobs = sorted(
         unique_jobs.values(),
@@ -1342,7 +1428,6 @@ async def trending_jobs(db: Database = Depends(get_db)):
 
     source_labels = {
         "linkedin": "LinkedIn",
-        "naukri": "Naukri",
         "indeed": "Indeed",
         "glassdoor": "Glassdoor",
         "jobicy": "Jobicy",
@@ -1360,8 +1445,8 @@ async def trending_jobs(db: Database = Depends(get_db)):
 
     source_failures: list[str] = []
     successful_sources: set[str] = set()
-    unique_jobs: dict[str, dict] = {}
-    seen_titles: set[str] = set()
+    board_listings = {site: [] for site in SUPPORTED_SITES}
+    other_listings: dict[str, dict] = {}
     for (source, term, _), response in zip(calls, responses):
         label = f"{source_labels[source]} ({term or 'Belgium'})"
         if isinstance(response, Exception):
@@ -1380,19 +1465,22 @@ async def trending_jobs(db: Database = Depends(get_db)):
             ) != "Belgium":
                 continue
             listing = {**listing, "source": source}
+            if source in board_listings:
+                board_listings[source].append(listing)
+                continue
             parsed_url = urlsplit(str(listing.get("url") or ""))
             url_key = (
                 f"{(parsed_url.hostname or '').casefold()}"
-                f"{parsed_url.path.rstrip('/').casefold()}"
+                f"{parsed_url.path.rstrip('/').casefold()}?{parsed_url.query}"
             )
-            title_key = "|".join(
-                str(listing.get(field) or "").strip().casefold()
-                for field in ("title", "company", "location")
-            )
-            if not url_key or url_key in unique_jobs or title_key in seen_titles:
-                continue
-            unique_jobs[url_key] = listing
-            seen_titles.add(title_key)
+            if url_key:
+                other_listings.setdefault(f"{source}:{url_key}", listing)
+
+    unique_jobs = {}
+    for site, listings in board_listings.items():
+        for listing in track_and_deduplicate(db, site, listings):
+            unique_jobs[f"{site}:{listing['duplicate_group_id']}"] = listing
+    unique_jobs.update(other_listings)
 
     recent_jobs = sorted(
         unique_jobs.values(),
@@ -2265,6 +2353,17 @@ def create_job(
         "nice_to_have_skills": [x.strip() for x in payload.nice_to_have_skills if x.strip()],
         "employment_types": [x.strip()[:80] for x in payload.employment_types if x.strip()],
         "published_at": payload.published_at,
+        "duplicate_group_id": payload.duplicate_group_id,
+        "duplicate_status": payload.duplicate_status,
+        "duplicate_confidence": payload.duplicate_confidence,
+        "potential_duplicate_of": payload.potential_duplicate_of,
+        "available_sources": payload.available_sources,
+        "source_listings": [
+            item.model_dump(mode="json") for item in payload.source_listings
+        ],
+        "original_published_at": payload.original_published_at,
+        "latest_repost_at": payload.latest_repost_at,
+        "repost_count": payload.repost_count,
         "work_arrangement": payload.work_arrangement,
         "experience_level": payload.experience_level,
         "salary_min": payload.salary_min,

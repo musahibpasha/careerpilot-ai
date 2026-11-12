@@ -20,7 +20,6 @@ logger = logging.getLogger(__name__)
 
 SUPPORTED_SITES = (
     "linkedin",
-    "naukri",
     "indeed",
     "glassdoor",
 )
@@ -56,14 +55,12 @@ _SITE_DOMAINS = {
         "glassdoor.nl",
         "glassdoor.es",
     ),
-    "naukri": ("naukri.com",),
 }
 
 _SITE_LABELS = {
     "linkedin": "LinkedIn",
     "indeed": "Indeed",
     "glassdoor": "Glassdoor",
-    "naukri": "Naukri",
 }
 
 
@@ -405,10 +402,10 @@ def search_jobspy_jobs(
         "hours_old": hours_old,
         "fetch_description": any((
             job_type is not None and site == "linkedin",
-            english_only and site != "naukri",
-            experience_level is not None and site != "naukri",
+            english_only,
+            experience_level is not None,
             (salary_min is not None or salary_max is not None) and site == "linkedin",
-            work_arrangement in {"hybrid", "onsite"} and site != "naukri",
+            work_arrangement in {"hybrid", "onsite"},
         )),
     }
     if site == "indeed":

@@ -12,6 +12,20 @@ from pydantic import (
 )
 
 
+class JobSourceReference(BaseModel):
+    source: Literal["linkedin", "indeed", "glassdoor"]
+    source_job_id: str
+    title: str = ""
+    url: HttpUrl | None = None
+    published_at: datetime | None = None
+    repost_dates: list[datetime] = Field(default_factory=list)
+
+
+DuplicateStatus = Literal[
+    "new", "known", "reposted", "cross_board_duplicate", "potential_duplicate"
+]
+
+
 class JobCreate(BaseModel):
     candidate_id: str | None = None
     title: str = Field(min_length=1, max_length=250)
@@ -27,6 +41,17 @@ class JobCreate(BaseModel):
     nice_to_have_skills: list[str] = Field(default_factory=list, max_length=50)
     employment_types: list[str] = Field(default_factory=list, max_length=10)
     published_at: datetime | None = None
+    duplicate_group_id: str | None = None
+    duplicate_status: DuplicateStatus | None = None
+    duplicate_confidence: Literal["medium", "high"] | None = None
+    potential_duplicate_of: str | None = None
+    available_sources: list[Literal["linkedin", "indeed", "glassdoor"]] = Field(
+        default_factory=list
+    )
+    source_listings: list[JobSourceReference] = Field(default_factory=list)
+    original_published_at: datetime | None = None
+    latest_repost_at: datetime | None = None
+    repost_count: int = Field(default=0, ge=0)
     work_arrangement: Literal["", "remote", "hybrid", "onsite"] = ""
     experience_level: Literal["", "intern", "entry", "mid", "senior", "lead"] = ""
     salary_min: int | None = Field(default=None, ge=0, le=1_000_000_000)
@@ -73,6 +98,17 @@ class JobRead(BaseModel):
     nice_to_have_skills: list[str] = Field(default_factory=list)
     employment_types: list[str] = Field(default_factory=list)
     published_at: datetime | None = None
+    duplicate_group_id: str | None = None
+    duplicate_status: DuplicateStatus | None = None
+    duplicate_confidence: Literal["medium", "high"] | None = None
+    potential_duplicate_of: str | None = None
+    available_sources: list[Literal["linkedin", "indeed", "glassdoor"]] = Field(
+        default_factory=list
+    )
+    source_listings: list[JobSourceReference] = Field(default_factory=list)
+    original_published_at: datetime | None = None
+    latest_repost_at: datetime | None = None
+    repost_count: int = 0
     work_arrangement: str = ""
     experience_level: str = ""
     salary_min: int | None = None
@@ -159,6 +195,20 @@ class JobDiscoveryListing(BaseModel):
     nice_to_have_skills: list[str] = Field(default_factory=list)
     employment_types: list[str] = Field(default_factory=list)
     published_at: datetime | None = None
+    duplicate_group_id: str | None = None
+    duplicate_status: DuplicateStatus | None = None
+    duplicate_confidence: Literal["medium", "high"] | None = None
+    already_applied: bool = False
+    applied_application_id: str | None = None
+    applied_at: datetime | None = None
+    available_sources: list[Literal["linkedin", "indeed", "glassdoor"]] = Field(
+        default_factory=list
+    )
+    source_listings: list[JobSourceReference] = Field(default_factory=list)
+    original_published_at: datetime | None = None
+    latest_repost_at: datetime | None = None
+    repost_count: int = 0
+    potential_duplicate_of: str | None = None
     work_arrangement: str = ""
     experience_level: str = ""
     salary_min: int | None = None
@@ -174,7 +224,6 @@ class JobDiscoveryListing(BaseModel):
 class JobSpyDiscoveryResponse(BaseModel):
     source: Literal[
         "linkedin",
-        "naukri",
         "indeed",
         "glassdoor",
     ]
@@ -202,7 +251,7 @@ class JobRecommendationsResponse(BaseModel):
 
 
 class TrendingJob(BaseModel):
-    source: Literal["linkedin", "naukri", "indeed", "glassdoor", "jobicy"]
+    source: Literal["linkedin", "indeed", "glassdoor", "jobicy"]
     source_job_id: str
     title: str
     company: str
@@ -212,6 +261,17 @@ class TrendingJob(BaseModel):
     application_url: HttpUrl | None = None
     employment_types: list[str] = Field(default_factory=list)
     published_at: datetime | None = None
+    duplicate_group_id: str | None = None
+    duplicate_status: DuplicateStatus | None = None
+    duplicate_confidence: Literal["medium", "high"] | None = None
+    available_sources: list[Literal["linkedin", "indeed", "glassdoor"]] = Field(
+        default_factory=list
+    )
+    source_listings: list[JobSourceReference] = Field(default_factory=list)
+    original_published_at: datetime | None = None
+    latest_repost_at: datetime | None = None
+    repost_count: int = 0
+    potential_duplicate_of: str | None = None
     work_arrangement: str = ""
     salary_min: int | None = None
     salary_max: int | None = None

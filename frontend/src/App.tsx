@@ -178,6 +178,22 @@ export type Job = {
   nice_to_have_skills?: string[];
   employment_types?: string[];
   published_at?: string | null;
+  duplicate_group_id?: string | null;
+  duplicate_status?: "new" | "known" | "reposted" | "cross_board_duplicate" | "potential_duplicate" | null;
+  duplicate_confidence?: "medium" | "high" | null;
+  potential_duplicate_of?: string | null;
+  available_sources?: string[];
+  source_listings?: Array<{
+    source: string;
+    source_job_id: string;
+    title?: string;
+    url?: string | null;
+    published_at?: string | null;
+    repost_dates?: string[];
+  }>;
+  original_published_at?: string | null;
+  latest_repost_at?: string | null;
+  repost_count?: number;
   work_arrangement?: string;
   experience_level?: string;
   salary_min?: number | null;
@@ -255,6 +271,25 @@ type DiscoveredJob = {
   nice_to_have_skills: string[];
   employment_types: string[];
   published_at: string | null;
+  already_applied?: boolean;
+  applied_application_id?: string | null;
+  applied_at?: string | null;
+  duplicate_group_id?: string | null;
+  duplicate_status?: "new" | "known" | "reposted" | "cross_board_duplicate" | "potential_duplicate" | null;
+  duplicate_confidence?: "medium" | "high" | null;
+  available_sources?: string[];
+  source_listings?: Array<{
+    source: string;
+    source_job_id: string;
+    title?: string;
+    url?: string | null;
+    published_at?: string | null;
+    repost_dates?: string[];
+  }>;
+  original_published_at?: string | null;
+  latest_repost_at?: string | null;
+  repost_count?: number;
+  potential_duplicate_of?: string | null;
   work_arrangement: string;
   experience_level: string;
   salary_min: number | null;
@@ -283,11 +318,14 @@ type TrendingJob = Pick<
   | "salary_max"
   | "salary_currency"
   | "salary_period"
+  | "duplicate_status"
+  | "available_sources"
+  | "source_listings"
+  | "latest_repost_at"
 >;
 
 type JobSearchSource =
   | "linkedin"
-  | "naukri"
   | "indeed"
   | "glassdoor";
 
@@ -306,7 +344,6 @@ const TRENDING_SOURCE_LABELS: Record<string, string> = {
   linkedin: "LinkedIn",
   indeed: "Indeed",
   glassdoor: "Glassdoor",
-  naukri: "Naukri",
   jobicy: "Jobicy",
 };
 
@@ -1860,6 +1897,15 @@ function App({
           nice_to_have_skills: job.nice_to_have_skills,
           employment_types: job.employment_types,
           published_at: job.published_at,
+          duplicate_group_id: job.duplicate_group_id,
+          duplicate_status: job.duplicate_status,
+          duplicate_confidence: job.duplicate_confidence,
+          potential_duplicate_of: job.potential_duplicate_of,
+          available_sources: job.available_sources ?? [job.source],
+          source_listings: job.source_listings ?? [],
+          original_published_at: job.original_published_at,
+          latest_repost_at: job.latest_repost_at,
+          repost_count: job.repost_count ?? 0,
           work_arrangement: job.work_arrangement,
           experience_level: job.experience_level,
           salary_min: job.salary_min,
@@ -3483,7 +3529,10 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
 
   function renderRecommendationCard(job: DiscoveredJob) {
     const application = applicationForListing(job);
-    const alreadyApplied = Boolean(application && hasConfirmedApplication(application));
+    const alreadyApplied = Boolean(
+      (application && hasConfirmedApplication(application)) ||
+      job.already_applied,
+    );
     const id = `discovery:${job.source}:${job.source_job_id}`;
     const score = Math.round(job.match_score);
     const saved = jobs.some((existing) =>
@@ -3610,7 +3659,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
             <div className="dashboard-trending-kicker">LIVE FROM JOB BOARDS</div>
             <h2>Trending jobs in Belgium</h2>
             <p>
-              Fresh listings from LinkedIn, Indeed, Glassdoor, Naukri and Jobicy.
+              Fresh listings from LinkedIn, Indeed, Glassdoor and Jobicy.
               Ordered by posting date; popularity data is not provided by the boards.
             </p>
           </div>
@@ -3678,6 +3727,14 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                     {job.location && <span><MapPin size={13} />{job.location}</span>}
                     {job.work_arrangement && <span>{job.work_arrangement}</span>}
                     {job.employment_types.slice(0, 1).map((type) => <span key={type}>{type}</span>)}
+                    {job.duplicate_status === "new" && <span>New</span>}
+                    {job.duplicate_status === "reposted" && <span>Reposted</span>}
+                    {(job.available_sources?.length ?? 0) > 1 && (
+                      <span>Available on multiple job boards</span>
+                    )}
+                    {job.duplicate_status === "potential_duplicate" && (
+                      <span>Potential duplicate</span>
+                    )}
                   </div>
                   {(job.salary_min != null || job.salary_max != null) && (
                     <p className="trending-job-salary">
@@ -3691,6 +3748,20 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                   <a href={job.url} target="_blank" rel="noreferrer" className="trending-job-link">
                     View original listing <ArrowUpRight size={14} />
                   </a>
+                  {(job.source_listings?.length ?? 0) > 1 && (
+                    <div className="trending-job-details">
+                      {job.source_listings?.map((listing) => (
+                        <a
+                          key={`${listing.source}:${listing.source_job_id}`}
+                          href={listing.url ?? undefined}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          {TRENDING_SOURCE_LABELS[listing.source] ?? listing.source}
+                        </a>
+                      ))}
+                    </div>
+                  )}
                 </article>
               ))}
             </div>
@@ -5005,7 +5076,10 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                           existing.is_saved !== false,
                       );
                       const application = applicationForListing(job);
-                      const alreadyApplied = Boolean(application && hasConfirmedApplication(application));
+                      const alreadyApplied = Boolean(
+                        (application && hasConfirmedApplication(application)) ||
+                        job.already_applied,
+                      );
                       const publishedDate = job.published_at
                         ? new Date(job.published_at)
                         : null;
@@ -5044,10 +5118,38 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                               {publishedDate && !Number.isNaN(publishedDate.getTime()) && (
                                 <span>Posted {publishedDate.toLocaleDateString()}</span>
                               )}
+                              {job.duplicate_status === "new" && <span>New</span>}
+                              {job.duplicate_status === "reposted" && (
+                                <span>
+                                  Reposted
+                                  {job.latest_repost_at && !Number.isNaN(new Date(job.latest_repost_at).getTime())
+                                    ? ` ${new Date(job.latest_repost_at).toLocaleDateString()}`
+                                    : ""}
+                                </span>
+                              )}
+                              {(job.available_sources?.length ?? 0) > 1 && (
+                                <span>Available on multiple job boards</span>
+                              )}
+                              {job.duplicate_status === "potential_duplicate" && (
+                                <span>Potential duplicate</span>
+                              )}
                             </div>
                             {job.description && <p>{job.description.slice(0, 900)}</p>}
                             <small className="source-attribution">
-                              Source: {JOB_SEARCH_SOURCES.find((source) => source.id === job.source)?.label ?? job.source}
+                              Sources: {(job.source_listings?.length ?? 0) > 0
+                                ? job.source_listings?.map((listing, index) => (
+                                  <span key={`${listing.source}:${listing.source_job_id}`}>
+                                    {index > 0 ? ", " : ""}
+                                    {listing.url ? (
+                                      <a href={listing.url} target="_blank" rel="noopener noreferrer">
+                                        {JOB_SEARCH_SOURCES.find((source) => source.id === listing.source)?.label ?? listing.source}
+                                      </a>
+                                    ) : (
+                                      JOB_SEARCH_SOURCES.find((source) => source.id === listing.source)?.label ?? listing.source
+                                    )}
+                                  </span>
+                                ))
+                                : (JOB_SEARCH_SOURCES.find((source) => source.id === job.source)?.label ?? job.source)}
                             </small>
                           </div>
                           <div className="job-actions">

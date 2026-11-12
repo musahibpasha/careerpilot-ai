@@ -46,10 +46,9 @@ class FakeFrame:
         return self.rows
 
 
-def test_supported_sites_are_exactly_the_four_job_boards():
+def test_supported_sites_are_exactly_the_three_job_boards():
     assert jobspy_search.SUPPORTED_SITES == (
         "linkedin",
-        "naukri",
         "indeed",
         "glassdoor",
     )
@@ -195,7 +194,6 @@ def test_search_passes_easy_apply_filter_to_each_board(monkeypatch, site):
 def test_search_applies_selected_listing_filters_for_each_board(monkeypatch, site):
     domain_url = {
         "linkedin": "https://www.linkedin.com/jobs/view/",
-        "naukri": "https://www.naukri.com/job-listings-",
         "indeed": "https://www.indeed.com/viewjob?jk=",
         "glassdoor": "https://www.glassdoor.com/job-listing/",
     }[site]
@@ -246,7 +244,7 @@ def test_search_applies_selected_listing_filters_for_each_board(monkeypatch, sit
     assert [job["source_job_id"] for job in result["results"]] == ["match"]
     assert result["results"][0]["experience_level"] == "senior"
     assert result["results"][0]["work_arrangement"] == "hybrid"
-    assert calls[0]["fetch_description"] is (site != "naukri")
+    assert calls[0]["fetch_description"] is True
     assert calls[0]["results_wanted"] == 20
 
 
@@ -254,7 +252,6 @@ def test_search_applies_selected_listing_filters_for_each_board(monkeypatch, sit
 def test_remote_filter_rejects_non_remote_results_even_when_board_ignores_it(monkeypatch, site):
     domain_url = {
         "linkedin": "https://www.linkedin.com/jobs/view/",
-        "naukri": "https://www.naukri.com/job-listings-",
         "indeed": "https://www.indeed.com/viewjob?jk=",
         "glassdoor": "https://www.glassdoor.com/job-listing/",
     }[site]
@@ -372,7 +369,6 @@ def test_glassdoor_search_uses_the_selected_country(monkeypatch, where, country,
     ("site", "job_url"),
     [
         ("linkedin", "https://www.linkedin.com/jobs/view/123"),
-        ("naukri", "https://www.naukri.com/job-listings-123"),
         ("indeed", "https://www.indeed.com/viewjob?jk=123"),
         ("glassdoor", "https://www.glassdoor.com/job-listing/123"),
     ],
@@ -407,7 +403,6 @@ def test_search_returns_only_titles_matching_all_search_terms(monkeypatch, site,
     ("site", "job_url_prefix"),
     [
         ("linkedin", "https://www.linkedin.com/jobs/view/"),
-        ("naukri", "https://www.naukri.com/job-listings-"),
         ("indeed", "https://www.indeed.com/viewjob?jk="),
         ("glassdoor", "https://www.glassdoor.com/job-listing/"),
     ],
@@ -578,6 +573,14 @@ def test_board_discovery_endpoint_validates_source_and_forwards_filters(monkeypa
         "/api/jobs/discover/board",
         params={
             "site": "zip_recruiter",
+            "candidate_id": CANDIDATE_ID,
+            "what": "engineer",
+        },
+    ).status_code == 422
+    assert client.get(
+        "/api/jobs/discover/board",
+        params={
+            "site": "naukri",
             "candidate_id": CANDIDATE_ID,
             "what": "engineer",
         },
