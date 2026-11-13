@@ -209,7 +209,9 @@ The frontend and API are deployed as separate Vercel projects from this
 repository. Create the frontend project with `frontend` as its root directory
 and the backend project with `backend` as its root directory. The backend's
 `api/[...path].py` exports the FastAPI application for Vercel's Python runtime;
-the existing `backend/requirements.txt` is used for its dependencies.
+the existing `backend/requirements.txt` is used for its dependencies. This
+serverless dependency set excludes Playwright and Uvicorn's optional standard
+extras; browser-assisted filling is not supported on Vercel.
 
 Set these backend environment variables in the Vercel project:
 
@@ -343,7 +345,7 @@ On Windows PowerShell, activate the environment:
 Install dependencies:
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements-local.txt
 python -m playwright install chromium
 ```
 
