@@ -743,8 +743,12 @@ export default function BenchCandidates() {
 
   async function saveCandidate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setFormBusy(true);
     setFormError("");
+    if (!form.full_name.trim()) {
+      setFormError("Full name is required.");
+      return;
+    }
+    setFormBusy(true);
     const extractedProfile = resumeExtracted ?? editingCandidate;
     const payload = {
       ...(editingCandidate ?? {
@@ -1404,7 +1408,7 @@ export default function BenchCandidates() {
         <div className="bench-modal-backdrop" onMouseDown={(event) => {
           if (event.target === event.currentTarget && !formBusy && !resumeScanBusy && !formResumeReadBusy) setFormOpen(false);
         }}>
-          <form className="bench-candidate-form" role="dialog" aria-modal="true" aria-label={editingCandidate ? "Edit candidate" : "Add candidate"} onSubmit={(event) => void saveCandidate(event)}>
+          <form className="bench-candidate-form" role="dialog" aria-modal="true" aria-label={editingCandidate ? "Edit candidate" : "Add candidate"} noValidate onSubmit={(event) => void saveCandidate(event)}>
             <div className="bench-modal-heading">
               <div><span className="eyebrow">{editingCandidate ? "CANDIDATE PROFILE" : "NEW CANDIDATE"}</span><h2>{editingCandidate ? "Edit candidate" : "Add candidate"}</h2></div>
               <button type="button" className="bench-close" aria-label="Close form" disabled={formBusy || resumeScanBusy || formResumeReadBusy} onClick={() => setFormOpen(false)}><X size={18} /></button>

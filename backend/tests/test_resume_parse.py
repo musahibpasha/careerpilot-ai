@@ -27,6 +27,12 @@ def mock_authenticated_user():
     main.app.dependency_overrides.pop(get_current_user_id, None)
 
 
+@pytest.fixture(autouse=True)
+def use_ai_parser_mode(monkeypatch):
+    """These tests cover the OpenRouter path; local mode has its own tests below."""
+    monkeypatch.setattr(main.settings, "resume_parser_mode", "ai")
+
+
 def pdf_with_text() -> bytes:
     writer = PdfWriter()
     page = writer.add_blank_page(width=612, height=792)
@@ -617,3 +623,129 @@ def test_parse_resume_accepts_fenced_or_wrapped_json(monkeypatch, reply):
 
     assert response.status_code == 200
     assert response.json()["extracted"]["full_name"] == "Jane"
+
+def test_parse_resume_local_mode_needs_no_api_key_and_no_network(monkeypatch):
+    monkeypatch.setattr(main.settings, "resume_parser_mode", "local")
+    monkeypatch.setattr(main.settings, "openrouter_api_key", "")
+
+    class NoRequestClient:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("local mode must not call OpenRouter")
+
+    monkeypatch.setattr(main.httpx, "AsyncClient", NoRequestClient)
+
+    response = client.post(
+        "/api/resume/parse",
+        files={"file": ("resume.pdf", pdf_with_text(), "application/pdf")},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["requires_confirmation"] is True
+    assert body["extracted"]["full_name"] == "Jane Example"
+    assert body["extracted"]["skills"] == []
+
+
+def test_local_parser_extracts_core_fields():
+    from app.resume_local_parser import parse_resume_locally
+
+    text = """Jane Doe
+jane@example.com
++91 98765 43210
+github.com/janedoe
+
+Skills
+Python, React.js, SQL
+
+Work Experience
+Acme Corp - Software Engineer
+Jan 2022 - Present
+- Built APIs
+
+Education
+Some University
+B.Tech in Computer Science
+2018 - 2022
+"""
+    result = parse_resume_locally(text)
+    assert result["full_name"] == "Jane Doe"
+    assert result["email"] == "jane@example.com"
+    assert result["github"] == "github.com/janedoe"
+    assert "Python" in result["skills"]
+    job = result["work_experience"][0]
+    assert job["company"] == "Acme Corp"
+    assert job["title"] == "Software Engineer"
+    assert job["currently_working"] is True
+    assert result["education"][0]["graduation_year"] == "2022"
+
+
+def test_hybrid_mode_falls_back_to_local_parser_on_rate_limit(monkeypatch):
+    monkeypatch.setattr(main.settings, "resume_parser_mode", "hybrid")
+    mock_openrouter(
+        monkeypatch,
+        FakeResponse(429, {"error": {"message": "rate limited"}}),
+    )
+
+    response = upload_resume()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["parser"] == "local"
+    assert body["extracted"]["full_name"] == "Jane Example"
+
+
+def test_hybrid_mode_uses_ai_result_and_fills_contact_gaps(monkeypatch):
+    monkeypatch.setattr(main.settings, "resume_parser_mode", "hybrid")
+    mock_openrouter(
+        monkeypatch,
+        FakeResponse(
+            200,
+            {
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "content": json.dumps(
+                                {"full_name": "Jane Example", "skills": ["Python"]}
+                            )
+                        },
+                    }
+                ]
+            },
+        ),
+    )
+
+    response = upload_resume()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["parser"] == "ai"
+    assert body["extracted"]["skills"] == ["Python"]
+
+
+def test_hybrid_mode_without_api_key_uses_local_parser(monkeypatch):
+    monkeypatch.setattr(main.settings, "resume_parser_mode", "hybrid")
+    monkeypatch.setattr(main.settings, "openrouter_api_key", "")
+
+    response = upload_resume()
+
+    assert response.status_code == 200
+    assert response.json()["parser"] == "local"
+
+
+def test_hybrid_mode_falls_back_when_ai_is_too_slow(monkeypatch):
+    import asyncio
+
+    monkeypatch.setattr(main.settings, "resume_parser_mode", "hybrid")
+    monkeypatch.setattr(main.settings, "resume_ai_timeout_seconds", 0.05)
+    monkeypatch.setattr(main.settings, "openrouter_api_key", "mock-test-key")
+
+    async def slow_ai(_text):
+        await asyncio.sleep(5)
+
+    monkeypatch.setattr(main, "_extract_resume_with_ai", slow_ai)
+
+    response = upload_resume()
+
+    assert response.status_code == 200
+    assert response.json()["parser"] == "local"

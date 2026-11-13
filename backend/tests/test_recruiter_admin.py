@@ -53,6 +53,30 @@ def test_super_admin_email_allowlist_is_case_insensitive(monkeypatch):
     assert error.value.status_code == 403
 
 
+def test_admin_session_reports_regular_role_without_a_forbidden_response(
+    monkeypatch,
+):
+    monkeypatch.setattr(main.settings, "super_admin_emails", "admin@example.com")
+    previous_claims = app.dependency_overrides.get(main.get_current_user_claims)
+    app.dependency_overrides[main.get_current_user_claims] = lambda: {
+        "uid": "recruiter",
+        "email": "recruiter@example.com",
+    }
+    client = TestClient(app)
+    try:
+        response = client.get("/api/admin/session")
+        assert response.status_code == 200
+        assert response.json()["role"] == "recruiter"
+
+        forbidden = client.get("/api/admin/recruiters")
+        assert forbidden.status_code == 403
+    finally:
+        if previous_claims is None:
+            app.dependency_overrides.pop(main.get_current_user_claims, None)
+        else:
+            app.dependency_overrides[main.get_current_user_claims] = previous_claims
+
+
 def test_super_admin_routes_create_list_and_show_workspace_only(monkeypatch):
     db = mongomock.MongoClient().admin_recruiter_test
     previous_db = app.dependency_overrides.get(get_base_db)

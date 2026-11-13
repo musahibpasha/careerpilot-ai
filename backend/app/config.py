@@ -14,6 +14,15 @@ class Settings(BaseSettings):
     # Comma-separated models tried in order if the main model keeps failing.
     openrouter_fallback_models: str = "google/gemini-2.5-flash,openrouter/free"
     openrouter_max_retries: int = 2
+    # Resume parsing engine:
+    #   "hybrid" (default): OpenRouter AI first, automatic fallback to the local
+    #                       parser on rate limits / errors / timeouts. With no
+    #                       API key it simply uses the local parser.
+    #   "ai":     OpenRouter only (errors are shown to the user).
+    #   "local":  offline parser only (instant, no API key).
+    resume_parser_mode: str = "hybrid"
+    # Max seconds to wait for the AI before falling back to the local parser.
+    resume_ai_timeout_seconds: float = 25.0
 
     # Application Assistant browser support.
     assistant_browser_headless: bool = False

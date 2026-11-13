@@ -2170,14 +2170,12 @@ function App({
       .then(async (response) => {
         const data = await response.json().catch(() => null);
         if (!active) return;
-        if (response.ok && data?.role === "super_admin") {
-          setIsSuperAdmin(true);
+        if (response.ok) {
+          setIsSuperAdmin(data?.role === "super_admin");
           setAdminAccessError("");
         } else {
           setIsSuperAdmin(false);
-          if (response.status !== 403) {
-            setAdminAccessError(errorText(data, "Could not verify super-admin access."));
-          }
+          setAdminAccessError(errorText(data, "Could not verify super-admin access."));
         }
       })
       .catch((reason: unknown) => {
