@@ -1,0 +1,52 @@
+{
+  "data": [
+    {
+      "slug": "python-engineer-brussels-1",
+      "title": "Python Engineer",
+      "company_name": "Example Belgium",
+      "location": "Brussels",
+      "url": "https://www.arbeitnow.com/jobs/companies/example-belgium/python-engineer-brussels-1",
+      "created_at": 1794541214,
+      "tags": ["Python", "Backend"],
+      "job_types": ["Full Time"],
+      "remote": false,
+      "description": "<h3>Python Engineer</h3><p>Build Python services and APIs.</p><script>hidden text</script>"
+    },
+    {
+      "slug": "data-engineer-berlin-2",
+      "title": "Data Engineer",
+      "company_name": "Example Germany",
+      "location": "Berlin",
+      "url": "https://www.arbeitnow.com/jobs/companies/example-germany/data-engineer-berlin-2",
+      "created_at": 1794454814,
+      "tags": ["SQL"],
+      "job_types": ["Full Time"],
+      "remote": true,
+      "description": "<p>Build data pipelines with Python and SQL.</p>"
+    },
+    {
+      "slug": "python-engineer-india-3",
+      "title": "Python Engineer",
+      "company_name": "Example India",
+      "location": "Bengaluru, India",
+      "url": "https://www.arbeitnow.com/jobs/companies/example-india/python-engineer-india-3",
+      "created_at": 1794368414,
+      "tags": ["Python"],
+      "job_types": ["Full Time"],
+      "remote": false,
+      "description": "<p>Build Python services.</p>"
+    }
+  ],
+  "links": {
+    "first": "https://www.arbeitnow.com/api/job-board-api?page=1",
+    "last": "https://www.arbeitnow.com/api/job-board-api?page=2",
+    "prev": null,
+    "next": "https://www.arbeitnow.com/api/job-board-api?page=2"
+  },
+  "meta": {
+    "current_page": 1,
+    "last_page": 2,
+    "per_page": 300,
+    "total": 600
+  }
+}

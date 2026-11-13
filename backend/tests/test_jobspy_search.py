@@ -334,6 +334,7 @@ def test_newest_sort_orders_matched_results_by_posted_date(monkeypatch):
 
 
 def test_indeed_country_infers_supported_location_suffixes():
+    assert jobspy_search._indeed_country("") == "belgium"
     assert jobspy_search._indeed_country("Bengaluru, Karnataka, India") == "india"
     assert jobspy_search._indeed_country("London, United Kingdom") == "uk"
     assert jobspy_search._indeed_country("Brussels, Belgium") == "belgium"

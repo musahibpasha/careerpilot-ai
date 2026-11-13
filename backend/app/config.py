@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     firebase_project_id: str = ""
     firebase_service_account_json: str = ""
     super_admin_emails: str = ""
+    ictjob_enabled: bool = False
+    arbeitnow_enabled: bool = True
+    arbeitnow_timeout_seconds: float = 12.0
+    arbeitnow_cache_seconds: int = 600
 
     model_config = SettingsConfigDict(
         env_file=".env",

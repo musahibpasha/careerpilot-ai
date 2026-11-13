@@ -81,6 +81,7 @@ def test_trending_jobs_search_all_boards_without_a_candidate(recommendation_db, 
 
     board_calls = []
     jobicy_calls = []
+    arbeitnow_calls = []
 
     def search_board(*, site, what, where, sort_by):
         board_calls.append((site, what, where, sort_by))
@@ -107,8 +108,19 @@ def test_trending_jobs_search_all_boards_without_a_candidate(recommendation_db, 
         listing["company"] = "Jobicy"
         return {"results": [listing]}
 
+    def search_arbeitnow(*, what, where):
+        arbeitnow_calls.append((what, where))
+        listing = _listing(
+            "arbeitnow-belgium",
+            "Brussels, Belgium",
+            "https://www.arbeitnow.com/jobs/companies/example/engineer",
+        )
+        listing["company"] = "Arbeitnow"
+        return {"results": [listing]}
+
     monkeypatch.setattr(main, "search_jobspy_jobs", search_board)
     monkeypatch.setattr(main.jobicy, "search_jobicy_jobs", search_jobicy)
+    monkeypatch.setattr(main.europe_jobs, "search_arbeitnow_jobs", search_arbeitnow)
 
     response = client.get("/api/jobs/trending")
 
@@ -118,11 +130,13 @@ def test_trending_jobs_search_all_boards_without_a_candidate(recommendation_db, 
     assert all(call[2:] == ("Belgium", "newest") for call in board_calls)
     assert len(jobicy_calls) == 1
     assert jobicy_calls[0][0] == ""
-    assert jobicy_calls[0][2] == "europe" and "Belgium" in jobicy_calls[0][1]
-    assert set(data["successful_sources"]) == {*main.SUPPORTED_SITES, "jobicy"}
+    assert jobicy_calls[0][2] == "belgium" and "Belgium" in jobicy_calls[0][1]
+    assert arbeitnow_calls == [("engineer OR analyst OR manager", "Belgium")]
+    assert set(data["successful_sources"]) == {*main.SUPPORTED_SITES, "jobicy", "arbeitnow"}
     assert {job["source"] for job in data["results"]} == {
         *main.SUPPORTED_SITES,
         "jobicy",
+        "arbeitnow",
     }
     assert data["results"][0]["published_at"].startswith("2026-11-11T12:00:00")
     assert all("match_score" not in job for job in data["results"])
@@ -136,6 +150,7 @@ def test_recommendations_use_selected_candidate_and_target_countries(
 
     board_calls = []
     jobicy_calls = []
+    arbeitnow_calls = []
 
     def search_board(*, site, what, where, sort_by):
         board_calls.append((site, what, where, sort_by))
@@ -165,8 +180,21 @@ def test_recommendations_use_selected_candidate_and_target_countries(
             ]
         }
 
+    def search_arbeitnow(*, what, where):
+        arbeitnow_calls.append((what, where))
+        return {
+            "results": [
+                _listing(
+                    "arbeitnow-belgium",
+                    "Brussels, Belgium",
+                    "https://www.arbeitnow.com/jobs/companies/example/product-engineer",
+                )
+            ]
+        }
+
     monkeypatch.setattr(main, "search_jobspy_jobs", search_board)
     monkeypatch.setattr(main.jobicy, "search_jobicy_jobs", search_jobicy)
+    monkeypatch.setattr(main.europe_jobs, "search_arbeitnow_jobs", search_arbeitnow)
 
     candidate_id = str(recommendation_db.candidates.find_one({})["_id"])
     response = client.get(
@@ -180,7 +208,8 @@ def test_recommendations_use_selected_candidate_and_target_countries(
     assert all(call[3] == "match" for call in board_calls)
     assert all("Candidate Engineer" in call[1] and "Product Engineer" in call[1] for call in board_calls)
     assert all("Data Engineer" not in call[1] for call in board_calls)
-    assert {call[2] for call in jobicy_calls} == {"europe"}
+    assert {call[2] for call in jobicy_calls} == {"belgium", "germany"}
+    assert arbeitnow_calls == [("Candidate Engineer OR Product Engineer OR Platform Engineer", "")]
     assert any("brussels" in call[1].casefold() for call in jobicy_calls)
     assert any("berlin" in call[1].casefold() for call in jobicy_calls)
     assert "naukri" not in {call[0] for call in board_calls}
@@ -194,7 +223,9 @@ def test_recommendations_use_selected_candidate_and_target_countries(
         "Germany",
     }
     assert "Indeed (Germany)" in data["source_failures"]
-    assert "indeed" in data["successful_sources"]
+    assert set(data["successful_sources"]) == {
+        "linkedin", "indeed", "glassdoor", "jobicy", "arbeitnow",
+    }
     assert recommendation_db.profiles.find_one({})["skills"] == ["Python"]
 
 

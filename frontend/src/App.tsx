@@ -331,7 +331,9 @@ type TrendingJob = Pick<
 type JobSearchSource =
   | "linkedin"
   | "indeed"
-  | "glassdoor";
+  | "glassdoor"
+  | "ict_jobs"
+  | "all";
 
 const JOB_SEARCH_SOURCES: {
   id: JobSearchSource;
@@ -342,13 +344,52 @@ const JOB_SEARCH_SOURCES: {
   { id: "linkedin", label: "LinkedIn", mark: "in", description: "Professional network" },
   { id: "indeed", label: "Indeed", mark: "I", description: "Global job listings" },
   { id: "glassdoor", label: "Glassdoor", mark: "G", description: "Jobs and company reviews" },
+  { id: "ict_jobs", label: "ICT Jobs Europe", mark: "EU", description: "Jobicy and Arbeitnow European feeds" },
+  { id: "all", label: "All Boards", mark: "All", description: "Search every enabled source concurrently" },
 ];
+
+const JOB_SOURCE_LABELS: Record<string, string> = {
+  linkedin: "LinkedIn",
+  indeed: "Indeed",
+  glassdoor: "Glassdoor",
+  jobicy: "Jobicy",
+  arbeitnow: "Arbeitnow",
+};
+
+function jobSourceLabel(source: string) {
+  return JOB_SOURCE_LABELS[source] ?? source;
+}
+
+const EUROPEAN_LOCATION_MARKERS = [
+  "albania", "andorra", "austria", "belarus", "belgium", "bosnia",
+  "bulgaria", "croatia", "cyprus", "czech", "denmark", "estonia",
+  "finland", "france", "germany", "greece", "hungary", "iceland",
+  "ireland", "italy", "kosovo", "latvia", "liechtenstein", "lithuania",
+  "luxembourg", "malta", "moldova", "monaco", "montenegro", "netherlands",
+  "north macedonia", "norway", "poland", "portugal", "romania", "san marino",
+  "serbia", "slovakia", "slovenia", "spain", "sweden", "switzerland",
+  "ukraine", "united kingdom", "england", "scotland", "wales", "europe",
+  "brussels", "antwerp", "antwerpen", "ghent", "gent", "bruges", "leuven",
+  "liege", "berlin", "cologne", "dresden", "dusseldorf", "frankfurt",
+  "freiburg", "hamburg", "munich", "stuttgart", "amsterdam", "rotterdam",
+  "paris", "lyon", "london", "madrid", "barcelona", "rome", "milan",
+  "lisbon", "warsaw", "vienna", "stockholm", "copenhagen", "helsinki",
+  "dublin", "prague", "zurich",
+];
+
+function isEuropeanLocation(value: string) {
+  const normalized = value.trim().toLowerCase();
+  return EUROPEAN_LOCATION_MARKERS.some((marker) =>
+    new RegExp(`(^|[^a-z])${marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z]|$)`).test(normalized),
+  );
+}
 
 const TRENDING_SOURCE_LABELS: Record<string, string> = {
   linkedin: "LinkedIn",
   indeed: "Indeed",
   glassdoor: "Glassdoor",
   jobicy: "Jobicy",
+  arbeitnow: "Arbeitnow",
 };
 
 function extractRecruiterEmail(text?: string | null): string | null {
@@ -1681,7 +1722,10 @@ function App({
         candidate.professional_headline ||
         "";
     setLinkedinKeywords(suggestedKeywords.slice(0, 100));
-    setLinkedinLocation(candidate.preferred_location || candidate.location || "");
+    const candidateLocation = candidate.preferred_location || candidate.location || "";
+    setLinkedinLocation(
+      isEuropeanLocation(candidateLocation) ? candidateLocation : "Belgium",
+    );
     const arrangement = candidate.work_arrangement_preference?.toLowerCase();
     setLinkedinWorkArrangement(
       arrangement === "remote" || arrangement === "hybrid" || arrangement === "onsite"
@@ -1704,12 +1748,14 @@ function App({
     setDiscoveryError(false);
     setJobSearchView("searching");
     try {
-      const params = new URLSearchParams({
-        site: jobSource,
+      const aggregate = jobSource === "all" || jobSource === "ict_jobs";
+      const requestParams: Record<string, string> = {
+        ...(aggregate ? { scope: jobSource } : { site: jobSource }),
         candidate_id: selectedCandidate.id,
         what: linkedinKeywords.trim(),
         where: linkedinLocation.trim(),
-      });
+      };
+      const params = new URLSearchParams(requestParams);
       if (selectedCandidateResumeId) {
         params.set("resume_id", selectedCandidateResumeId);
       }
@@ -1722,7 +1768,9 @@ function App({
       }[linkedinEmploymentType];
       if (jobType) params.set("job_type", jobType);
       if (linkedinEnglishOnly) params.set("english_only", "true");
-      if (linkedinApplicationType === "easy-apply") params.set("easy_apply", "true");
+      if (!aggregate && linkedinApplicationType === "easy-apply") {
+        params.set("easy_apply", "true");
+      }
       if (linkedinWorkArrangement !== "any") {
         params.set("work_arrangement", linkedinWorkArrangement);
         if (linkedinWorkArrangement === "remote") params.set("is_remote", "true");
@@ -1735,7 +1783,10 @@ function App({
       }[linkedinPostedWithin];
       if (hoursOld) params.set("hours_old", hoursOld);
 
-      const response = await fetch(`${API}/api/jobs/discover/board?${params}`);
+      const endpoint = aggregate
+        ? "/api/jobs/discover/aggregate"
+        : "/api/jobs/discover/board";
+      const response = await fetch(`${API}${endpoint}?${params}`);
       const data = await response.json().catch(() => null);
       if (!response.ok) {
         throw new Error(errorText(data, `Job search failed (HTTP ${response.status}).`));
@@ -1745,20 +1796,27 @@ function App({
       }
       if (requestId !== discoveryRequestId.current) return;
       setDiscoveryResults(
-        data.results.map((job: Omit<DiscoveredJob, "source">) => ({
+        data.results.map((job: Partial<DiscoveredJob>) => ({
           ...job,
-          source: data.source,
+          source: job.source || data.source,
         })),
       );
+      const failedSources = Array.isArray(data.source_failures)
+        ? data.source_failures.filter((source: unknown): source is string => typeof source === "string")
+        : [];
+      const failureNotice = failedSources.length
+        ? `Some sources could not be searched: ${failedSources.join(", ")}.`
+        : "";
       if (data.results.length === 0) {
         setJobSearchView("empty");
-        setDiscoveryMessage(
-          data.source === "indeed"
+        setDiscoveryMessage(data.notice || failureNotice || (
+          jobSource === "indeed"
             ? "Indeed returned no matching listings. Try broader keywords or clear filters; listings without details needed by a selected filter are excluded."
-            : "No matching listings were returned. Try broader keywords or clear filters; listings without details needed by a selected filter are excluded.",
-        );
+            : "No matching listings were returned. Try broader keywords or clear filters; listings without details needed by a selected filter are excluded."
+        ));
       } else {
         setJobSearchView("results");
+        setDiscoveryMessage(data.notice || failureNotice);
       }
     } catch (e) {
       if (requestId !== discoveryRequestId.current) return;
@@ -2325,7 +2383,7 @@ function App({
     [applications, draggedAppId],
   );
 
-  const sources = JOB_SEARCH_SOURCES.map((source) => source.id);
+  const sources = ["linkedin", "indeed", "glassdoor", "jobicy", "arbeitnow"];
 
   const dismissedJobs = useMemo(
     () => jobs.filter((j) => j.feedback === "not_interested"),
@@ -3753,7 +3811,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
             </span>
           )}
           <span className="recommendation-source">
-            {JOB_SEARCH_SOURCES.find((source) => source.id === job.source)?.label ?? job.source}
+            {jobSourceLabel(job.source)}
             {job.published_at && !Number.isNaN(new Date(job.published_at).getTime())
               ? ` · ${new Date(job.published_at).toLocaleDateString()}`
               : ""}
@@ -3857,7 +3915,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
             <div className="dashboard-trending-kicker">LIVE FROM JOB BOARDS</div>
             <h2>Trending jobs in Belgium</h2>
             <p>
-              Fresh listings from LinkedIn, Indeed, Glassdoor and Jobicy.
+              Fresh listings from LinkedIn, Indeed, Glassdoor, Jobicy and Arbeitnow.
               Ordered by posting date; popularity data is not provided by the boards.
             </p>
           </div>
@@ -4285,7 +4343,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                 ? `Matched for ${selectedCandidate.full_name} across Belgium and Germany`
                 : "Select a candidate to see candidate-specific recommendations"}
               {selectedCandidate &&
-                " across LinkedIn, Indeed, Glassdoor."}
+                " across LinkedIn, Indeed, Glassdoor, Jobicy and Arbeitnow."}
               {recommendationLastUpdated &&
                 ` Last updated ${new Date(recommendationLastUpdated).toLocaleString()}.`}
             </p>
@@ -5092,7 +5150,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                 </span>
                 <div>
                   <h2>2. Choose a job board</h2>
-                  <p>Search listings from one source at a time.</p>
+                  <p>Search a board, verified European ICT feeds, or all sources at once.</p>
                 </div>
               </div>
               <div className="job-source-options" role="group" aria-label="Job boards">
@@ -5189,7 +5247,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                     <option value="false">All languages (EN / NL / FR / DE)</option>
                   </select>
                 </label>
-                <label>
+                {!["ict_jobs", "all"].includes(jobSource) && <label>
                   Application type
                   <select
                     value={linkedinApplicationType}
@@ -5198,7 +5256,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                     <option value="any">Any</option>
                     <option value="easy-apply">Easy Apply</option>
                   </select>
-                </label>
+                </label>}
                 <label>
                   Posted within
                   <select
@@ -5239,7 +5297,12 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                   </button>
                   {discoveryBusy && (
                     <p className="source-loading" role="status" aria-live="polite">
-                      Searching live listings in {linkedinLocation || "Belgium"}... ({discoveryElapsed}s elapsed) — Please wait patiently while JobSpy scrapes live postings.
+                      {jobSource === "all"
+                        ? `Searching all enabled sources in ${linkedinLocation || "Belgium"}...`
+                        : jobSource === "ict_jobs"
+                          ? `Searching verified European ICT feeds in ${linkedinLocation || "Europe"}...`
+                          : `Searching live listings in ${linkedinLocation || "Belgium"}...`}
+                      {" "}({discoveryElapsed}s elapsed)
                     </p>
                   )}
                   {jobSearchView !== "recommended" && (
@@ -5412,14 +5475,14 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                                     {index > 0 ? ", " : ""}
                                     {listing.url ? (
                                       <a href={listing.url} target="_blank" rel="noopener noreferrer">
-                                        {JOB_SEARCH_SOURCES.find((source) => source.id === listing.source)?.label ?? listing.source}
+                                        {jobSourceLabel(listing.source)}
                                       </a>
                                     ) : (
-                                      JOB_SEARCH_SOURCES.find((source) => source.id === listing.source)?.label ?? listing.source
+                                      jobSourceLabel(listing.source)
                                     )}
                                   </span>
                                 ))
-                                : (JOB_SEARCH_SOURCES.find((source) => source.id === job.source)?.label ?? job.source)}
+                                : jobSourceLabel(job.source)}
                             </small>
                           </div>
                           <div className="job-actions">
@@ -5599,7 +5662,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                       <option value="all">All</option>
                       {sources.map((src) => (
                         <option key={src} value={src}>
-                          {JOB_SEARCH_SOURCES.find((source) => source.id === src)?.label ?? src}
+                          {jobSourceLabel(src)}
                         </option>
                       ))}
                     </select>

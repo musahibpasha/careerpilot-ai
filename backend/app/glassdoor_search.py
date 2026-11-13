@@ -11,7 +11,7 @@ Supported Glassdoor URL parameters:
   remoteWorkType – 1 (remote), 2 (hybrid), 3 (onsite)
   fromAge      – days since posting: 1, 3, 7, 14, 30
 
-For India-based searches we route to glassdoor.co.in; for others to glassdoor.com.
+India routing is available only when explicitly selected; the default is glassdoor.com.
 """
 
 from urllib.parse import urlencode
@@ -58,7 +58,7 @@ def build_glassdoor_url(
     experience_level: str = "",
     posted_within: str = "any",
     sort: str = "relevance",
-    use_india_domain: bool = True,
+    use_india_domain: bool = False,
 ) -> str:
     """Return a Glassdoor search URL with all supplied filters applied.
 
@@ -125,4 +125,3 @@ def build_glassdoor_url(
     if params:
         return f"{base}?{urlencode(params)}"
     return base
-

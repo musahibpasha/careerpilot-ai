@@ -38,3 +38,19 @@ def test_scan_queries_and_saves_only_supported_job_boards(monkeypatch):
         "sources": {site: 1 for site in SUPPORTED_SITES},
     }
     assert {job["source"] for job in db.jobs.find()} == set(SUPPORTED_SITES)
+
+
+def test_scan_defaults_to_belgium_when_no_preferred_location_exists(monkeypatch):
+    db = mongomock.MongoClient(tz_aware=True)["test"]
+    db.profiles.insert_one({"target_roles": ["Software Engineer"], "skills": []})
+    locations = []
+
+    def fake_search(*, site, what, where):
+        locations.append(where)
+        return {"source": site, "results": []}
+
+    monkeypatch.setattr(job_scan, "search_jobspy_jobs", fake_search)
+
+    job_scan.scan_and_save(db)
+
+    assert locations == ["Belgium"] * len(SUPPORTED_SITES)

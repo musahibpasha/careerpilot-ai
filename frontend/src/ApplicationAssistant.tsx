@@ -175,6 +175,8 @@ const JOB_BOARD_LABELS: Record<string, string> = {
   naukri: "Naukri",
   indeed: "Indeed",
   glassdoor: "Glassdoor",
+  jobicy: "Jobicy",
+  arbeitnow: "Arbeitnow",
 };
 
 function boardPlatformForHost(host: string) {
@@ -238,6 +240,7 @@ function supportedPlatformForUrl(raw: string) {
 function sourceLabel(source: string) {
   const labels: Record<string, string> = {
     jobicy: "Jobicy listing",
+    arbeitnow: "Arbeitnow listing",
     linkedin: "LinkedIn listing",
     indeed: "Indeed listing",
     glassdoor: "Glassdoor listing",

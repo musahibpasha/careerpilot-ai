@@ -3337,7 +3337,7 @@ footer { margin-top: 32px; font-size: 12px; color: var(--faint); }
 .job-results-heading h2 { font-size: 16px; letter-spacing: -0.2px; }
 .job-source-heading p,
 .job-results-heading p { font-size: 12px; }
-.job-source-options { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.job-source-options { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
 .job-source-option {
   min-height: 74px;
   padding: 12px 14px;

@@ -5,7 +5,7 @@ import re
 import time
 import unicodedata
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -42,7 +42,7 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 from starlette.datastructures import Headers
 from xml.sax.saxutils import escape
 
-from app import jobicy, schemas
+from app import europe_jobs, jobicy, schemas
 from app.auth import _firebase_app, get_current_user_claims, get_current_user_id
 from app.config import settings
 from app.database import ensure_indexes, get_base_db, get_db
@@ -51,7 +51,13 @@ from app.job_scan import scan_and_save
 from app.job_fetch import JobFetchError, fetch_job_text, is_search_results_url
 from app.job_import import MIN_IMPORT_CHARS, extract_job
 from app.job_dedup import compare_listings, track_and_deduplicate
-from app.jobspy_search import JobSpyError, SUPPORTED_SITES, search_jobspy_jobs
+from app.jobspy_search import (
+    JobSpyError,
+    SUPPORTED_SITES,
+    _job_matches_filters,
+    is_english_posting,
+    search_jobspy_jobs,
+)
 from app.matching import build_application_plan, score_job
 from app.preferences import clean_preferences, preferences_problems
 from app.resume_local_parser import parse_resume_locally
@@ -335,6 +341,70 @@ def score_fields(job: dict, profile: dict | None, prefs: dict | None) -> dict:
         "match_breakdown": result["breakdown"],
         "match_scored_at": now(),
     }
+
+
+def _track_score_and_rank(
+    db: Database,
+    listings_by_source: dict[str, list[dict]],
+    profile: dict | None,
+    preferences: dict | None,
+    *,
+    candidate_id: ObjectId | None = None,
+    sort_by: str = "match",
+    limit: int | None = None,
+) -> list[dict]:
+    unique_jobs: dict[str, dict] = {}
+    source_reference_key = lambda reference: (
+        reference.get("source"),
+        str(reference.get("source_job_id") or ""),
+    )
+    for source, listings in listings_by_source.items():
+        for listing in track_and_deduplicate(db, source, listings):
+            listing.update(score_fields(listing, profile, preferences))
+            key = listing.get("duplicate_group_id") or (
+                f"{source}:{listing.get('source_job_id') or listing.get('url')}"
+            )
+            previous = unique_jobs.get(key)
+            if previous is None:
+                unique_jobs[key] = listing
+                continue
+            references = {
+                source_reference_key(reference): reference
+                for reference in [
+                    *(previous.get("source_listings") or []),
+                    *(listing.get("source_listings") or []),
+                ]
+            }
+            if listing["match_score"] > previous["match_score"]:
+                listing["available_sources"] = sorted({
+                    *(previous.get("available_sources") or []),
+                    *(listing.get("available_sources") or []),
+                })
+                listing["source_listings"] = list(references.values())
+                unique_jobs[key] = listing
+            else:
+                previous["available_sources"] = sorted({
+                    *(previous.get("available_sources") or []),
+                    *(listing.get("available_sources") or []),
+                })
+                previous["source_listings"] = list(references.values())
+                if listing.get("duplicate_status") == "cross_board_duplicate":
+                    previous["duplicate_status"] = "cross_board_duplicate"
+                    previous["duplicate_confidence"] = "high"
+                previous["repost_count"] = max(
+                    previous.get("repost_count", 0),
+                    listing.get("repost_count", 0),
+                )
+
+    ranked = list(unique_jobs.values())
+    if sort_by == "newest":
+        ranked.sort(key=lambda listing: str(listing.get("published_at") or ""), reverse=True)
+    ranked.sort(key=lambda listing: listing["match_score"], reverse=True)
+    if limit is not None:
+        ranked = ranked[:limit]
+    if candidate_id is not None:
+        _mark_applied_duplicate_jobs(ranked, candidate_id, db)
+    return ranked
 
 
 def rescore_all_jobs(db: Database, profile: dict | None = None, prefs: dict | None = None) -> int:
@@ -1131,7 +1201,7 @@ def discover_board_jobs(
     db: Database = Depends(get_db),
 ):
     """Search a supported board and deduplicate listings against prior observations."""
-    if site not in SUPPORTED_SITES:
+    if site not in (*SUPPORTED_SITES, "jobicy"):
         raise HTTPException(status_code=422, detail="Choose a supported job-search source.")
     if not what.strip():
         raise HTTPException(status_code=422, detail="Enter a job-search keyword.")
@@ -1150,6 +1220,45 @@ def discover_board_jobs(
         db,
         resume_id=resume_id,
     )
+    if site == "jobicy":
+        if notice := _europe_location_notice(where):
+            raise HTTPException(status_code=422, detail=notice)
+        try:
+            response = jobicy.search_jobicy_jobs(
+                what=what.strip(),
+                where=where.strip(),
+                geo=_jobicy_geo_for_location(where),
+            )
+        except jobicy.JobicyError as error:
+            raise HTTPException(status_code=error.status_code, detail=error.message) from None
+        response["results"] = _filter_external_listings(
+            response["results"],
+            job_type=job_type,
+            is_remote=is_remote,
+            hours_old=hours_old,
+            work_arrangement=work_arrangement,
+            experience_level=experience_level,
+            salary_min=salary_min,
+            salary_max=salary_max,
+            salary_currency=salary_currency,
+            salary_period=salary_period,
+            english_only=english_only,
+        )
+        response["results"] = [
+            listing
+            for listing in response["results"]
+            if _listing_matches_europe_location(listing, where)
+        ]
+        response["results"] = _track_score_and_rank(
+            db,
+            {"jobicy": response["results"]},
+            profile,
+            preferences,
+            candidate_id=candidate["_id"],
+            sort_by=sort_by,
+        )
+        return response
+
     try:
         search_options = {
             "site": site,
@@ -1201,8 +1310,12 @@ def discover_board_jobs(
 def discover_jobicy_jobs(
     what: str = Query(..., min_length=2, max_length=100),
     where: str = Query(default="", max_length=100),
-    geo: str = Query(default="apac", pattern=r"^(apac|europe|usa|canada|uk)$"),
+    geo: str = Query(
+        default="europe",
+        pattern=r"^(apac|europe|usa|canada|uk|[a-z-]+)$",
+    ),
     cursor: str = Query(default="", max_length=200),
+    candidate_id: str | None = Query(default=None, min_length=1),
     db: Database = Depends(get_db),
 ):
     """Search Jobicy's existing public integration and score results for this user."""
@@ -1216,11 +1329,20 @@ def discover_jobicy_jobs(
     except jobicy.JobicyError as error:
         raise HTTPException(status_code=error.status_code, detail=error.message) from None
 
-    profile = db.profiles.find_one({})
-    preferences = db.preferences.find_one({})
-    for listing in result["results"]:
-        listing.update(score_fields(listing, profile, preferences))
-    result["results"].sort(key=lambda listing: listing["match_score"], reverse=True)
+    if candidate_id:
+        candidate, profile, preferences = _candidate_matching_data(candidate_id, db)
+        candidate_oid = candidate["_id"]
+    else:
+        profile = db.profiles.find_one({})
+        preferences = db.preferences.find_one({})
+        candidate_oid = None
+    result["results"] = _track_score_and_rank(
+        db,
+        {"jobicy": result["results"]},
+        profile,
+        preferences,
+        candidate_id=candidate_oid,
+    )
     return result
 
 
@@ -1250,6 +1372,9 @@ def _recommendation_country(location: str | None) -> str | None:
     for country, cities in _RECOMMENDATION_CITIES.items():
         if any(re.search(rf"\b{re.escape(city)}\b", text) for city in cities):
             return country
+    european_country = europe_jobs.european_country_for_location(location or "")
+    if european_country:
+        return european_country
     return None
 
 
@@ -1334,6 +1459,311 @@ def _candidate_matching_data(
     return candidate, profile, preferences
 
 
+def _jobicy_geo_for_location(where: str) -> str:
+    country = europe_jobs.european_country_for_location(where)
+    if not country:
+        return "europe"
+    aliases = {
+        "Czech Republic": "czechia",
+        "United Kingdom": "uk",
+        "Bosnia And Herzegovina": "bosnia-and-herzegovina",
+        "North Macedonia": "north-macedonia",
+    }
+    return aliases.get(country, country.casefold().replace(" ", "-"))
+
+
+def _filter_external_listings(
+    listings: list[dict],
+    *,
+    job_type: str | None,
+    is_remote: bool | None,
+    hours_old: int | None,
+    work_arrangement: str | None,
+    experience_level: str | None,
+    salary_min: int | None = None,
+    salary_max: int | None = None,
+    salary_currency: str | None = None,
+    salary_period: str = "year",
+    english_only: bool = False,
+) -> list[dict]:
+    filtered = []
+    cutoff = now() - timedelta(hours=hours_old) if hours_old else None
+    for listing in listings:
+        arrangement = str(listing.get("work_arrangement") or "")
+        if is_remote is not None and (arrangement == "remote") != is_remote:
+            continue
+        if english_only and not is_english_posting(
+            str(listing.get("title") or ""),
+            str(listing.get("description") or ""),
+        ):
+            continue
+        if cutoff:
+            published_at = listing.get("published_at")
+            if isinstance(published_at, str):
+                try:
+                    published_at = datetime.fromisoformat(
+                        published_at.replace("Z", "+00:00")
+                    )
+                except ValueError:
+                    published_at = None
+            if not isinstance(published_at, datetime):
+                continue
+            if published_at.tzinfo is None:
+                published_at = published_at.replace(tzinfo=timezone.utc)
+            if published_at < cutoff:
+                continue
+        if not _job_matches_filters(
+            job_type=job_type,
+            work_arrangement=work_arrangement,
+            experience_level=experience_level,
+            salary_min=salary_min,
+            salary_max=salary_max,
+            salary_currency=salary_currency,
+            salary_period=salary_period,
+            row_job_types=listing.get("employment_types") or [],
+            arrangement=arrangement,
+            level=str(listing.get("experience_level") or ""),
+            found_salary_min=listing.get("salary_min"),
+            found_salary_max=listing.get("salary_max"),
+            found_salary_currency=str(listing.get("salary_currency") or ""),
+            found_salary_period=str(listing.get("salary_period") or "year"),
+        ):
+            continue
+        filtered.append(listing)
+    return filtered
+
+
+def _europe_location_notice(where: str) -> str | None:
+    normalized = "".join(
+        character
+        for character in unicodedata.normalize("NFKD", where.casefold())
+        if not unicodedata.combining(character)
+    )
+    if not normalized or normalized in {"europe", "eu", "european union", "remote"}:
+        return None
+    if europe_jobs.european_country_for_location(where):
+        return None
+    return "This job search is limited to Europe. Choose a supported European city or country."
+
+
+def _europe_matching_preferences(preferences: dict) -> dict:
+    locations = [
+        location
+        for location in preferences.get("locations", [])
+        if isinstance(location, str)
+        and location.strip()
+        and _europe_location_notice(location) is None
+    ]
+    return {
+        **preferences,
+        "locations": locations or ["Belgium", "Germany"],
+    }
+
+
+def _listing_matches_europe_location(listing: dict, where: str) -> bool:
+    location = str(listing.get("location") or "")
+    requested_country = europe_jobs.european_country_for_location(where)
+    if not where.strip() or "europe" in where.casefold():
+        return europe_jobs._is_european_location(location)
+    listing_country = europe_jobs.european_country_for_location(location)
+    if requested_country:
+        return bool(
+            listing_country
+            and requested_country.casefold() == listing_country.casefold()
+        )
+    return europe_jobs._is_european_location(location)
+
+
+async def _aggregate_discovery_sources(
+    *,
+    scope: str,
+    candidate_id: str,
+    resume_id: str | None,
+    what: str,
+    where: str,
+    job_type: str | None,
+    english_only: bool,
+    is_remote: bool | None,
+    work_arrangement: str | None,
+    experience_level: str | None,
+    hours_old: int | None,
+    sort_by: str,
+    db: Database,
+) -> dict:
+    candidate, profile, preferences = _candidate_matching_data(
+        candidate_id,
+        db,
+        resume_id=resume_id,
+    )
+    search_where = where.strip()
+    if scope == "all" and not search_where:
+        search_where = "Belgium"
+
+    notice = _europe_location_notice(search_where)
+    if notice:
+        return {
+            "source": scope,
+            "results": [],
+            "source_failures": [],
+            "successful_sources": [],
+            "notice": notice,
+        }
+
+    sources = (
+        ("jobicy", "arbeitnow")
+        if scope == "ict_jobs"
+        else (*SUPPORTED_SITES, "jobicy", "arbeitnow")
+    )
+    calls = []
+    for source in sources:
+        if source == "arbeitnow" and not settings.arbeitnow_enabled:
+            continue
+        if source in SUPPORTED_SITES:
+            calls.append((
+                source,
+                asyncio.to_thread(
+                    search_jobspy_jobs,
+                    site=source,
+                    what=what.strip(),
+                    where=search_where,
+                    job_type=job_type,
+                    is_remote=is_remote,
+                    hours_old=hours_old,
+                    work_arrangement=work_arrangement,
+                    experience_level=experience_level,
+                    sort_by=sort_by,
+                    english_only=english_only,
+                ),
+            ))
+        elif source == "jobicy":
+            geo = _jobicy_geo_for_location(search_where) if search_where else "europe"
+            jobicy_where = (
+                ""
+                if search_where.casefold().strip() in {"europe", "eu", "european union"}
+                else search_where
+            )
+            calls.append((
+                source,
+                asyncio.to_thread(
+                    jobicy.search_jobicy_jobs,
+                    what=what.strip(),
+                    where=jobicy_where,
+                    geo=geo,
+                ),
+            ))
+        elif source == "arbeitnow":
+            calls.append((
+                source,
+                asyncio.to_thread(
+                    europe_jobs.search_arbeitnow_jobs,
+                    what=what.strip(),
+                    where=(
+                        ""
+                        if search_where.casefold().strip() in {"europe", "eu", "european union"}
+                        else search_where
+                    ),
+                ),
+            ))
+
+    responses = await asyncio.gather(
+        *(call for _, call in calls),
+        return_exceptions=True,
+    )
+    source_failures: list[str] = []
+    successful_sources: set[str] = set()
+    listings_by_source = {source: [] for source, _ in calls}
+    for (source, _), response in zip(calls, responses):
+        if isinstance(response, Exception):
+            logger.warning("Job discovery source failed: %s: %s", source, response)
+            source_failures.append(source)
+            continue
+        if not isinstance(response, dict) or not isinstance(response.get("results"), list):
+            logger.warning("Job discovery source returned an invalid response: %s", source)
+            source_failures.append(source)
+            continue
+        successful_sources.add(source)
+        listings = response["results"]
+        if source in {"jobicy", "arbeitnow"}:
+            listings = _filter_external_listings(
+                listings,
+                job_type=job_type,
+                is_remote=is_remote,
+                hours_old=hours_old,
+                work_arrangement=work_arrangement,
+                experience_level=experience_level,
+                english_only=english_only,
+            )
+        listings = [
+            listing
+            for listing in listings
+            if isinstance(listing, dict)
+            and _listing_matches_europe_location(listing, search_where)
+        ]
+        listings_by_source[source].extend(
+            {**listing, "source": source}
+            for listing in listings
+        )
+
+    results = _track_score_and_rank(
+        db,
+        listings_by_source,
+        profile,
+        _europe_matching_preferences(preferences),
+        candidate_id=candidate["_id"],
+        sort_by=sort_by,
+        limit=60,
+    )
+    return {
+        "source": scope,
+        "results": results,
+        "source_failures": source_failures,
+        "successful_sources": sorted(successful_sources),
+        "notice": None,
+    }
+
+
+@app.get(
+    "/api/jobs/discover/aggregate",
+    response_model=schemas.MultiSourceJobDiscoveryResponse,
+)
+async def aggregate_job_discovery(
+    scope: str = Query(..., pattern=r"^(ict_jobs|all)$"),
+    candidate_id: str = Query(..., min_length=1),
+    resume_id: str | None = Query(default=None, min_length=1),
+    what: str = Query(..., min_length=2, max_length=100),
+    where: str = Query(default="", max_length=150),
+    job_type: str | None = Query(
+        default=None,
+        pattern=r"^(fulltime|parttime|contract|freelance|temporary|internship|perdiem|other|volunteer)$",
+    ),
+    english_only: bool = Query(default=False),
+    is_remote: bool | None = None,
+    work_arrangement: str | None = Query(default=None, pattern=r"^(remote|hybrid|onsite)$"),
+    experience_level: str | None = Query(
+        default=None,
+        pattern=r"^(internship|entry|associate|mid-senior|director|executive)$",
+    ),
+    hours_old: int | None = Query(default=None, ge=1, le=720),
+    sort_by: str = Query(default="match", pattern=r"^(match|newest)$"),
+    db: Database = Depends(get_db),
+):
+    return await _aggregate_discovery_sources(
+        scope=scope,
+        candidate_id=candidate_id,
+        resume_id=resume_id,
+        what=what,
+        where=where,
+        job_type=job_type,
+        english_only=english_only,
+        is_remote=is_remote,
+        work_arrangement=work_arrangement,
+        experience_level=experience_level,
+        hours_old=hours_old,
+        sort_by=sort_by,
+        db=db,
+    )
+
+
 async def _stored_resume_extraction(
     doc: dict,
     db: Database,
@@ -1388,7 +1818,7 @@ async def recommended_jobs(
 
     search_term = " OR ".join(query_roles)[:100]
     jobicy_terms = query_roles[:3]
-    target_preferences = {**preferences, "locations": ["Belgium", "Germany"]}
+    target_preferences = _europe_matching_preferences(preferences)
     search_calls = [
         (site, country)
         for site in _RECOMMENDATION_SITES
@@ -1412,13 +1842,15 @@ async def recommended_jobs(
             jobicy.search_jobicy_jobs,
             what=term,
             where=cities,
-            geo="europe",
+            geo=_jobicy_geo_for_location(country),
         )
 
     site_labels = {
         "linkedin": "LinkedIn",
         "indeed": "Indeed",
         "glassdoor": "Glassdoor",
+        "jobicy": "Jobicy",
+        "arbeitnow": "Arbeitnow",
     }
     calls = [
         (f"{site_labels[site]} ({country})", site, search_board(site, country))
@@ -1429,6 +1861,16 @@ async def recommended_jobs(
         for country in ("Belgium", "Germany")
         for term in jobicy_terms
     )
+    if settings.arbeitnow_enabled:
+        calls.append((
+            "Arbeitnow (Belgium, Germany)",
+            "arbeitnow",
+            asyncio.to_thread(
+                europe_jobs.search_arbeitnow_jobs,
+                what=search_term,
+                where="",
+            ),
+        ))
     responses = await asyncio.gather(
         *(call for _, _, call in calls),
         return_exceptions=True,
@@ -1436,12 +1878,14 @@ async def recommended_jobs(
 
     source_failures: list[str] = []
     successful_sources: set[str] = set()
-    unique_jobs: dict[str, dict] = {}
-    board_listings = {site: [] for site in SUPPORTED_SITES}
-    other_listings: dict[str, dict] = {}
+    listings_by_source = {source: [] for _, source, _ in calls}
     for (label, source, _), response in zip(calls, responses):
         if isinstance(response, Exception):
             logger.warning("Recommendation source failed: %s: %s", label, response)
+            source_failures.append(label)
+            continue
+        if not isinstance(response, dict) or not isinstance(response.get("results"), list):
+            logger.warning("Recommendation source returned invalid data: %s", label)
             source_failures.append(label)
             continue
         successful_sources.add(source)
@@ -1449,31 +1893,16 @@ async def recommended_jobs(
             country = _recommendation_country(listing.get("location"))
             if country not in {"Belgium", "Germany"}:
                 continue
-            listing = {**listing, "source": source}
-            if source in board_listings:
-                board_listings[source].append(listing)
-                continue
-            parsed_url = urlsplit(str(listing.get("url") or ""))
-            url_key = (
-                f"{(parsed_url.hostname or '').casefold()}"
-                f"{parsed_url.path.rstrip('/').casefold()}?{parsed_url.query}"
-            )
-            if url_key:
-                other_listings.setdefault(f"{source}:{url_key}", listing)
+            listings_by_source[source].append({**listing, "source": source})
 
-    for site, listings in board_listings.items():
-        for listing in track_and_deduplicate(db, site, listings):
-            listing.update(score_fields(listing, profile, target_preferences))
-            unique_jobs[f"{site}:{listing['duplicate_group_id']}"] = listing
-    for key, listing in other_listings.items():
-        listing.update(score_fields(listing, profile, target_preferences))
-        unique_jobs[key] = listing
-
-    ranked_jobs = sorted(
-        unique_jobs.values(),
-        key=lambda listing: -listing["match_score"],
-    )[:6]
-    _mark_applied_duplicate_jobs(ranked_jobs, candidate["_id"], db)
+    ranked_jobs = _track_score_and_rank(
+        db,
+        listings_by_source,
+        profile,
+        target_preferences,
+        candidate_id=candidate["_id"],
+        limit=6,
+    )
     return {
         "candidate_id": str(candidate["_id"]),
         "results": ranked_jobs,
@@ -1504,7 +1933,7 @@ async def trending_jobs(db: Database = Depends(get_db)):
             jobicy.search_jobicy_jobs,
             what="",
             where="Belgium, Brussels, Antwerp, Ghent, Charleroi, Liege, Bruges, Leuven",
-            geo="europe",
+            geo="belgium",
         )
 
     source_labels = {
@@ -1512,6 +1941,7 @@ async def trending_jobs(db: Database = Depends(get_db)):
         "indeed": "Indeed",
         "glassdoor": "Glassdoor",
         "jobicy": "Jobicy",
+        "arbeitnow": "Arbeitnow",
     }
     calls = [
         (site, term, search_board(site, term))
@@ -1519,6 +1949,16 @@ async def trending_jobs(db: Database = Depends(get_db)):
         for term in _TRENDING_JOB_TERMS
     ]
     calls.append(("jobicy", "", search_jobicy()))
+    if settings.arbeitnow_enabled:
+        calls.append((
+            "arbeitnow",
+            "",
+            asyncio.to_thread(
+                europe_jobs.search_arbeitnow_jobs,
+                what="engineer OR analyst OR manager",
+                where="Belgium",
+            ),
+        ))
     responses = await asyncio.gather(
         *(call for _, _, call in calls),
         return_exceptions=True,
@@ -1526,8 +1966,7 @@ async def trending_jobs(db: Database = Depends(get_db)):
 
     source_failures: list[str] = []
     successful_sources: set[str] = set()
-    board_listings = {site: [] for site in SUPPORTED_SITES}
-    other_listings: dict[str, dict] = {}
+    listings_by_source = {source: [] for source, _, _ in calls}
     for (source, term, _), response in zip(calls, responses):
         label = f"{source_labels[source]} ({term or 'Belgium'})"
         if isinstance(response, Exception):
@@ -1541,33 +1980,20 @@ async def trending_jobs(db: Database = Depends(get_db)):
 
         successful_sources.add(source)
         for listing in response["results"]:
-            if not isinstance(listing, dict) or _recommendation_country(
-                listing.get("location")
-            ) != "Belgium":
+            if not isinstance(listing, dict):
                 continue
-            listing = {**listing, "source": source}
-            if source in board_listings:
-                board_listings[source].append(listing)
+            country = _recommendation_country(listing.get("location"))
+            if country != "Belgium":
                 continue
-            parsed_url = urlsplit(str(listing.get("url") or ""))
-            url_key = (
-                f"{(parsed_url.hostname or '').casefold()}"
-                f"{parsed_url.path.rstrip('/').casefold()}?{parsed_url.query}"
-            )
-            if url_key:
-                other_listings.setdefault(f"{source}:{url_key}", listing)
-
-    unique_jobs = {}
-    for site, listings in board_listings.items():
-        for listing in track_and_deduplicate(db, site, listings):
-            unique_jobs[f"{site}:{listing['duplicate_group_id']}"] = listing
-    unique_jobs.update(other_listings)
-
-    recent_jobs = sorted(
-        unique_jobs.values(),
-        key=lambda listing: str(listing.get("published_at") or ""),
-        reverse=True,
-    )[:12]
+            listings_by_source[source].append({**listing, "source": source})
+    recent_jobs = _track_score_and_rank(
+        db,
+        listings_by_source,
+        None,
+        None,
+        sort_by="newest",
+        limit=12,
+    )
     return {
         "results": recent_jobs,
         "source_failures": source_failures,

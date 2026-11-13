@@ -13,7 +13,7 @@ from pydantic import (
 
 
 class JobSourceReference(BaseModel):
-    source: Literal["linkedin", "indeed", "glassdoor"]
+    source: Literal["linkedin", "indeed", "glassdoor", "jobicy", "arbeitnow"]
     source_job_id: str
     title: str = ""
     url: HttpUrl | None = None
@@ -82,7 +82,7 @@ class JobCreate(BaseModel):
     duplicate_status: DuplicateStatus | None = None
     duplicate_confidence: Literal["medium", "high"] | None = None
     potential_duplicate_of: str | None = None
-    available_sources: list[Literal["linkedin", "indeed", "glassdoor"]] = Field(
+    available_sources: list[Literal["linkedin", "indeed", "glassdoor", "jobicy", "arbeitnow"]] = Field(
         default_factory=list
     )
     source_listings: list[JobSourceReference] = Field(default_factory=list)
@@ -139,7 +139,7 @@ class JobRead(BaseModel):
     duplicate_status: DuplicateStatus | None = None
     duplicate_confidence: Literal["medium", "high"] | None = None
     potential_duplicate_of: str | None = None
-    available_sources: list[Literal["linkedin", "indeed", "glassdoor"]] = Field(
+    available_sources: list[Literal["linkedin", "indeed", "glassdoor", "jobicy", "arbeitnow"]] = Field(
         default_factory=list
     )
     source_listings: list[JobSourceReference] = Field(default_factory=list)
@@ -220,6 +220,7 @@ class JobImportPreview(BaseModel):
 
 
 class JobDiscoveryListing(BaseModel):
+    source: Literal["linkedin", "indeed", "glassdoor", "jobicy", "arbeitnow"] | None = None
     source_job_id: str
     title: str
     company: str
@@ -238,7 +239,7 @@ class JobDiscoveryListing(BaseModel):
     already_applied: bool = False
     applied_application_id: str | None = None
     applied_at: datetime | None = None
-    available_sources: list[Literal["linkedin", "indeed", "glassdoor"]] = Field(
+    available_sources: list[Literal["linkedin", "indeed", "glassdoor", "jobicy", "arbeitnow"]] = Field(
         default_factory=list
     )
     source_listings: list[JobSourceReference] = Field(default_factory=list)
@@ -263,20 +264,39 @@ class JobSpyDiscoveryResponse(BaseModel):
         "linkedin",
         "indeed",
         "glassdoor",
+        "jobicy",
     ]
     results: list[JobDiscoveryListing]
 
 
 class JobicyDiscoveryResponse(BaseModel):
     source: Literal["jobicy"]
-    geo: Literal["apac", "europe", "usa", "canada", "uk"]
+    geo: Literal[
+        "apac", "europe", "usa", "canada", "uk",
+        "albania", "andorra", "austria", "belarus", "belgium",
+        "bosnia-and-herzegovina", "bulgaria", "croatia", "cyprus", "czechia",
+        "denmark", "estonia", "finland", "france", "germany", "greece", "hungary",
+        "iceland", "ireland", "italy", "kosovo", "latvia", "liechtenstein",
+        "lithuania", "luxembourg", "malta", "moldova", "monaco", "montenegro",
+        "netherlands", "north-macedonia", "norway", "poland", "portugal",
+        "romania", "san-marino", "serbia", "slovakia", "slovenia", "spain",
+        "sweden", "switzerland", "ukraine",
+    ]
     results: list[JobDiscoveryListing]
     has_more: bool
     next_cursor: str | None = None
 
 
 class JobRecommendation(JobDiscoveryListing):
-    source: Literal["linkedin", "indeed", "glassdoor", "jobicy"]
+    source: Literal["linkedin", "indeed", "glassdoor", "jobicy", "arbeitnow"]
+
+
+class MultiSourceJobDiscoveryResponse(BaseModel):
+    source: Literal["ict_jobs", "all"]
+    results: list[JobRecommendation]
+    source_failures: list[str] = Field(default_factory=list)
+    successful_sources: list[str] = Field(default_factory=list)
+    notice: str | None = None
 
 
 class JobRecommendationsResponse(BaseModel):
@@ -288,7 +308,7 @@ class JobRecommendationsResponse(BaseModel):
 
 
 class TrendingJob(BaseModel):
-    source: Literal["linkedin", "indeed", "glassdoor", "jobicy"]
+    source: Literal["linkedin", "indeed", "glassdoor", "jobicy", "arbeitnow"]
     source_job_id: str
     title: str
     company: str
@@ -301,7 +321,7 @@ class TrendingJob(BaseModel):
     duplicate_group_id: str | None = None
     duplicate_status: DuplicateStatus | None = None
     duplicate_confidence: Literal["medium", "high"] | None = None
-    available_sources: list[Literal["linkedin", "indeed", "glassdoor"]] = Field(
+    available_sources: list[Literal["linkedin", "indeed", "glassdoor", "jobicy", "arbeitnow"]] = Field(
         default_factory=list
     )
     source_listings: list[JobSourceReference] = Field(default_factory=list)

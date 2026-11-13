@@ -1,8 +1,10 @@
 import httpx
+import mongomock
 import pytest
 from fastapi.testclient import TestClient
 
 from app import jobicy
+from app.database import get_db
 from app.main import app
 
 
@@ -222,3 +224,55 @@ def test_provider_failures_are_reported():
 
 def test_jobicy_is_not_an_active_discovery_endpoint():
     assert client.get("/api/jobs/discover", params={"what": "engineer"}).status_code == 404
+
+
+def test_standalone_jobicy_discovery_tracks_and_deduplicates_results(monkeypatch):
+    database = mongomock.MongoClient(tz_aware=True)["jobicy_discovery_dedup"]
+    previous = app.dependency_overrides.get(get_db)
+    app.dependency_overrides[get_db] = lambda: database
+    listing = {
+        "source_job_id": "jobicy-stable-id",
+        "title": "Python Engineer",
+        "company": "Example Europe",
+        "location": "Brussels, Belgium",
+        "url": "https://jobicy.com/jobs/python-engineer",
+        "description": "Build Python services for European customers.",
+        "skills": ["python"],
+        "employment_types": ["Full-Time"],
+        "published_at": None,
+        "work_arrangement": "remote",
+        "experience_level": "mid",
+        "salary_min": None,
+        "salary_max": None,
+        "salary_currency": "",
+        "salary_period": "year",
+    }
+
+    monkeypatch.setattr(
+        "app.main.jobicy.search_jobicy_jobs",
+        lambda **kwargs: {
+            "source": "jobicy",
+            "geo": kwargs["geo"],
+            "results": [listing.copy()],
+            "has_more": False,
+            "next_cursor": None,
+        },
+    )
+    try:
+        params = {"what": "Python Engineer", "where": "Belgium"}
+        first = client.get("/api/jobs/discover/jobicy", params=params)
+        second = client.get("/api/jobs/discover/jobicy", params=params)
+    finally:
+        if previous is None:
+            app.dependency_overrides.pop(get_db, None)
+        else:
+            app.dependency_overrides[get_db] = previous
+
+    assert first.status_code == second.status_code == 200
+    first_listing = first.json()["results"][0]
+    second_listing = second.json()["results"][0]
+    assert first_listing["source"] == "jobicy"
+    assert first_listing["duplicate_status"] == "new"
+    assert second_listing["duplicate_status"] == "known"
+    assert first_listing["duplicate_group_id"] == second_listing["duplicate_group_id"]
+    assert database.job_duplicate_groups.count_documents({}) == 1

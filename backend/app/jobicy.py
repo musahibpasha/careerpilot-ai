@@ -13,7 +13,17 @@ API_URL = "https://jobicy.com/api/jobs"
 RESULTS_PER_PAGE = 20
 REQUEST_TIMEOUT = 10.0
 MAX_DESCRIPTION_CHARS = 20_000
-ALLOWED_GEOS = frozenset({"apac", "europe", "usa", "canada", "uk"})
+ALLOWED_GEOS = frozenset({
+    "apac", "europe", "usa", "canada", "uk",
+    "albania", "andorra", "austria", "belarus", "belgium",
+    "bosnia-and-herzegovina", "bulgaria", "croatia", "cyprus", "czechia",
+    "denmark", "estonia", "finland", "france", "germany", "greece", "hungary",
+    "iceland", "ireland", "italy", "kosovo", "latvia", "liechtenstein",
+    "lithuania", "luxembourg", "malta", "moldova", "monaco", "montenegro",
+    "netherlands", "north-macedonia", "norway", "poland", "portugal", "romania",
+    "san-marino", "serbia", "slovakia", "slovenia", "spain", "sweden",
+    "switzerland", "ukraine",
+})
 
 
 class JobicyError(Exception):

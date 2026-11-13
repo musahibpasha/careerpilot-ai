@@ -215,7 +215,7 @@ def _country_from_location(where: str) -> str | None:
 
 
 def _indeed_country(where: str) -> str:
-    """Use a country suffix from the location, defaulting to CareerPilot's India market."""
+    """Use a country suffix from the location, defaulting to Belgium."""
     countries = {country.value.casefold(): country.value for country in Country}
     aliases = {
         "brussels": "belgium",
@@ -231,7 +231,7 @@ def _indeed_country(where: str) -> str:
         country = countries.get(aliases.get(fragment, fragment))
         if country:
             return country
-    return countries["india"]
+    return countries["belgium"]
 
 
 def is_english_posting(title: str, description: str) -> bool:

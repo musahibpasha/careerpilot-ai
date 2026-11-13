@@ -35,7 +35,7 @@ def scan_and_save(db: Database) -> dict:
     skills = [s.strip() for s in profile.get("skills", []) if str(s).strip()]
     locations = [l.strip() for l in prefs.get("locations", []) if str(l).strip()]
     search_keyword = target_roles[0] if target_roles else (skills[0] if skills else "software engineer")
-    search_location = locations[0] if locations else "India"
+    search_location = locations[0] if locations else "Belgium"
 
     saved = 0
     skipped = 0
