@@ -235,3 +235,58 @@ def test_super_admin_can_view_recruiter_application_and_candidate_but_recruiter_
             app.dependency_overrides.pop(main.get_current_user_claims, None)
         else:
             app.dependency_overrides[main.get_current_user_claims] = previous_claims
+
+
+def test_super_admin_can_see_all_firebase_accounts_including_accounts_not_admin_added(monkeypatch):
+    from datetime import datetime, timezone
+
+    db = mongomock.MongoClient(tz_aware=True).admin_account_directory_test
+    db.recruiters.insert_one({
+        "uid": "admin-added-uid",
+        "display_name": "Added Recruiter",
+        "email": "added@example.com",
+    })
+    db.candidates.insert_one({"owner_uid": "previous-login-uid"})
+
+    user_metadata = SimpleNamespace(
+        creation_timestamp=1_700_000_000_000,
+        last_sign_in_timestamp=1_730_000_000_000,
+    )
+    users = [
+        SimpleNamespace(
+            uid="previous-login-uid", email="previous@example.com",
+            display_name="Previous Login", email_verified=True, disabled=False,
+            user_metadata=user_metadata,
+        ),
+        SimpleNamespace(
+            uid="admin-added-uid", email="added@example.com",
+            display_name="Added Recruiter", email_verified=True, disabled=False,
+            user_metadata=user_metadata,
+        ),
+    ]
+    monkeypatch.setattr(main.firebase_auth, "list_users", lambda **kwargs: SimpleNamespace(users=users, next_page_token=None))
+    monkeypatch.setattr(main, "_firebase_app", lambda: object())
+
+    previous_db = app.dependency_overrides.get(get_base_db)
+    previous_admin = app.dependency_overrides.get(main._require_super_admin)
+    app.dependency_overrides[get_base_db] = lambda: db
+    app.dependency_overrides[main._require_super_admin] = lambda: _SUPER_ADMIN
+    client = TestClient(app)
+    try:
+        response = client.get("/api/admin/accounts")
+        assert response.status_code == 200
+        items = {item["uid"]: item for item in response.json()["items"]}
+        assert set(items) == {"previous-login-uid", "admin-added-uid"}
+        assert items["previous-login-uid"]["email"] == "previous@example.com"
+        assert items["previous-login-uid"]["recruiter_registered_by_admin"] is False
+        assert items["previous-login-uid"]["workspace"]["candidates"] == 1
+        assert items["admin-added-uid"]["recruiter_registered_by_admin"] is True
+    finally:
+        if previous_db is None:
+            app.dependency_overrides.pop(get_base_db, None)
+        else:
+            app.dependency_overrides[get_base_db] = previous_db
+        if previous_admin is None:
+            app.dependency_overrides.pop(main._require_super_admin, None)
+        else:
+            app.dependency_overrides[main._require_super_admin] = previous_admin

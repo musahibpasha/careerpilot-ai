@@ -3690,6 +3690,68 @@ def admin_session(
     }
 
 
+@app.get("/api/admin/accounts")
+def list_registered_accounts(
+    _claims: dict = Depends(_require_super_admin),
+    db: Database = Depends(get_base_db),
+):
+    """List Firebase accounts so super admins can see users who signed in
+    without being manually created through the Recruiters screen.
+
+    This is an account directory only: it does not grant or change access.
+    The existing recruiter role is assigned by the application session flow.
+    """
+    registered_recruiters = {
+        str(record.get("uid")): record
+        for record in db.recruiters.find({}, {"uid": 1, "email": 1, "display_name": 1})
+        if record.get("uid")
+    }
+
+    accounts = []
+    page_token = None
+    try:
+        while True:
+            page = firebase_auth.list_users(
+                max_results=1000,
+                page_token=page_token,
+                app=_firebase_app(),
+            )
+            for user in page.users:
+                email = str(user.email or "").strip().casefold()
+                if not email:
+                    continue
+                recruiter_record = registered_recruiters.get(user.uid)
+                metadata = user.user_metadata
+                last_sign_in_ms = getattr(metadata, "last_sign_in_timestamp", None)
+                creation_ms = getattr(metadata, "creation_timestamp", None)
+                accounts.append({
+                    "uid": user.uid,
+                    "email": email,
+                    "display_name": user.display_name or (recruiter_record or {}).get("display_name") or email.split("@", 1)[0],
+                    "email_verified": bool(user.email_verified),
+                    "disabled": bool(user.disabled),
+                    "last_sign_in_at": datetime.fromtimestamp(last_sign_in_ms / 1000, timezone.utc) if last_sign_in_ms else None,
+                    "created_at": datetime.fromtimestamp(creation_ms / 1000, timezone.utc) if creation_ms else None,
+                    "recruiter_registered_by_admin": recruiter_record is not None,
+                    "workspace": _recruiter_workspace_summary(db, user.uid),
+                })
+            page_token = page.next_page_token
+            if not page_token:
+                break
+    except FirebaseError:
+        logger.exception("Could not list Firebase accounts for super-admin directory.")
+        raise HTTPException(
+            status_code=502,
+            detail="Could not load registered sign-in accounts from Firebase.",
+        ) from None
+
+    accounts.sort(
+        key=lambda item: item.get("last_sign_in_at") or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
+    return {"items": accounts}
+
+
 @app.get(
     "/api/admin/recruiters",
     response_model=schemas.RecruiterListResponse,
