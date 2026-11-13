@@ -175,6 +175,7 @@ def test_super_admin_can_view_recruiter_application_and_candidate_but_recruiter_
         "owner_uid": recruiter_uid,
         "title": "DevOps Engineer",
         "company": "Example Europe",
+        "url": "https://example.com/jobs/devops-engineer",
     })
     db.applications.insert_one({
         "_id": application_id,
@@ -216,6 +217,7 @@ def test_super_admin_can_view_recruiter_application_and_candidate_but_recruiter_
         assert record["recruiter_email"] == "alex@example.com"
         assert record["candidate_name"] == "Jordan Candidate"
         assert record["job_title"] == "DevOps Engineer"
+        assert record["job_url"] == "https://example.com/jobs/devops-engineer"
         assert record["apply_status"] == "applied"
         assert "notes" not in record
         assert "apply_documents" not in record

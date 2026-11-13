@@ -1498,6 +1498,133 @@ footer { margin-top: 32px; font-size: 12px; color: var(--faint); }
   color: var(--muted);
   font-size: 11px;
 }
+.jobs-list.admin-application-list { gap: 12px; }
+.jobs-list.admin-application-list--card { grid-template-columns: minmax(0, 1fr); }
+.admin-application-card {
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+.admin-applications-panel-head { align-items: center; }
+.admin-applications-panel-head > div:first-child { min-width: 0; }
+.admin-applications-panel-head .kb-view-toggle { flex: none; }
+.admin-application-main {
+  display: grid;
+  grid-template-columns: minmax(240px, 1.35fr) minmax(150px, 1fr) minmax(190px, 1.2fr) auto auto;
+  align-items: center;
+  gap: 16px;
+}
+.admin-application-job,
+.admin-application-person,
+.admin-application-status {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+.admin-application-job strong,
+.admin-application-person strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.admin-application-job span,
+.admin-application-person span,
+.admin-application-person small,
+.admin-application-status small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.admin-application-person small { font-size: 10px; }
+.admin-application-status { justify-items: end; }
+.admin-application-actions { position: relative; }
+.admin-application-actions > summary {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: var(--muted);
+  background: var(--surface);
+  cursor: pointer;
+  list-style: none;
+}
+.admin-application-actions > summary::-webkit-details-marker { display: none; }
+.admin-application-actions > summary:hover { color: var(--ink); background: var(--surface-2); }
+.admin-application-menu {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 5px);
+  right: 0;
+  display: grid;
+  width: 190px;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+}
+.admin-application-menu button,
+.admin-application-menu a,
+.admin-application-menu-disabled {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--ink);
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  text-decoration: none;
+}
+.admin-application-menu button,
+.admin-application-menu a { cursor: pointer; }
+.admin-application-menu button:hover,
+.admin-application-menu a:hover { background: var(--surface-2); }
+.admin-application-menu-disabled { color: var(--muted); }
+.admin-application-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11px;
+}
+.admin-application-action-message { margin: 10px 0 0; color: var(--muted); font-size: 12px; }
+.admin-application-board .kanban-column[data-status="not_applied"] { --accent: #94a3b8; }
+.admin-application-board .kanban-column[data-status="applied"] { --accent: #60a5fa; }
+.admin-application-board .kanban-column[data-status="assessment"] { --accent: #f2b84b; }
+.admin-application-board .kanban-column[data-status="offer_received"] { --accent: #22c55e; }
+.admin-application-board .kanban-column[data-status="rejected"] { --accent: #ef4444; }
+.admin-application-board .kanban-column[data-status="withdrawn"] { --accent: #64748b; }
+.admin-application-board-card { padding: 12px; }
+.admin-application-board-card .admin-application-main {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 9px;
+}
+.admin-application-board-card .admin-application-job { grid-column: 1; }
+.admin-application-board-card .admin-application-person { grid-column: 1 / -1; }
+.admin-application-board-card .admin-application-status {
+  grid-column: 1;
+  justify-items: start;
+}
+.admin-application-board-card .admin-application-actions { grid-column: 2; grid-row: 1; }
 .recommended-jobs { margin-top: 12px; padding: 18px; }
 .recommended-jobs--dashboard { margin-top: 0; }
 .recommended-jobs--jobs { margin-bottom: 16px; }
@@ -1654,6 +1781,15 @@ footer { margin-top: 32px; font-size: 12px; color: var(--faint); }
 }
 @media (max-width: 720px) {
   .jobs-list, .dashboard-page .jobs-list { grid-template-columns: minmax(0, 1fr); }
+  .admin-applications-panel-head { align-items: flex-start; flex-direction: column; }
+  .admin-applications-panel-head .kb-view-toggle { align-self: flex-end; }
+  .admin-application-board { max-height: 65vh; }
+  .admin-application-main { grid-template-columns: minmax(0, 1fr) auto; gap: 10px; }
+  .admin-application-job { grid-column: 1; }
+  .admin-application-person { grid-column: 1 / -1; }
+  .admin-application-status { grid-column: 1; justify-items: start; }
+  .admin-application-actions { grid-column: 2; grid-row: 1; }
+  .admin-application-details { flex-direction: column; gap: 7px; }
   .recommendation-grid { grid-template-columns: minmax(0, 1fr); }
   .application-filters { grid-template-columns: minmax(0, 1fr); }
   .recommendation-empty { align-items: flex-start; flex-direction: column; }

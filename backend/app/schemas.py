@@ -470,6 +470,7 @@ class AdminApplicationRead(BaseModel):
     candidate_name: str
     job_title: str
     company: str
+    job_url: HttpUrl | None = None
     apply_status: ApplyStatus = "not_applied"
     applied_at: datetime | None = None
     updated_at: datetime

@@ -2989,7 +2989,10 @@ def list_all_recruiter_applications(
     job_ids = list({row["job_id"] for row in rows if row.get("job_id")})
     jobs = {
         job["_id"]: job
-        for job in db.jobs.find({"_id": {"$in": job_ids}})
+        for job in db.jobs.find(
+            {"_id": {"$in": job_ids}},
+            {"_id": 1, "title": 1, "company": 1, "url": 1},
+        )
     }
 
     owner_uids = list({
@@ -3007,7 +3010,10 @@ def list_all_recruiter_applications(
     }
     recruiters = {
         recruiter["uid"]: recruiter
-        for recruiter in db.recruiters.find({"uid": {"$in": owner_uids}})
+        for recruiter in db.recruiters.find(
+            {"uid": {"$in": owner_uids}},
+            {"uid": 1, "display_name": 1, "email": 1},
+        )
     }
 
     result = []
@@ -3025,6 +3031,7 @@ def list_all_recruiter_applications(
             "candidate_name": candidate.get("full_name") or "Unassigned",
             "job_title": job["title"] if job else "(deleted job)",
             "company": job["company"] if job else "",
+            "job_url": job.get("url") if job else None,
             "apply_status": row.get("apply_status", "not_applied"),
             "applied_at": row.get("applied_at"),
             "updated_at": row.get("updated_at") or row.get("created_at") or now(),

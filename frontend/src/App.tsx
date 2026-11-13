@@ -25,6 +25,8 @@ import {
   Mail,
   MapPin,
   Menu,
+  MoreHorizontal,
+  ExternalLink,
   Plus,
   RotateCcw,
   Search,
@@ -936,6 +938,7 @@ type AdminApplication = {
   candidate_name: string;
   job_title: string;
   company: string;
+  job_url: string | null;
   apply_status: Application["apply_status"];
   applied_at: string | null;
   updated_at: string;
@@ -1386,6 +1389,9 @@ function App({
   const [adminApplications, setAdminApplications] = useState<AdminApplication[]>([]);
   const [adminApplicationsLoading, setAdminApplicationsLoading] = useState(false);
   const [adminApplicationsError, setAdminApplicationsError] = useState("");
+  const [adminApplicationsView, setAdminApplicationsView] = useState<"card" | "board">("card");
+  const [adminApplicationDetailsId, setAdminApplicationDetailsId] = useState<string | null>(null);
+  const [adminApplicationActionMessage, setAdminApplicationActionMessage] = useState("");
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
   const [adminAccessChecked, setAdminAccessChecked] = useState(false);
   const [adminAccessError, setAdminAccessError] = useState("");
@@ -1534,6 +1540,101 @@ function App({
     : null;
   const candidateName = (candidateId?: string | null) =>
     candidates.find((candidate) => candidate.id === candidateId)?.full_name ?? "Unassigned";
+
+  async function copyAdminApplicationSummary(application: AdminApplication) {
+    const appliedDate = application.applied_at
+      ? new Date(application.applied_at).toLocaleDateString()
+      : "date not recorded";
+    const summary = [
+      application.job_title,
+      application.company,
+      `Candidate: ${application.candidate_name}`,
+      `Recruiter: ${application.recruiter_name}${application.recruiter_email ? ` (${application.recruiter_email})` : ""}`,
+      `Status: ${APPLY_STATUS_LABELS[application.apply_status] ?? application.apply_status}`,
+      `Applied: ${appliedDate}`,
+    ].join("\n");
+    try {
+      await navigator.clipboard.writeText(summary);
+      setAdminApplicationActionMessage("Application summary copied.");
+    } catch {
+      setAdminApplicationActionMessage("Could not copy the application summary.");
+    }
+  }
+
+  function renderAdminApplicationCard(
+    application: AdminApplication,
+    boardCard = false,
+  ) {
+    return (
+      <article
+        className={`admin-application-card${boardCard ? " admin-application-board-card" : ""}`}
+        key={`${application.recruiter_uid}-${application.id}`}
+      >
+        <div className="admin-application-main">
+          <div className="admin-application-job">
+            <strong>{application.job_title}</strong>
+            <span>{application.company}</span>
+          </div>
+          <div className="admin-application-person">
+            <small>Candidate</small>
+            <strong>{application.candidate_name}</strong>
+          </div>
+          <div className="admin-application-person">
+            <small>Recruiter</small>
+            <strong>{application.recruiter_name}</strong>
+            {application.recruiter_email && <span>{application.recruiter_email}</span>}
+          </div>
+          <div className="admin-application-status">
+            <span className={`status status-${application.apply_status}`}>
+              {APPLY_STATUS_LABELS[application.apply_status] ?? application.apply_status}
+            </span>
+            <small>
+              Applied {application.applied_at
+                ? new Date(application.applied_at).toLocaleDateString()
+                : "date not recorded"}
+            </small>
+          </div>
+          <details className="admin-application-actions">
+            <summary aria-label={`More actions for ${application.job_title}`}>
+              <MoreHorizontal size={18} />
+            </summary>
+            <div className="admin-application-menu" role="group" aria-label="Application actions">
+              <button
+                type="button"
+                onClick={() => setAdminApplicationDetailsId((current) =>
+                  current === application.id ? null : application.id,
+                )}
+              >
+                {adminApplicationDetailsId === application.id ? "Hide details" : "View details"}
+              </button>
+              {application.job_url ? (
+                <a href={application.job_url} target="_blank" rel="noopener noreferrer">
+                  Open job posting <ExternalLink size={13} />
+                </a>
+              ) : (
+                <span className="admin-application-menu-disabled">Job link unavailable</span>
+              )}
+              <button type="button" onClick={() => void copyAdminApplicationSummary(application)}>
+                Copy summary
+              </button>
+            </div>
+          </details>
+        </div>
+        {adminApplicationDetailsId === application.id && (
+          <div className="admin-application-details">
+            <span>Candidate: {application.candidate_name}</span>
+            <span>
+              Recruiter: {application.recruiter_name}
+              {application.recruiter_email ? ` · ${application.recruiter_email}` : ""}
+            </span>
+            <span>Status: {APPLY_STATUS_LABELS[application.apply_status] ?? application.apply_status}</span>
+            <span>Last updated {new Date(application.updated_at).toLocaleDateString()}</span>
+          </div>
+        )}
+      </article>
+    );
+  }
+
   const threadRef = useRef<HTMLDivElement>(null);
   const previousPageRef = useRef(page);
 
@@ -6017,10 +6118,28 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
           <div className="page-view">
         {isSuperAdmin && (
           <section className="panel" aria-labelledby="recruiter-applications-heading">
-            <div className="panel-head">
+            <div className="panel-head admin-applications-panel-head">
               <div>
                 <h2 id="recruiter-applications-heading">Recruiter-submitted applications</h2>
                 <p>Applications confirmed by recruiters, including the recruiter and candidate for each record.</p>
+              </div>
+              <div className="kb-view-toggle" role="group" aria-label="Recruiter applications view">
+                <button
+                  type="button"
+                  className={adminApplicationsView === "card" ? "active" : ""}
+                  aria-pressed={adminApplicationsView === "card"}
+                  onClick={() => setAdminApplicationsView("card")}
+                >
+                  <List size={14} /> Card view
+                </button>
+                <button
+                  type="button"
+                  className={adminApplicationsView === "board" ? "active" : ""}
+                  aria-pressed={adminApplicationsView === "board"}
+                  onClick={() => setAdminApplicationsView("board")}
+                >
+                  <Kanban size={14} /> Board view
+                </button>
               </div>
             </div>
             {adminApplicationsError ? (
@@ -6029,38 +6148,44 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
               <div className="analytics-empty" role="status">Loading recruiter applications...</div>
             ) : adminApplications.length === 0 ? (
               <div className="analytics-empty">No recruiter-confirmed applications yet.</div>
-            ) : (
-              <div className="jobs-list">
-                {adminApplications.map((application) => (
-                    <article className="kanban-card" key={`${application.recruiter_uid}-${application.id}`}>
-                      <div className="kanban-card-top">
-                        <div className="kanban-card-title">
-                          <strong>{application.job_title}</strong>
-                          <span>{application.company}</span>
-                          <small className="job-candidate-link">
-                            Candidate: {application.candidate_name}
-                          </small>
-                          <small className="job-candidate-link">
-                            Recruiter: {application.recruiter_name}
-                            {application.recruiter_email
-                              ? ` · ${application.recruiter_email}`
-                              : ""}
-                          </small>
-                        </div>
-                        <span className={`status status-${application.apply_status}`}>
-                          {APPLY_STATUS_LABELS[application.apply_status] ?? application.apply_status}
-                        </span>
-                      </div>
-                      <div className="application-confirmation-meta">
-                        <span>
-                          Applied {application.applied_at
-                            ? new Date(application.applied_at).toLocaleDateString()
-                            : "date not recorded"}
-                        </span>
-                      </div>
-                    </article>
-                ))}
+            ) : adminApplicationsView === "card" ? (
+              <div className="jobs-list admin-application-list admin-application-list--card">
+                {adminApplications.map((application) => renderAdminApplicationCard(application))}
               </div>
+            ) : (
+              <div className="kanban-board full admin-application-board" aria-label="Recruiter applications by status">
+                {APPLY_BOARD_STATUSES.map((status) => {
+                  const statusApplications = adminApplications.filter(
+                    (application) => application.apply_status === status,
+                  );
+                  return (
+                    <section
+                      className="kanban-column"
+                      data-status={status}
+                      key={status}
+                      aria-label={`${APPLY_STATUS_LABELS[status] ?? status} applications`}
+                    >
+                      <div className="kanban-column-head">
+                        <span className="kanban-dot" />
+                        <h3>{APPLY_STATUS_LABELS[status] ?? status}</h3>
+                        <span className="kanban-count">{statusApplications.length}</span>
+                      </div>
+                      <div className="kanban-column-body">
+                        {statusApplications.length === 0 ? (
+                          <div className="kanban-empty">Nothing here</div>
+                        ) : statusApplications.map((application) =>
+                          renderAdminApplicationCard(application, true),
+                        )}
+                      </div>
+                    </section>
+                  );
+                })}
+              </div>
+            )}
+            {adminApplicationActionMessage && (
+              <p className="admin-application-action-message" role="status">
+                {adminApplicationActionMessage}
+              </p>
             )}
           </section>
         )}
