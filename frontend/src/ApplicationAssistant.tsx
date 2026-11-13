@@ -128,29 +128,29 @@ const STATUS_TEXT: Record<string, string> = {
   withdrawn: "Withdrawn",
 };
 const PAUSE_TEXT: Record<string, string> = {
-  login_required: "The page asks you to log in. Sign in manually in the open CareerPilot Chrome window; CareerPilot will resume or wait for you.",
-  listing_opened: "The saved listing is open in the CareerPilot Chrome session. Sign in manually if needed.",
-  access_challenge: "A CAPTCHA, Cloudflare challenge, or account restriction was detected. CareerPilot stopped and did not bypass or retry it. Resolve it manually in the open Chrome window.",
-  browser_attachment_unavailable: "CareerPilot could not connect Playwright to the dedicated Chrome window. Close the CareerPilot automation window and retry. Never connect your everyday Chrome profile.",
-  browser_profile_mismatch: "CareerPilot refused this Chrome connection because it could not verify the dedicated CareerPilot profile. Use the Automate button to launch the dedicated profile; never connect your everyday Chrome profile.",
-  automation_profile_in_use: "Another CareerPilot browser run is using the shared profile. Close or finish that run before starting another.",
+  login_required: "The page asks you to log in. Sign in manually in the open ThoughtLabs CoPilotChrome window; ThoughtLabs CoPilotwill resume or wait for you.",
+  listing_opened: "The saved listing is open in the ThoughtLabs CoPilotChrome session. Sign in manually if needed.",
+  access_challenge: "A CAPTCHA, Cloudflare challenge, or account restriction was detected. ThoughtLabs CoPilotstopped and did not bypass or retry it. Resolve it manually in the open Chrome window.",
+  browser_attachment_unavailable: "ThoughtLabs CoPilotcould not connect Playwright to the dedicated Chrome window. Close the ThoughtLabs CoPilotautomation window and retry. Never connect your everyday Chrome profile.",
+  browser_profile_mismatch: "ThoughtLabs CoPilotrefused this Chrome connection because it could not verify the dedicated ThoughtLabs CoPilotprofile. Use the Automate button to launch the dedicated profile; never connect your everyday Chrome profile.",
+  automation_profile_in_use: "Another ThoughtLabs CoPilotbrowser run is using the shared profile. Close or finish that run before starting another.",
   glassdoor_interactive_required: "The Glassdoor form-assistance run needs a visible browser window and an interactive wait period.",
   glassdoor_wait_timeout: "The Glassdoor browser timed out before an application form appeared. Your local sign-in session is kept; start the run again when ready.",
   glassdoor_profile_in_use: "Another Glassdoor browser run is already open. Finish or close that run before starting a second one.",
-  glassdoor_site_blocked: "Glassdoor's security page blocked this browser session. CareerPilot won't bypass it. Open the listing in Chrome yourself and use the Application Kit to review or copy answers.",
-  captcha: "A CAPTCHA is on the page. Complete it yourself; CareerPilot does not solve or bypass it.",
+  glassdoor_site_blocked: "Glassdoor's security page blocked this browser session. ThoughtLabs CoPilotwon't bypass it. Open the listing in Chrome yourself and use the Application Kit to review or copy answers.",
+  captcha: "A CAPTCHA is on the page. Complete it yourself; ThoughtLabs CoPilotdoes not solve or bypass it.",
   unsupported_form: "No fillable form was found here yet. If the job opens an external employer portal, click Apply in the open window or use the Application Kit manually.",
   required_fields_need_input: "Some required fields need your input before this form is complete. Check the table below and fill any remaining blanks in the open browser.",
   field_failed: "At least one field could not be filled automatically. Check the list below and verify in the open browser.",
   navigation_timeout: "The employer page took too long to open. Check the URL and try again.",
   navigation_failed: "The page could not be opened. Check the address and your connection.",
-  unsafe_redirect: "The page tried to redirect outside its supported employer site. CareerPilot blocked that navigation.",
+  unsafe_redirect: "The page tried to redirect outside its supported employer site. ThoughtLabs CoPilotblocked that navigation.",
   browser_unavailable:
     "The browser could not start. Check the local backend's Playwright installation and browser error.",
   chrome_unavailable:
-    "Google Chrome could not start. Install or repair Google Chrome Stable, then restart CareerPilot. CareerPilot uses a dedicated profile separate from your regular Chrome profile.",
+    "Google Chrome could not start. Install or repair Google Chrome Stable, then restart CareerPilot. ThoughtLabs CoPilotuses a dedicated profile separate from your regular Chrome profile.",
   chrome_launch_failed:
-    "Google Chrome Stable is installed but could not launch the CareerPilot profile. Close any other CareerPilot automation window, check that the profile folder is writable, and try again.",
+    "Google Chrome Stable is installed but could not launch the ThoughtLabs CoPilotprofile. Close any other ThoughtLabs CoPilotautomation window, check that the profile folder is writable, and try again.",
   unsafe_destination: "The application page resolves to a private or internal address and was blocked.",
   unexpected_error: "The browser run stopped unexpectedly. The form was not submitted. Try opening the employer page directly; if this happens again, check the backend log for the run's error category.",
 };
@@ -533,7 +533,7 @@ export default function ApplicationAssistant({
     <div className="aa-overlay" role="dialog" aria-modal="true" aria-label="Application Assistant">
       <div className="aa-shell">
         <header className="aa-head">
-          <button type="button" className="aa-brand" onClick={onReturnDashboard} aria-label="Return to CareerPilot dashboard">
+          <button type="button" className="aa-brand" onClick={onReturnDashboard} aria-label="Return to ThoughtLabs CoPilotdashboard">
             <span className="brand-mark"><Sparkles size={18} /></span>
             <strong>ThoughtLabs CoPilot</strong>
           </button>
@@ -651,7 +651,7 @@ export default function ApplicationAssistant({
                     </option>
                   ))}
                 </select>
-                <span className="aa-hint">CareerPilot will only attach this file if you explicitly approve the upload in the Fill step.</span>
+                <span className="aa-hint">ThoughtLabs CoPilotwill only attach this file if you explicitly approve the upload in the Fill step.</span>
               </label>
             ) : (
               <div className="aa-banner aa-warn">
@@ -660,7 +660,7 @@ export default function ApplicationAssistant({
             )}
 
             <p className="aa-hint">
-              CareerPilot uses its dedicated persistent Chrome profile to open the job, fill supported fields, and stop at the final review screen. It never submits for you.
+              ThoughtLabs CoPilotuses its dedicated persistent Chrome profile to open the job, fill supported fields, and stop at the final review screen. It never submits for you.
             </p>
             <div className="aa-actions">
               <button type="button" className="primary-button" onClick={() => goto("kit")}>
@@ -701,7 +701,7 @@ export default function ApplicationAssistant({
             <div className="aa-card">
               <h3>Questions only you can answer</h3>
               <p className="aa-muted">
-                CareerPilot never guesses these. Answer the ones you are comfortable with; they are reused when filling this application.
+                ThoughtLabs CoPilotnever guesses these. Answer the ones you are comfortable with; they are reused when filling this application.
               </p>
               {rows
                 .filter((r) => r.group === "answer")
@@ -859,15 +859,15 @@ export default function ApplicationAssistant({
         {/* ---------------- FILL ---------------- */}
         {s && step === "fill" && (
           <section className="aa-card" aria-label="Fill">
-            <h3>Automate application in CareerPilot browser</h3>
+            <h3>Automate application in ThoughtLabs CoPilotbrowser</h3>
             <p className="aa-muted">
-              CareerPilot opens this {listing.label} application in its dedicated persistent Chrome profile, pauses if you need to sign in manually, fills supported multi-step form fields from your confirmed Application Kit, and stops at the final review screen so you can inspect everything and click Submit yourself.
+              ThoughtLabs CoPilotopens this {listing.label} application in its dedicated persistent Chrome profile, pauses if you need to sign in manually, fills supported multi-step form fields from your confirmed Application Kit, and stops at the final review screen so you can inspect everything and click Submit yourself.
             </p>
             <div className="aa-platform"><Globe2 size={16} /> {listing.label}</div>
             {!canAutomate && (
               <div className="aa-banner aa-warn">
                 {!s.job.url
-                  ? "This saved job has no listing URL. Add a valid job link before opening it in the CareerPilot browser."
+                  ? "This saved job has no listing URL. Add a valid job link before opening it in the ThoughtLabs CoPilotbrowser."
                   : "The saved URL is invalid, unsupported, or does not match this job's platform. Only valid LinkedIn, Naukri, Indeed, Glassdoor, Greenhouse, and Lever URLs can be automated."}
               </div>
             )}
@@ -904,7 +904,7 @@ export default function ApplicationAssistant({
                 })}
               >
                 {busy === "automate" || running
-                  ? "Automating in CareerPilot browser..."
+                  ? "Automating in ThoughtLabs CoPilotbrowser..."
                   : `Automate ${listing.label} Application`}
               </button>
               <button
@@ -931,7 +931,7 @@ export default function ApplicationAssistant({
                 {latestRun.status === "running" && (
                   <p className="aa-muted">
                     {listingRun
-                      ? "The connected CareerPilot Chrome session is open on this job listing. Sign in manually if needed; CareerPilot is not filling an application."
+                      ? "The connected ThoughtLabs CoPilotChrome session is open on this job listing. Sign in manually if needed; ThoughtLabs CoPilotis not filling an application."
                       : "Automating in the browser window... Sign in manually if prompted. This updates automatically."}
                   </p>
                 )}
@@ -939,7 +939,7 @@ export default function ApplicationAssistant({
                   <div className={`aa-banner ${listingRun && latestRun.pause_reason === "listing_opened" ? "aa-good" : "aa-warn"}`}>
                     {latestRun.pause_reason === "navigation_failed" &&
                     /^network_err_[a-z0-9_]+$/i.test(latestRun.error_category ?? "")
-                      ? `Chrome reported ${(latestRun.error_category ?? "").slice("network_".length).toUpperCase()} while loading this page. Check network, DNS, firewall, or provider availability; CareerPilot did not bypass the navigation guard.`
+                      ? `Chrome reported ${(latestRun.error_category ?? "").slice("network_".length).toUpperCase()} while loading this page. Check network, DNS, firewall, or provider availability; ThoughtLabs CoPilotdid not bypass the navigation guard.`
                       : PAUSE_TEXT[latestRun.pause_reason] ?? latestRun.pause_reason}
                     {latestRun.error_category && latestRun.pause_reason !== "listing_opened" && <span> (Diagnostic: {latestRun.error_category.replace(/_/g, " ")})</span>}
                   </div>
@@ -948,17 +948,17 @@ export default function ApplicationAssistant({
                   <div className="aa-banner aa-good">Matched fields are filled and automation stopped at the review screen. Nothing has been submitted; inspect the open employer form and review every value in CareerPilot.</div>
                 )}
                 {latestRun.browser_open && listingRun && (
-                  <div className="aa-banner aa-good">The connected Chrome session remains open. Close its window yourself when you are done; CareerPilot disconnects without closing Chrome.</div>
+                  <div className="aa-banner aa-good">The connected Chrome session remains open. Close its window yourself when you are done; ThoughtLabs CoPilotdisconnects without closing Chrome.</div>
                 )}
                 {latestRun.browser_open && !listingRun && !latestRun.submission_enabled && (
                   <div className="aa-banner aa-warn">Form writes are guarded. Confirm your review in the next step and enable manual form requests before clicking Submit in the browser.</div>
                 )}
                 {latestRun.submission_enabled && (
-                  <div className="aa-banner aa-warn">Manual form requests are enabled. CareerPilot will not click Submit; use the employer's button yourself only after checking the form.</div>
+                  <div className="aa-banner aa-warn">Manual form requests are enabled. ThoughtLabs CoPilotwill not click Submit; use the employer's button yourself only after checking the form.</div>
                 )}
                 {latestRun.blocked_writes > 0 && (
                   <div className="aa-banner aa-warn">
-                    CareerPilot blocked {latestRun.blocked_writes} write request{latestRun.blocked_writes === 1 ? "" : "s"}; no form submission was sent.
+                    ThoughtLabs CoPilotblocked {latestRun.blocked_writes} write request{latestRun.blocked_writes === 1 ? "" : "s"}; no form submission was sent.
                   </div>
                 )}
                 {latestRun.fields.length > 0 && (
@@ -1042,7 +1042,7 @@ export default function ApplicationAssistant({
               <>
                 <label className="aa-check">
                   <input type="checkbox" checked={reviewed} onChange={(e) => setReviewed(e.target.checked)} />
-                  I have read every answer above and they are accurate. I understand CareerPilot will not submit anything for me.
+                  I have read every answer above and they are accurate. I understand ThoughtLabs CoPilotwill not submit anything for me.
                 </label>
                 <div className="aa-actions">
                   <button
@@ -1072,13 +1072,13 @@ export default function ApplicationAssistant({
                 <div className="aa-banner aa-good" role="status">
                   <CheckCircle2 size={16} /> You told us you submitted this application{s.submitted_at ? ` on ${new Date(s.submitted_at).toLocaleString()}` : ""}.
                 </div>
-                <p className="aa-muted">CareerPilot did not submit it and has no confirmation from the employer's site. Keep any confirmation email they send you.</p>
+                <p className="aa-muted">ThoughtLabs CoPilotdid not submit it and has no confirmation from the employer's site. Keep any confirmation email they send you.</p>
               </>
             ) : s.review.confirmed ? (
               <>
                 <h3>Submit it yourself, then tell us</h3>
                 <ol className="aa-list aa-checklist">
-                  <li>{latestRun?.browser_open ? "Inspect the prepared form in the open CareerPilot browser and check every field once more." : "Open the employer's application page and fill or check every field yourself."}</li>
+                  <li>{latestRun?.browser_open ? "Inspect the prepared form in the open ThoughtLabs CoPilotbrowser and check every field once more." : "Open the employer's application page and fill or check every field yourself."}</li>
                   <li>Only if you want to submit from CareerPilot's browser, explicitly enable the site's form requests below. Then click the site's own Submit button yourself.</li>
                   <li>Come back here and record it.</li>
                 </ol>
@@ -1086,7 +1086,7 @@ export default function ApplicationAssistant({
                   <div className="aa-card">
                     <label className="aa-check">
                       <input type="checkbox" checked={authorizeManualWrite} onChange={(e) => setAuthorizeManualWrite(e.target.checked)} />
-                      I reviewed the prepared form. Allow this employer page to send form requests so I can click Submit myself. CareerPilot will not click it, but the site may react to enabling requests.
+                      I reviewed the prepared form. Allow this employer page to send form requests so I can click Submit myself. ThoughtLabs CoPilotwill not click it, but the site may react to enabling requests.
                     </label>
                     <button
                       type="button"
@@ -1103,7 +1103,7 @@ export default function ApplicationAssistant({
                   </div>
                 )}
                 {latestRun?.submission_enabled && (
-                  <div className="aa-banner aa-warn">Form requests are enabled. CareerPilot did not submit the form. Click Submit yourself only after your final check.</div>
+                  <div className="aa-banner aa-warn">Form requests are enabled. ThoughtLabs CoPilotdid not submit the form. Click Submit yourself only after your final check.</div>
                 )}
                 {s.application_url && supportedPlatformForUrl(s.application_url) && (
                   <a href={s.application_url} target="_blank" rel="noreferrer" className="secondary-button aa-inline-btn">Open employer application page <ArrowUpRight size={14} /></a>

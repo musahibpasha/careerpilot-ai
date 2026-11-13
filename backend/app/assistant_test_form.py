@@ -76,6 +76,6 @@ def render(variant: str = "") -> str:
         "<!doctype html><html><head><meta charset='utf-8'><title>Test application form</title>"
         f"<style>{_STYLE}</style></head><body>"
         "<h1>Test Co: Frontend Developer</h1>"
-        "<p class='note'>CareerPilot local test form. Submitting does nothing real.</p>"
+        "<p class='note'>ThoughtLabs CoPilotlocal test form. Submitting does nothing real.</p>"
         f"{body}</body></html>"
     )

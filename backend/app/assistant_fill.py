@@ -835,7 +835,7 @@ def _secure_profile_directory(path: Path) -> None:
 
 
 def _automation_profile_path(configured_path: str | None = None) -> str:
-    """Resolve a private, dedicated CareerPilot profile outside the repository."""
+    """Resolve a private, dedicated ThoughtLabs CoPilotprofile outside the repository."""
     if configured_path:
         configured = Path(configured_path).expanduser()
         if configured.is_symlink() or bool(getattr(configured, "is_junction", lambda: False)()):
@@ -862,7 +862,7 @@ def _automation_profile_path(configured_path: str | None = None) -> str:
             profile.relative_to(normal_profile.resolve())
         except ValueError:
             continue
-        raise ValueError("Use a separate CareerPilot profile, not a regular browser profile.")
+        raise ValueError("Use a separate ThoughtLabs CoPilotprofile, not a regular browser profile.")
     profile.mkdir(parents=True, exist_ok=True)
     if profile.is_symlink() or bool(getattr(profile, "is_junction", lambda: False)()):
         raise ValueError("The automation browser profile cannot be a symbolic link.")
@@ -1025,21 +1025,21 @@ class BrowserAttachmentUnavailable(RuntimeError):
 
 
 class BrowserProfileMismatch(BrowserAttachmentUnavailable):
-    """The connected Chrome does not expose the dedicated CareerPilot profile."""
+    """The connected Chrome does not expose the dedicated ThoughtLabs CoPilotprofile."""
 
 
 def _validate_cdp_endpoint(endpoint: str | None) -> str:
     value = (endpoint or "").strip()
     if not value:
         raise BrowserAttachmentUnavailable(
-            "No CareerPilot Chrome debugging endpoint is configured."
+            "No ThoughtLabs CoPilotChrome debugging endpoint is configured."
         )
     try:
         parts = urlsplit(value)
         port = parts.port
     except ValueError:
         raise BrowserAttachmentUnavailable(
-            "The CareerPilot Chrome debugging endpoint is invalid."
+            "The ThoughtLabs CoPilotChrome debugging endpoint is invalid."
         ) from None
     if (
         parts.scheme.lower() != "http"
@@ -1196,7 +1196,7 @@ def _start_external_chrome(profile_dir: str) -> tuple[subprocess.Popen, str]:
 
 
 def _get_or_start_external_chrome(profile_dir: str) -> tuple[subprocess.Popen, str]:
-    """Reuse the CareerPilot Chrome process for this profile while it remains open."""
+    """Reuse the ThoughtLabs CoPilotChrome process for this profile while it remains open."""
     profile_key = os.path.normcase(str(Path(profile_dir).resolve()))
     with _EXTERNAL_CHROME_LOCK:
         existing = _EXTERNAL_CHROME_PROCESSES.get(profile_key)
@@ -1446,7 +1446,7 @@ def run_assistance(
                     )
                 except Exception as exc:
                     raise BrowserAttachmentUnavailable(
-                        "Could not connect Playwright to the dedicated CareerPilot Chrome session."
+                        "Could not connect Playwright to the dedicated ThoughtLabs CoPilotChrome session."
                     ) from exc
                 attached_browser = True
                 contexts = browser.contexts

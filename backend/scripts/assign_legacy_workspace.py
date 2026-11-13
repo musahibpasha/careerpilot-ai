@@ -17,7 +17,7 @@ LEGACY_JOB_INDEXES = ("uq_job_source_id", "uq_job_url")
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
-            "Inspect the legacy CareerPilot workspace. Writing requires both "
+            "Inspect the legacy ThoughtLabs CoPilotworkspace. Writing requires both "
             "--apply and an explicit --confirm-email."
         )
     )

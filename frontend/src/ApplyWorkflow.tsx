@@ -287,7 +287,7 @@ export default function ApplyWorkflow({
           <div className="apply-heading">
             <span className="apply-icon"><Sparkles size={18} /></span>
             <div>
-              <p className="apply-eyebrow">CareerPilot · Apply</p>
+              <p className="apply-eyebrow">ThoughtLabs CoPilot· Apply</p>
               <h2>{job.title} at {job.company}</h2>
             </div>
           </div>
@@ -350,7 +350,7 @@ export default function ApplyWorkflow({
             <div className="apply-step-content">
               <section className="apply-info-block">
                 <h3>{job.title} · {job.company}</h3>
-                <p className="apply-muted">Open the employer’s original application page in a separate tab. CareerPilot stays open, and no external application is submitted automatically.</p>
+                <p className="apply-muted">Open the employer’s original application page in a separate tab. ThoughtLabs CoPilotstays open, and no external application is submitted automatically.</p>
                 {applicationUrl ? <a className="primary-button apply-external-link" href={applicationUrl} target="_blank" rel="noopener noreferrer">Apply on Company Website <ExternalLink size={15} /></a> : <p className="apply-alert">No application URL is available for this job. Open the saved job posting to find the employer’s application page.</p>}
               </section>
               <section className="apply-info-block">

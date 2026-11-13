@@ -199,7 +199,7 @@ export default function AuthBoundary({ children }: { children?: ReactNode }) {
         <aside className="auth-intro">
           <div className="auth-brand">
             <span className="auth-brand-mark"><Sparkles size={18} aria-hidden="true" /></span>
-            <span>CareerPilot <strong>AI</strong></span>
+            <span>ThoughtLabs CoPilot AI </span>
           </div>
           <h1>Your recruiting workspace.</h1>
           <p>Sign in to securely manage candidates, resumes, jobs, and applications.</p>

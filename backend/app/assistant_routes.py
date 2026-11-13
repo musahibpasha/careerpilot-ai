@@ -425,7 +425,7 @@ def _state(db: Database, app_doc: dict, job: dict, generation: dict | None = Non
             "Open the LinkedIn posting yourself in your own browser.",
             "Copy each answer from the Application Kit into the form: contact details, then the drafted answers.",
             "Attach your resume yourself and leave anything marked 'Needs your input' for you to decide.",
-            "Read every answer once more before you submit. CareerPilot never submits for you.",
+            "Read every answer once more before you submit. ThoughtLabs CoPilotnever submits for you.",
             "When you have submitted it on the site, come back and click 'I submitted it'.",
         ] if linkedin_job else [],
         "kit": {"rows": rows, "drafts": drafts_meta},
@@ -963,7 +963,7 @@ def open_saved_job_listing(application_id: str, db: Database = Depends(get_db)):
     if settings.vercel:
         raise HTTPException(
             status_code=503,
-            detail="The CareerPilot persistent browser is available only from the local backend.",
+            detail="The ThoughtLabs CoPilotpersistent browser is available only from the local backend.",
         )
     app_doc, job = _load(db, application_id)
     if app_doc["status"] in ("submitted", "interview", "offer", "rejected", "withdrawn"):

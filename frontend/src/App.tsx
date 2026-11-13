@@ -6687,7 +6687,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
         )}
 
         <footer>
-          ThoughtLabs CoPilot <span>·</span> CareerPilot automation, human decisions.
+          ThoughtLabs CoPilot <span>·</span> ThoughtLabs CoPilotautomation, human decisions.
         </footer>
       </main>
 

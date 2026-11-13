@@ -186,7 +186,7 @@ def check_job_listing_url(raw: str, source: str = "") -> FillTarget:
     if platform is None:
         raise UrlRejected(
             "unsupported_host",
-            "Only LinkedIn, Naukri, Indeed, and Glassdoor job listings can open in the CareerPilot browser.",
+            "Only LinkedIn, Naukri, Indeed, and Glassdoor job listings can open in the ThoughtLabs CoPilotbrowser.",
         )
     expected_platform = JOB_SOURCE_PLATFORMS.get((source or "").strip().lower())
     if expected_platform and expected_platform != platform:

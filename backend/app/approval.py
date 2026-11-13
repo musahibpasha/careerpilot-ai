@@ -169,7 +169,7 @@ def record_submitted(
         "submitted",
         at,
         "User confirmed they submitted this application themselves on the employer's site. "
-        "CareerPilot did not submit it and has no confirmation from the employer's site.",
+        "ThoughtLabs CoPilotdid not submit it and has no confirmation from the employer's site.",
         "user",
         expected_revision=expected_revision,
         extra_set={

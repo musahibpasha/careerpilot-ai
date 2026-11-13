@@ -54,11 +54,11 @@ The long-term goal is to support a human-approved workflow: find relevant opport
 - **Application preparation plan** — Match analysis shows a deterministic fit summary, strengths, gaps, resume focus, positioning guidance, and interview prompts based on the saved job and profile. It is guidance, not AI-generated document text.
 - **AI cover-letter and resume wording drafts** — from a job's Match analysis, choose **Generate cover letter and resume drafts** to request a tailored cover letter, professional-summary rewrite, relevant saved skills to emphasize, and suggestions for rewriting existing experience/project bullets. Drafts use the saved profile and job posting, are editable in the panel, and are not submitted or saved automatically. Contact details are excluded from the AI request. Review all text for accuracy. The reviewed cover letter can be downloaded as a real PDF containing the candidate's saved contact details and the selected job context.
 - **Tailored resume export** — Match analysis retains its printable HTML resume export, built from the saved profile and edited AI summary/bullet suggestions. The Apply workflow additionally provides a genuine server-rendered PDF from the same saved profile and reviewed material. Existing education, work history, projects, and skills are preserved; generated wording is only used where its source still matches the saved profile. The original uploaded PDF and saved profile are not changed.
-- **Application Assistant / Automate** — open from a job card or tracker entry for a persistent, job-specific workflow. It combines grounded answer drafts, AI-tailored cover-letter/resume wording, the active saved PDF resume, and listing navigation for LinkedIn, Naukri, Indeed, and Glassdoor. Clicking Automate for a supported application flow launches installed Google Chrome as a normal process with the dedicated CareerPilot profile, then connects Playwright over a loopback-only CDP endpoint. Chrome is not launched with `--enable-automation`; a separate cross-process profile lock prevents concurrent CareerPilot runs. The default profile is `%LOCALAPPDATA%\ThoughtLabs CoPilot\AutomationChromeProfile`; it is separate from everyday Chrome and Edge profiles. CareerPilot does not terminate the launched Chrome process after disconnecting Playwright, so the user can finish manual login or review the open form. Google/LinkedIn may still reject or challenge an automated session; changing the launch method does not guarantee acceptance. Credentials are never entered or stored, CAPTCHA/MFA/security restrictions are not bypassed, and CareerPilot never clicks the final Submit Application button. Login and access challenges stop for manual intervention. Submit on the employer site yourself and separately record that action in CareerPilot.
+- **Application Assistant / Automate** — open from a job card or tracker entry for a persistent, job-specific workflow. It combines grounded answer drafts, AI-tailored cover-letter/resume wording, the active saved PDF resume, and listing navigation for LinkedIn, Naukri, Indeed, and Glassdoor. Clicking Automate for a supported application flow launches installed Google Chrome as a normal process with the dedicated ThoughtLabs CoPilotprofile, then connects Playwright over a loopback-only CDP endpoint. Chrome is not launched with `--enable-automation`; a separate cross-process profile lock prevents concurrent ThoughtLabs CoPilotruns. The default profile is `%LOCALAPPDATA%\ThoughtLabs CoPilot\AutomationChromeProfile`; it is separate from everyday Chrome and Edge profiles. ThoughtLabs CoPilotdoes not terminate the launched Chrome process after disconnecting Playwright, so the user can finish manual login or review the open form. Google/LinkedIn may still reject or challenge an automated session; changing the launch method does not guarantee acceptance. Credentials are never entered or stored, CAPTCHA/MFA/security restrictions are not bypassed, and ThoughtLabs CoPilotnever clicks the final Submit Application button. Login and access challenges stop for manual intervention. Submit on the employer site yourself and separately record that action in CareerPilot.
 
 #### Connect Chrome for listing-only navigation
 
-Start Google Chrome with the dedicated CareerPilot profile (the default is
+Start Google Chrome with the dedicated ThoughtLabs CoPilotprofile (the default is
 `%LOCALAPPDATA%\ThoughtLabs CoPilot\AutomationChromeProfile`) and a loopback-only
 debugging port. In Windows PowerShell:
 
@@ -76,7 +76,7 @@ backend environment and restart the backend. If
 `ASSISTANT_BROWSER_PROFILE_DIR` is configured, use that exact directory in
 Chrome's `--user-data-dir` argument. Sign in manually in this dedicated profile;
 its session persists between runs. Never point either setting at your everyday
-Chrome profile or copy cookies between profiles. The browser endpoint is local only, and CareerPilot refuses connections when
+Chrome profile or copy cookies between profiles. The browser endpoint is local only, and ThoughtLabs CoPilotrefuses connections when
 Chrome cannot confirm the dedicated profile. This manual setup is for the
 listing-only action; Automate starts its own normal Chrome process and chooses
 a loopback CDP port automatically. No CDP environment variable is required for
@@ -289,7 +289,7 @@ as identity proof. Example:
 ```powershell
 cd backend
 $env:CAREERPILOT_MIGRATION_ATLAS_URL = "<Atlas URI supplied through your secret manager>"
-python scripts/reconcile_legacy_workspace.py --dry-run --backup-dir ".\migration-backups" --atlas-db careerpilot --expected-email "your-verified-account@example.com"
+python scripts/reconcile_legacy_workspace.py --dry-run --backup-dir ".\migration-backups" --atlas-db ThoughtLabs CoPilot--expected-email "your-verified-account@example.com"
 ```
 
 The tool does not overwrite existing documents or alter indexes. It plans
@@ -394,7 +394,7 @@ ThoughtLabs CoPilot is designed around human oversight.
 
 - **No invented qualifications:** generated material should be based on the user's actual profile and resume.
 - **Review before saving:** AI-extracted resume fields should be reviewed by the user before being saved.
-- **No automatic applications:** CareerPilot never clicks Submit. The listing-only automation opens LinkedIn, Naukri, Indeed, or Glassdoor in a dedicated local Chrome profile and does not fill or submit application forms. Any separate form-assistance flow remains subject to its review and write safeguards.
+- **No automatic applications:** ThoughtLabs CoPilotnever clicks Submit. The listing-only automation opens LinkedIn, Naukri, Indeed, or Glassdoor in a dedicated local Chrome profile and does not fill or submit application forms. Any separate form-assistance flow remains subject to its review and write safeguards.
 - **Server-side approval:** `approved` requires confirmation of the exact reviewed job and answers. `submitted` can only be recorded after the user explicitly confirms manual submission. Generic status endpoints continue to reject both statuses.
 - **Respect website controls:** use permitted APIs, feeds, and automation methods. Do not bypass CAPTCHA, login requirements, or anti-bot protections.
 - **Pause when uncertain:** automation should stop and ask the user when a page or form is unclear.
@@ -426,20 +426,20 @@ As features are added, tests should be added for both successful and failure cas
 1. Start MongoDB, the backend, and the frontend. Add a profile with contact details, skills, experience, and projects, then save a job.
 2. Click **Automate** on a job card (or open the assistant from Applications). Confirm that the assistant reuses that job's application record.
 3. In **Job**, choose the saved resume for this application. In **Kit**, check profile facts and source labels; generate and edit answer drafts and tailored materials; save changes and reopen the assistant to confirm persistence.
-4. Open **Fill** and click **Open [platform] in CareerPilot browser**. The saved LinkedIn, Naukri, Indeed, or Glassdoor listing opens in the same dedicated persistent Chrome profile. Sign in manually if needed; the profile stores sessions on this machine, outside the repository. CareerPilot does not copy or use your regular Chrome profile. If a CAPTCHA, Cloudflare challenge, or account restriction appears, CareerPilot stops and does not bypass it.
-5. In this stage, CareerPilot does not fill application forms. Review the listing yourself, use the Application Kit as needed, and continue through **Review** to check your materials.
-6. Submit the application yourself on the employer's site only after reviewing it. CareerPilot never clicks Submit.
+4. Open **Fill** and click **Open [platform] in ThoughtLabs CoPilotbrowser**. The saved LinkedIn, Naukri, Indeed, or Glassdoor listing opens in the same dedicated persistent Chrome profile. Sign in manually if needed; the profile stores sessions on this machine, outside the repository. ThoughtLabs CoPilotdoes not copy or use your regular Chrome profile. If a CAPTCHA, Cloudflare challenge, or account restriction appears, ThoughtLabs CoPilotstops and does not bypass it.
+5. In this stage, ThoughtLabs CoPilotdoes not fill application forms. Review the listing yourself, use the Application Kit as needed, and continue through **Review** to check your materials.
+6. Submit the application yourself on the employer's site only after reviewing it. ThoughtLabs CoPilotnever clicks Submit.
 7. After you have actually submitted, check the confirmation in **Done** to record it in CareerPilot. Verify the status history records the review and manual confirmation.
 8. Confirm that trying to set `approved` or `submitted` through the generic application status API still returns a forbidden response.
 
-If a persistent assistant run fails to launch, install Google Chrome Stable and restart the local backend. CareerPilot uses the branded Chrome channel and does not fall back to bundled Chromium.
+If a persistent assistant run fails to launch, install Google Chrome Stable and restart the local backend. ThoughtLabs CoPilotuses the branded Chrome channel and does not fall back to bundled Chromium.
 
 ### Manually test the Apply workflow
 
 1. Sign in, save a job with its description and application URL, and add profile details including work history, projects, and education.
 2. Click **Apply** on that job card. Verify the three steps show the selected job, its saved details, the AI description summary, and the same match score and profile details.
 3. Generate and edit the tailored resume and cover letter separately. Verify each download is a PDF and that the original uploaded resume is unchanged.
-4. Continue without generating documents as well. In the final step, click **Apply on Company Website**; verify the employer page opens in a new tab and CareerPilot remains open.
+4. Continue without generating documents as well. In the final step, click **Apply on Company Website**; verify the employer page opens in a new tab and ThoughtLabs CoPilotremains open.
 5. Choose a status, add notes, and save. Refresh and reopen Apply; verify status, notes, application date, and saved drafts persist. Click Apply again for the same job and verify it reuses the same application.
 6. Open **Automate** and verify the ThoughtLabs logo remains visible; click it and confirm the dashboard opens. Existing Match analysis generation and HTML export should remain unchanged.
 

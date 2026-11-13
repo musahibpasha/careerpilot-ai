@@ -447,7 +447,7 @@ def main():
         print(json.dumps(report, indent=2, sort_keys=True))
         return 2
     if args.atlas_db != "careerpilot":
-        report["blockers"].append("--atlas-db careerpilot is required.")
+        report["blockers"].append("--atlas-db ThoughtLabs CoPilotis required.")
     if not atlas_url():
         report["blockers"].append(f"{ATLAS_URL_ENV} must explicitly identify the Atlas target.")
     if report["blockers"]:
@@ -477,7 +477,7 @@ def main():
             if any(refs.values()):
                 raise ValueError("Reference anomalies must be reviewed before apply.")
             print("Sanitized write target confirmation: MongoDB Atlas / careerpilot.")
-            confirmation = input("Type APPLY careerpilot to proceed: ")
+            confirmation = input("Type APPLY ThoughtLabs CoPilotto proceed: ")
             if confirmation != "APPLY careerpilot":
                 raise ValueError("Target confirmation did not match; no writes were performed.")
             apply_plan(database, plan, uid)
