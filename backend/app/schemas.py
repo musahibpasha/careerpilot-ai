@@ -461,6 +461,20 @@ class ApplicationRead(BaseModel):
     candidate_id: str | None = None
 
 
+class AdminApplicationRead(BaseModel):
+    id: str
+    recruiter_uid: str
+    recruiter_name: str
+    recruiter_email: str
+    candidate_id: str | None = None
+    candidate_name: str
+    job_title: str
+    company: str
+    apply_status: ApplyStatus = "not_applied"
+    applied_at: datetime | None = None
+    updated_at: datetime
+
+
 class ResumeEntry(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 

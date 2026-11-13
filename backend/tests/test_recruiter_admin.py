@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 import mongomock
 import pytest
+from bson import ObjectId
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
@@ -146,3 +147,89 @@ def test_super_admin_routes_create_list_and_show_workspace_only(monkeypatch):
             app.dependency_overrides.pop(main._require_super_admin, None)
         else:
             app.dependency_overrides[main._require_super_admin] = previous_admin
+
+
+def test_super_admin_can_view_recruiter_application_and_candidate_but_recruiter_cannot(
+    monkeypatch,
+):
+    from datetime import datetime, timezone
+
+    db = mongomock.MongoClient(tz_aware=True).admin_applications_test
+    recruiter_uid = "recruiter-uid"
+    candidate_id = ObjectId()
+    job_id = ObjectId()
+    application_id = ObjectId()
+    now = datetime.now(timezone.utc)
+    db.recruiters.insert_one({
+        "uid": recruiter_uid,
+        "display_name": "Alex Recruiter",
+        "email": "alex@example.com",
+    })
+    db.candidates.insert_one({
+        "_id": candidate_id,
+        "owner_uid": recruiter_uid,
+        "full_name": "Jordan Candidate",
+    })
+    db.jobs.insert_one({
+        "_id": job_id,
+        "owner_uid": recruiter_uid,
+        "title": "DevOps Engineer",
+        "company": "Example Europe",
+    })
+    db.applications.insert_one({
+        "_id": application_id,
+        "owner_uid": recruiter_uid,
+        "job_id": job_id,
+        "candidate_id": candidate_id,
+        "status": "saved",
+        "status_history": [],
+        "notes": "",
+        "created_at": now,
+        "updated_at": now,
+        "apply_status": "applied",
+        "apply_status_history": [{
+            "from_status": "not_applied",
+            "to_status": "applied",
+            "at": now,
+            "actor": "user",
+            "note": "",
+        }],
+        "applied_at": now,
+        "apply_updated_at": now,
+    })
+
+    previous_db = app.dependency_overrides.get(get_base_db)
+    previous_claims = app.dependency_overrides.get(main.get_current_user_claims)
+    previous_emails = main.settings.super_admin_emails
+    app.dependency_overrides[get_base_db] = lambda: db
+    main.settings.super_admin_emails = "admin@example.com"
+    claims = {"uid": "super-admin", "email": "admin@example.com"}
+    app.dependency_overrides[main.get_current_user_claims] = lambda: claims
+    client = TestClient(app)
+    try:
+        response = client.get("/api/admin/applications")
+        assert response.status_code == 200
+        assert len(response.json()) == 1
+        record = response.json()[0]
+        assert record["recruiter_uid"] == recruiter_uid
+        assert record["recruiter_name"] == "Alex Recruiter"
+        assert record["recruiter_email"] == "alex@example.com"
+        assert record["candidate_name"] == "Jordan Candidate"
+        assert record["job_title"] == "DevOps Engineer"
+        assert record["apply_status"] == "applied"
+        assert "notes" not in record
+        assert "apply_documents" not in record
+
+        claims = {"uid": recruiter_uid, "email": "alex@example.com"}
+        forbidden = client.get("/api/admin/applications")
+        assert forbidden.status_code == 403
+    finally:
+        main.settings.super_admin_emails = previous_emails
+        if previous_db is None:
+            app.dependency_overrides.pop(get_base_db, None)
+        else:
+            app.dependency_overrides[get_base_db] = previous_db
+        if previous_claims is None:
+            app.dependency_overrides.pop(main.get_current_user_claims, None)
+        else:
+            app.dependency_overrides[main.get_current_user_claims] = previous_claims

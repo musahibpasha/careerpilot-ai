@@ -928,6 +928,19 @@ export type Application = {
   candidate_id?: string | null;
 };
 
+type AdminApplication = {
+  id: string;
+  recruiter_uid: string;
+  recruiter_name: string;
+  recruiter_email: string;
+  candidate_name: string;
+  job_title: string;
+  company: string;
+  apply_status: Application["apply_status"];
+  applied_at: string | null;
+  updated_at: string;
+};
+
 type RecruiterCandidate = {
   id: string;
   full_name: string;
@@ -1370,6 +1383,9 @@ function App({
   const [jobs, setJobs] = useState<Job[]>([]);
   const [savedJobs, setSavedJobs] = useState<Job[]>([]);
   const [applications, setApplications] = useState<Application[]>([]);
+  const [adminApplications, setAdminApplications] = useState<AdminApplication[]>([]);
+  const [adminApplicationsLoading, setAdminApplicationsLoading] = useState(false);
+  const [adminApplicationsError, setAdminApplicationsError] = useState("");
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
   const [adminAccessChecked, setAdminAccessChecked] = useState(false);
   const [adminAccessError, setAdminAccessError] = useState("");
@@ -2234,6 +2250,37 @@ function App({
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!isSuperAdmin) return;
+    let active = true;
+    setAdminApplicationsLoading(true);
+    setAdminApplicationsError("");
+    void fetch(`${API}/api/admin/applications`)
+      .then(async (response) => {
+        const data = await response.json().catch(() => null);
+        if (!response.ok) {
+          throw new Error(errorText(data, `Could not load recruiter applications (HTTP ${response.status}).`));
+        }
+        if (!Array.isArray(data)) {
+          throw new Error("Recruiter applications returned an invalid response.");
+        }
+        if (active) setAdminApplications(data as AdminApplication[]);
+      })
+      .catch((reason: unknown) => {
+        if (active) {
+          setAdminApplicationsError(
+            reason instanceof Error ? reason.message : "Could not load recruiter applications.",
+          );
+        }
+      })
+      .finally(() => {
+        if (active) setAdminApplicationsLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [isSuperAdmin, page]);
 
   useEffect(() => {
     const onHashChange = () => setPage(pageFromHash());
@@ -5968,6 +6015,55 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
 
         {page === "applications" && (
           <div className="page-view">
+        {isSuperAdmin && (
+          <section className="panel" aria-labelledby="recruiter-applications-heading">
+            <div className="panel-head">
+              <div>
+                <h2 id="recruiter-applications-heading">Recruiter-submitted applications</h2>
+                <p>Applications confirmed by recruiters, including the recruiter and candidate for each record.</p>
+              </div>
+            </div>
+            {adminApplicationsError ? (
+              <div className="analytics-empty" role="alert">{adminApplicationsError}</div>
+            ) : adminApplicationsLoading ? (
+              <div className="analytics-empty" role="status">Loading recruiter applications...</div>
+            ) : adminApplications.length === 0 ? (
+              <div className="analytics-empty">No recruiter-confirmed applications yet.</div>
+            ) : (
+              <div className="jobs-list">
+                {adminApplications.map((application) => (
+                    <article className="kanban-card" key={`${application.recruiter_uid}-${application.id}`}>
+                      <div className="kanban-card-top">
+                        <div className="kanban-card-title">
+                          <strong>{application.job_title}</strong>
+                          <span>{application.company}</span>
+                          <small className="job-candidate-link">
+                            Candidate: {application.candidate_name}
+                          </small>
+                          <small className="job-candidate-link">
+                            Recruiter: {application.recruiter_name}
+                            {application.recruiter_email
+                              ? ` · ${application.recruiter_email}`
+                              : ""}
+                          </small>
+                        </div>
+                        <span className={`status status-${application.apply_status}`}>
+                          {APPLY_STATUS_LABELS[application.apply_status] ?? application.apply_status}
+                        </span>
+                      </div>
+                      <div className="application-confirmation-meta">
+                        <span>
+                          Applied {application.applied_at
+                            ? new Date(application.applied_at).toLocaleDateString()
+                            : "date not recorded"}
+                        </span>
+                      </div>
+                    </article>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
         <section className="application-filters panel">
           <label>
             <span>Search applications</span>

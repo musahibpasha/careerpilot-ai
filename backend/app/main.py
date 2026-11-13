@@ -2962,6 +2962,76 @@ def list_applications(
     ]
 
 
+@app.get(
+    "/api/admin/applications",
+    response_model=list[schemas.AdminApplicationRead],
+)
+def list_all_recruiter_applications(
+    _claims: dict = Depends(_require_super_admin),
+    db: Database = Depends(get_base_db),
+):
+    rows = [
+        row
+        for row in db.applications.find({}).sort("updated_at", -1).limit(2000)
+        if (
+            row.get("apply_status", "not_applied") != "not_applied"
+            or row.get("applied_at") is not None
+            or any(
+                item.get("to_status") == "applied"
+                for item in (row.get("apply_status_history") or [])
+                if isinstance(item, dict)
+            )
+        )
+    ]
+    if not rows:
+        return []
+
+    job_ids = list({row["job_id"] for row in rows if row.get("job_id")})
+    jobs = {
+        job["_id"]: job
+        for job in db.jobs.find({"_id": {"$in": job_ids}})
+    }
+
+    owner_uids = list({
+        row["owner_uid"] for row in rows if row.get("owner_uid")
+    })
+    candidate_ids = list({
+        row["candidate_id"] for row in rows if row.get("candidate_id")
+    })
+    candidates = {
+        (candidate.get("owner_uid"), candidate["_id"]): candidate
+        for candidate in db.candidates.find({
+            "owner_uid": {"$in": owner_uids},
+            "_id": {"$in": candidate_ids},
+        })
+    }
+    recruiters = {
+        recruiter["uid"]: recruiter
+        for recruiter in db.recruiters.find({"uid": {"$in": owner_uids}})
+    }
+
+    result = []
+    for row in rows:
+        owner_uid = str(row.get("owner_uid") or "")
+        recruiter = recruiters.get(owner_uid, {})
+        candidate = candidates.get((row.get("owner_uid"), row.get("candidate_id")), {})
+        job = jobs.get(row.get("job_id"))
+        result.append({
+            "id": str(row["_id"]),
+            "recruiter_uid": owner_uid,
+            "recruiter_name": recruiter.get("display_name") or recruiter.get("email") or owner_uid,
+            "recruiter_email": recruiter.get("email") or "",
+            "candidate_id": str(row["candidate_id"]) if row.get("candidate_id") else None,
+            "candidate_name": candidate.get("full_name") or "Unassigned",
+            "job_title": job["title"] if job else "(deleted job)",
+            "company": job["company"] if job else "",
+            "apply_status": row.get("apply_status", "not_applied"),
+            "applied_at": row.get("applied_at"),
+            "updated_at": row.get("updated_at") or row.get("created_at") or now(),
+        })
+    return result
+
+
 @app.post(
     "/api/applications",
     response_model=schemas.ApplicationRead,

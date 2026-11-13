@@ -229,12 +229,13 @@ Set these backend environment variables in the Vercel project:
 The configured super-admin account must first be created in Firebase Authentication.
 After signing in with that email, the **Recruiters** workspace becomes available.
 Super admins can create recruiter accounts, view the recruiter list and workspace
-record counts, and send or resend a Firebase password-setup email. Recruiters set
-their own passwords; passwords are never entered or displayed by the admin UI.
-Recruiter candidate, resume, job, and application records remain isolated by
-Firebase UID. The admin view reports counts only and does not expose workspace
-records. There are intentionally no recruiter delete, disable, suspend, or
-deactivation actions.
+record counts, see confirmed application summaries with the recruiter and
+candidate identified, and send or resend a Firebase password-setup email.
+Recruiters set their own passwords; passwords are never entered or displayed by
+the admin UI. Recruiter candidate, resume, job, and application workspaces remain
+isolated by Firebase UID; the admin application view exposes only the recruiter,
+candidate, job, status, and applied-date summary. There are intentionally no
+recruiter delete, disable, suspend, or deactivation actions.
 
 Set `VITE_API_URL` in the frontend project to the backend's deployed origin
 (for example `https://your-api.vercel.app`) and redeploy the frontend. Never
