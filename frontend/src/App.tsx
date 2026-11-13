@@ -6189,6 +6189,8 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
             )}
           </section>
         )}
+        {!isSuperAdmin && (
+          <>
         <section className="application-filters panel">
           <label>
             <span>Search applications</span>
@@ -6678,6 +6680,8 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
               );
             })}
           </section>
+        )}
+          </>
         )}
           </div>
         )}

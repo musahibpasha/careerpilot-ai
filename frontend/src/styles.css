@@ -3990,3 +3990,168 @@ footer { margin-top: 32px; font-size: 12px; color: var(--faint); }
     justify-self: stretch;
   }
 }
+ 
+
+/* =========================================================
+   APPLICATIONS PAGE - KANBAN / BOARD VIEW LAYOUT FIX
+   ========================================================= */
+
+/* Prevent the Applications page from shrinking inside its parent */
+.page-view {
+  width: 100%;
+  min-width: 0;
+}
+
+/* Keep the filters and toolbar properly sized */
+.application-filters,
+.page-toolbar {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+/* Main application status board */
+.kanban-board.full {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  gap: 14px;
+
+  width: 100%;
+  min-width: 0;
+  min-height: 460px;
+
+  overflow-x: auto;
+  overflow-y: hidden;
+
+  padding: 4px 4px 18px;
+  box-sizing: border-box;
+
+  scroll-behavior: smooth;
+  scroll-snap-type: x proximity;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Give every status column enough room */
+.kanban-board.full .kanban-column {
+  flex: 0 0 290px;
+  width: 290px;
+  min-width: 260px;
+  max-width: 320px;
+
+  min-height: 440px;
+  max-height: min(72vh, 760px);
+
+  display: flex;
+  flex-direction: column;
+  align-self: stretch;
+
+  box-sizing: border-box;
+  scroll-snap-align: start;
+}
+
+/* Keep column headings visible */
+.kanban-board.full .kanban-column-head {
+  flex: 0 0 auto;
+  min-height: 46px;
+  padding: 12px 14px;
+}
+
+/* Let cards scroll inside their own status column */
+.kanban-board.full .kanban-column-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+
+  padding: 8px 10px 14px;
+  overscroll-behavior: contain;
+}
+
+/* Prevent individual job cards from becoming compressed */
+.kanban-board.full .kanban-card {
+  flex: 0 0 auto;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
+}
+
+/* Keep job titles and details readable */
+.kanban-board.full .kanban-card-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.kanban-board.full .kanban-card-title strong {
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.kanban-board.full .kanban-card-title span,
+.kanban-board.full .kanban-card-title small {
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+/* Keep empty columns consistent with populated columns */
+.kanban-board.full .kanban-empty {
+  flex: 0 0 auto;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* Make horizontal scrolling obvious and usable */
+.kanban-board.full::-webkit-scrollbar {
+  height: 9px;
+}
+
+.kanban-board.full::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  border-radius: 20px;
+}
+
+.kanban-board.full::-webkit-scrollbar-track {
+  background: var(--bg);
+  border-radius: 20px;
+}
+
+/* Tablet and mobile layout */
+@media (max-width: 720px) {
+  .kanban-board.full {
+    min-height: 440px;
+    gap: 12px;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .kanban-board.full .kanban-column {
+    flex: 0 0 min(84vw, 320px);
+    width: min(84vw, 320px);
+    min-width: 260px;
+    max-width: 320px;
+
+    min-height: 420px;
+    max-height: none;
+  }
+
+  .kanban-board.full .kanban-column-body {
+    overflow-y: visible;
+  }
+}
+
+/* List view must remain a separate, full-width presentation */
+.application-list,
+.jobs-list {
+  min-width: 0;
+}
+
+@media (min-width: 721px) {
+  .kanban-board.full .kanban-column-body {
+    overflow-y: auto;
+  }
+}
