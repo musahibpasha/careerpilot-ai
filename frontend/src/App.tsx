@@ -332,8 +332,7 @@ type JobSearchSource =
   | "linkedin"
   | "indeed"
   | "glassdoor"
-  | "ict_jobs"
-  | "all";
+  | "ict_jobs";
 
 const JOB_SEARCH_SOURCES: {
   id: JobSearchSource;
@@ -345,7 +344,6 @@ const JOB_SEARCH_SOURCES: {
   { id: "indeed", label: "Indeed", mark: "I", description: "Global job listings" },
   { id: "glassdoor", label: "Glassdoor", mark: "G", description: "Jobs and company reviews" },
   { id: "ict_jobs", label: "ICT Jobs Europe", mark: "EU", description: "Jobicy and Arbeitnow European feeds" },
-  { id: "all", label: "All Boards", mark: "All", description: "Search every enabled source concurrently" },
 ];
 
 const JOB_SOURCE_LABELS: Record<string, string> = {
@@ -1427,12 +1425,10 @@ function App({
   const [draggedAppId, setDraggedAppId] = useState<string | null>(null);
   const [dragOverStatus, setDragOverStatus] = useState<string | null>(null);
   const [showJobForm, setShowJobForm] = useState(false);
-  const [jobSource, setJobSource] = useState<JobSearchSource>("linkedin");
   const [linkedinKeywords, setLinkedinKeywords] = useState("software engineer");
   const [linkedinLocation, setLinkedinLocation] = useState("Belgium");
   const [linkedinWorkArrangement, setLinkedinWorkArrangement] = useState("any");
   const [linkedinEmploymentType, setLinkedinEmploymentType] = useState("Full-time");
-  const [linkedinApplicationType, setLinkedinApplicationType] = useState("any");
   const [linkedinEnglishOnly, setLinkedinEnglishOnly] = useState(true);
   const [linkedinPostedWithin, setLinkedinPostedWithin] = useState("any");
   const [linkedinSort, setLinkedinSort] = useState("match");
@@ -1748,9 +1744,9 @@ function App({
     setDiscoveryError(false);
     setJobSearchView("searching");
     try {
-      const aggregate = jobSource === "all" || jobSource === "ict_jobs";
+      const searchScope = "all";
       const requestParams: Record<string, string> = {
-        ...(aggregate ? { scope: jobSource } : { site: jobSource }),
+        scope: searchScope,
         candidate_id: selectedCandidate.id,
         what: linkedinKeywords.trim(),
         where: linkedinLocation.trim(),
@@ -1768,9 +1764,6 @@ function App({
       }[linkedinEmploymentType];
       if (jobType) params.set("job_type", jobType);
       if (linkedinEnglishOnly) params.set("english_only", "true");
-      if (!aggregate && linkedinApplicationType === "easy-apply") {
-        params.set("easy_apply", "true");
-      }
       if (linkedinWorkArrangement !== "any") {
         params.set("work_arrangement", linkedinWorkArrangement);
         if (linkedinWorkArrangement === "remote") params.set("is_remote", "true");
@@ -1783,16 +1776,14 @@ function App({
       }[linkedinPostedWithin];
       if (hoursOld) params.set("hours_old", hoursOld);
 
-      const endpoint = aggregate
-        ? "/api/jobs/discover/aggregate"
-        : "/api/jobs/discover/board";
+      const endpoint = "/api/jobs/discover/aggregate";
       const response = await fetch(`${API}${endpoint}?${params}`);
       const data = await response.json().catch(() => null);
       if (!response.ok) {
         throw new Error(errorText(data, `Job search failed (HTTP ${response.status}).`));
       }
-      if (!Array.isArray(data?.results) || data?.source !== jobSource) {
-        throw new Error(`${jobSource} returned an invalid search response.`);
+      if (!Array.isArray(data?.results) || data?.source !== searchScope) {
+        throw new Error("All job boards returned an invalid search response.");
       }
       if (requestId !== discoveryRequestId.current) return;
       setDiscoveryResults(
@@ -1810,9 +1801,7 @@ function App({
       if (data.results.length === 0) {
         setJobSearchView("empty");
         setDiscoveryMessage(data.notice || failureNotice || (
-          jobSource === "indeed"
-            ? "Indeed returned no matching listings. Try broader keywords or clear filters; listings without details needed by a selected filter are excluded."
-            : "No matching listings were returned. Try broader keywords or clear filters; listings without details needed by a selected filter are excluded."
+          "No matching listings were returned. Try broader keywords or clear filters; listings without details needed by a selected filter are excluded."
         ));
       } else {
         setJobSearchView("results");
@@ -1823,7 +1812,7 @@ function App({
       setDiscoveryResults([]);
       setDiscoveryError(true);
       setJobSearchView("error");
-      setDiscoveryMessage(e instanceof Error ? e.message : "Could not search this job board.");
+      setDiscoveryMessage(e instanceof Error ? e.message : "Could not search job boards.");
     } finally {
       if (requestId === discoveryRequestId.current) setDiscoveryBusy(false);
     }
@@ -1921,11 +1910,6 @@ function App({
     } finally {
       if (requestId === trendingRequestId.current) setTrendingLoading(false);
     }
-  }
-
-  function selectJobSource(source: JobSearchSource) {
-    if (source !== jobSource) clearDiscoveryResults();
-    setJobSource(source);
   }
 
   function returnToRecommendations() {
@@ -5149,28 +5133,24 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                   <BriefcaseBusiness size={18} />
                 </span>
                 <div>
-                  <h2>2. Choose a job board</h2>
-                  <p>Search a board, verified European ICT feeds, or all sources at once.</p>
+                  <h2>2. Search all job boards</h2>
+                  <p>Every candidate search checks all enabled sources concurrently.</p>
                 </div>
               </div>
-              <div className="job-source-options" role="group" aria-label="Job boards">
+              <div className="job-source-options" aria-label="Sources included in every search">
                 {JOB_SEARCH_SOURCES.map((source) => (
-                  <button
+                  <div
                     key={source.id}
-                    type="button"
-                    className={`job-source-option ${jobSource === source.id ? "selected" : ""}`}
-                    aria-pressed={jobSource === source.id}
-                    onClick={() => selectJobSource(source.id)}
+                    className="job-source-option"
                   >
                     <span className="source-option-title">
                       <span className={`source-brand-icon ${source.id.replace("_", "-")}-brand`}>
                         {source.mark}
                       </span>
                       {source.label}
-                      {jobSource === source.id && <CheckCircle2 size={14} />}
                     </span>
                     <small>{source.description}</small>
-                  </button>
+                  </div>
                 ))}
               </div>
               <p className="source-disclaimer">
@@ -5185,8 +5165,8 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                   <h2>3. Search criteria</h2>
                   <p>
                     {selectedCandidate
-                      ? `Find relevant ${JOB_SEARCH_SOURCES.find((source) => source.id === jobSource)?.label} listings for ${selectedCandidate.full_name}.`
-                      : `Choose your search details for ${JOB_SEARCH_SOURCES.find((source) => source.id === jobSource)?.label}.`}
+                      ? `Find relevant listings across all job boards for ${selectedCandidate.full_name}.`
+                      : "Choose your search details to search all job boards."}
                   </p>
                 </div>
               </div>
@@ -5247,16 +5227,6 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                     <option value="false">All languages (EN / NL / FR / DE)</option>
                   </select>
                 </label>
-                {!["ict_jobs", "all"].includes(jobSource) && <label>
-                  Application type
-                  <select
-                    value={linkedinApplicationType}
-                    onChange={(event) => setLinkedinApplicationType(event.target.value)}
-                  >
-                    <option value="any">Any</option>
-                    <option value="easy-apply">Easy Apply</option>
-                  </select>
-                </label>}
                 <label>
                   Posted within
                   <select
@@ -5297,11 +5267,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                   </button>
                   {discoveryBusy && (
                     <p className="source-loading" role="status" aria-live="polite">
-                      {jobSource === "all"
-                        ? `Searching all enabled sources in ${linkedinLocation || "Belgium"}...`
-                        : jobSource === "ict_jobs"
-                          ? `Searching verified European ICT feeds in ${linkedinLocation || "Europe"}...`
-                          : `Searching live listings in ${linkedinLocation || "Belgium"}...`}
+                      {`Searching all enabled sources in ${linkedinLocation || "Belgium"}...`}
                       {" "}({discoveryElapsed}s elapsed)
                     </p>
                   )}
@@ -5382,7 +5348,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
               {jobSearchView === "results" && discoveryResults.length > 0 && (
                 <>
                   <div className="source-results-heading">
-                    <h3>{JOB_SEARCH_SOURCES.find((source) => source.id === jobSource)?.label} results</h3>
+                    <h3>All job boards results</h3>
                     <span>
                       {visibleDiscoveryResults.length} listing{visibleDiscoveryResults.length === 1 ? "" : "s"}
                     </span>

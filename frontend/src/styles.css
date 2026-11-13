@@ -1848,10 +1848,10 @@ footer { margin-top: 32px; font-size: 12px; color: var(--faint); }
   color: var(--ink);
   text-align: left;
   background: var(--surface-2);
-  cursor: pointer;
+  cursor: default;
   transition: border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
 }
-.job-source-option:hover { border-color: var(--line-strong); }
+.job-source-option:hover { border-color: var(--line); }
 .job-source-option.selected {
   border-color: #9c4ee1;
   color: #fff;
@@ -3345,7 +3345,7 @@ footer { margin-top: 32px; font-size: 12px; color: var(--faint); }
   border-radius: 10px;
   background: #fff;
 }
-.job-source-option:hover { border-color: #bdb1d1; background: #fbfaff; }
+.job-source-option:hover { border-color: #e5e1eb; background: #fff; }
 .job-source-option.selected {
   border-color: #8969bb;
   color: #332744;
