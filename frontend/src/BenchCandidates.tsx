@@ -1448,36 +1448,38 @@ export default function BenchCandidates() {
               <div>
                 <strong><Sparkles size={14} /> Read a resume into this form</strong>
                 <p>Choose an attached resume to fill these fields, or upload a new PDF or DOCX. Review everything before saving.</p>
-                <label className={`bench-upload-button ${resumeScanBusy || formBusy || formResumeReadBusy || (editingCandidate && (formResumesLoading || !!formResumesError || formResumes.length >= MAX_CANDIDATE_RESUMES)) ? "disabled" : ""}`}>
-                  <FileUp size={14} /> {resumeScanBusy ? "Scanning..." : candidateResumeFile ? "Choose another file" : "Upload a new resume"}
-                  <input
-                    type="file"
-                    accept="application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx"
-                    disabled={
-                      resumeScanBusy ||
-                      formBusy ||
-                      formResumeReadBusy ||
-                      !!(editingCandidate && (
-                        formResumesLoading ||
-                        formResumesError ||
-                        formResumes.length >= MAX_CANDIDATE_RESUMES
-                      ))
-                    }
-                    onChange={(event) => {
-                      void scanCandidateResume(event.target.files?.[0]);
-                      event.currentTarget.value = "";
-                    }}
-                  />
-                </label>
-                <button
-                  type="button"
-                  className="secondary-button"
-                  disabled={parserStatusBusy}
-                  onClick={() => void checkAIConnection()}
-                >
-                  <RefreshCw size={14} className={parserStatusBusy ? "recommendation-spinning" : ""} />
-                  {parserStatusBusy ? "Checking AI connection..." : "Check AI connection"}
-                </button>
+                <div className="bench-resume-actions">
+                  <label className={`bench-upload-button ${resumeScanBusy || formBusy || formResumeReadBusy || (editingCandidate && (formResumesLoading || !!formResumesError || formResumes.length >= MAX_CANDIDATE_RESUMES)) ? "disabled" : ""}`}>
+                    <FileUp size={14} /> {resumeScanBusy ? "Scanning..." : candidateResumeFile ? "Choose another file" : "Upload a new resume"}
+                    <input
+                      type="file"
+                      accept="application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx"
+                      disabled={
+                        resumeScanBusy ||
+                        formBusy ||
+                        formResumeReadBusy ||
+                        !!(editingCandidate && (
+                          formResumesLoading ||
+                          formResumesError ||
+                          formResumes.length >= MAX_CANDIDATE_RESUMES
+                        ))
+                      }
+                      onChange={(event) => {
+                        void scanCandidateResume(event.target.files?.[0]);
+                        event.currentTarget.value = "";
+                      }}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    className="secondary-button bench-ai-check-button"
+                    disabled={parserStatusBusy}
+                    onClick={() => void checkAIConnection()}
+                  >
+                    <RefreshCw size={14} className={parserStatusBusy ? "recommendation-spinning" : ""} />
+                    {parserStatusBusy ? "Checking AI connection..." : "Check AI connection"}
+                  </button>
+                </div>
                 {parserStatusError && <p className="bench-inline-error" role="alert">{parserStatusError}</p>}
                 {parserStatus && (
                   <div className={`bench-parser-status ${parserStatus.test?.ok ? "is-ok" : "is-error"}`} role="status">
