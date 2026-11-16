@@ -38,6 +38,7 @@ type Profile = {
 type ApplyStatus =
   | "not_applied"
   | "applied"
+  | "under_review"
   | "interview"
   | "assessment"
   | "rejected"
@@ -47,6 +48,7 @@ type ApplyStatus =
 const STATUSES: { value: ApplyStatus; label: string }[] = [
   { value: "not_applied", label: "Not Applied" },
   { value: "applied", label: "Applied" },
+  { value: "under_review", label: "Under Review" },
   { value: "interview", label: "Interview" },
   { value: "assessment", label: "Assessment" },
   { value: "rejected", label: "Rejected" },

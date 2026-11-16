@@ -423,6 +423,7 @@ class StatusChange(BaseModel):
 ApplyStatus = Literal[
     "not_applied",
     "applied",
+    "under_review",
     "interview",
     "assessment",
     "rejected",

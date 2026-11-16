@@ -60,6 +60,7 @@ const STATUS_LABELS: Record<string, string> = {
 const APPLY_STATUS_LABELS: Record<string, string> = {
   not_applied: "Not Applied",
   applied: "Applied",
+  under_review: "Under Review",
   interview: "Interview",
   assessment: "Assessment",
   rejected: "Rejected",
@@ -69,6 +70,7 @@ const APPLY_STATUS_LABELS: Record<string, string> = {
 const APPLY_BOARD_STATUSES = [
   "not_applied",
   "applied",
+  "under_review",
   "interview",
   "assessment",
   "rejected",
@@ -922,7 +924,7 @@ export type Application = {
   job_title: string;
   company: string;
   notes: string;
-  apply_status: "not_applied" | "applied" | "interview" | "assessment" | "rejected" | "offer_received" | "withdrawn";
+  apply_status: "not_applied" | "applied" | "under_review" | "interview" | "assessment" | "rejected" | "offer_received" | "withdrawn";
   apply_status_history: StatusHistoryEntry[];
   applied_at: string | null;
   apply_updated_at: string | null;
@@ -1436,9 +1438,7 @@ function App({
   const [trackerView, setTrackerView] = useState<"board" | "list">(() =>
     readSetting("cp-tracker-view", "board", ["board", "list"]),
   );
-  const [applicationBoardMode, setApplicationBoardMode] = useState<"application" | "workflow">(() =>
-    readSetting("cp-application-board-mode", "application", ["application", "workflow"]),
-  );
+  const [applicationBoardMode] = useState<"application" | "workflow">("application");
   const [hideEmpty, setHideEmpty] = useState<boolean>(
     () => readSetting("cp-hide-empty", "no", ["yes", "no"]) === "yes",
   );
@@ -2633,7 +2633,7 @@ function App({
           month: 30,
           year: 365,
         }[applicationDateFilter] ?? 0) * 24 * 60 * 60 * 1000;
-    return confirmedApplications
+    return applications
       .filter((application) => {
         const appliedAt = application.applied_at || application.apply_updated_at;
         const appliedTime = appliedAt ? new Date(appliedAt).getTime() : Number.NaN;
@@ -2650,7 +2650,7 @@ function App({
         return bTime - aTime;
       });
   }, [
-    confirmedApplications,
+    applications,
     applicationQuery,
     applicationStatusFilter,
     applicationCompanyFilter,
@@ -3326,14 +3326,63 @@ function App({
     }
   }
 
+  async function changeApplicationApplyStatus(
+    application: Application,
+    nextStatus: string,
+  ) {
+    if (!nextStatus || nextStatus === application.apply_status) return;
+    if (!APPLY_BOARD_STATUSES.includes(nextStatus as (typeof APPLY_BOARD_STATUSES)[number])) {
+      setNotice("Choose a valid application status.");
+      return;
+    }
+    if (updatingApplicationIds.has(application.id)) return;
+
+    setUpdatingApplicationIds((current) => new Set(current).add(application.id));
+    setNotice("");
+
+    try {
+      const response = await fetch(
+        `${API}/api/applications/${application.id}/apply`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            status: nextStatus,
+            notes: application.notes ?? "",
+          }),
+        },
+      );
+
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        setNotice(errorText(data, "Could not update application status."));
+        await load();
+        return;
+      }
+
+      setTransitioningApplicationId(application.id);
+      setNotice(`${application.job_title} moved to ${APPLY_STATUS_LABELS[nextStatus] ?? statusLabel(nextStatus)}.`);
+      await load();
+      window.setTimeout(() => {
+        setTransitioningApplicationId((current) =>
+          current === application.id ? null : current,
+        );
+      }, 850);
+    } catch {
+      await load();
+      setNotice("Could not reach the API.");
+    } finally {
+      setUpdatingApplicationIds((current) => {
+        const next = new Set(current);
+        next.delete(application.id);
+        return next;
+      });
+    }
+  }
+
   function chooseTrackerView(view: "board" | "list") {
     setTrackerView(view);
     saveSetting("cp-tracker-view", view);
-  }
-
-  function chooseApplicationBoardMode(mode: "application" | "workflow") {
-    setApplicationBoardMode(mode);
-    saveSetting("cp-application-board-mode", mode);
   }
 
   function toggleHideEmpty(value: boolean) {
@@ -3375,7 +3424,11 @@ function App({
     const app = applications.find((a) => a.id === appId);
     if (!app || app.status === targetStatus) return;
 
-    await changeApplicationStatus(app, targetStatus);
+    if (applicationBoardMode === "application") {
+      await changeApplicationApplyStatus(app, targetStatus);
+    } else {
+      await changeApplicationStatus(app, targetStatus);
+    }
   }
 
   function goTo(next: Page) {
@@ -3418,7 +3471,7 @@ function App({
     applications: {
       eyebrow: "YOUR PIPELINE",
       title: "Applications",
-      sub: "Applications you confirmed submitting, with status and notes.",
+      sub: "Track every job from Not Applied through interview, offer, or rejection.",
     },
     analytics: {
       eyebrow: "WORKSPACE INSIGHTS",
@@ -5246,7 +5299,9 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                               <option value="">Move to...</option>
                               {application.allowed_next.map((status) => (
                                 <option key={status} value={status}>
-                                  {statusLabel(status)}
+                                  {applicationBoardMode === "application"
+                                    ? APPLY_STATUS_LABELS[status] ?? statusLabel(status)
+                                    : statusLabel(status)}
                                 </option>
                               ))}
                             </select>
@@ -6294,7 +6349,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
             </select>
           </label>
         </section>
-        {confirmedApplications.length > 0 && (
+        {applications.length > 0 && (
           <section className="kb-toolbar page-toolbar">
             <span className="kb-summary">
               {filteredApplications.length} shown · {confirmedApplications.length} confirmed ·{" "}
@@ -6317,12 +6372,6 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                   Hide empty columns
                 </label>
 
-                {applicationBoardMode === "workflow" && (
-                  <span className="kb-legend">
-                    <Lock size={12} /> Approved and Submitted unlock with the
-                    approval workflow
-                  </span>
-                )}
               </>
             )}
 
@@ -6344,38 +6393,17 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                 <List size={15} /> List
               </button>
             </div>
-            {trackerView === "board" && (
-              <div className="kb-view-toggle" role="group" aria-label="Board status grouping">
-                <button
-                  type="button"
-                  className={applicationBoardMode === "application" ? "active" : ""}
-                  aria-pressed={applicationBoardMode === "application"}
-                  onClick={() => chooseApplicationBoardMode("application")}
-                >
-                  Application status
-                </button>
-                <button
-                  type="button"
-                  className={applicationBoardMode === "workflow" ? "active" : ""}
-                  aria-pressed={applicationBoardMode === "workflow"}
-                  onClick={() => chooseApplicationBoardMode("workflow")}
-                >
-                  Approval workflow
-                </button>
-              </div>
-            )}
           </section>
         )}
 
-        {confirmedApplications.length === 0 ? (
+        {applications.length === 0 ? (
           <section className="empty-state">
             <div className="empty-icon">
               <Kanban size={25} />
             </div>
             <h3>No applications yet</h3>
             <p>
-              After applying on the company website, confirm the application in
-              Apply Manually to see it here.
+Track a job to add it to your board. You can move it through every application status here.
             </p>
             <button className="primary-button" onClick={() => goTo("jobs")}>
               Find jobs
@@ -6413,13 +6441,15 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
               );
               const isLocked =
                 applicationBoardMode === "workflow" && LOCKED_STATUSES.includes(statusKey);
-              const isCurrent =
-                applicationBoardMode === "workflow" && draggedApplication?.status === statusKey;
+              const draggedStatus = applicationBoardMode === "application"
+                ? draggedApplication?.apply_status
+                : draggedApplication?.status;
+              const isCurrent = draggedApplication != null && draggedStatus === statusKey;
               const isAllowedDrop =
-                applicationBoardMode === "workflow" &&
                 draggedApplication != null &&
                 !isCurrent &&
-                (draggedApplication.allowed_next ?? []).includes(statusKey);
+                (applicationBoardMode === "application" ||
+                  (draggedApplication.allowed_next ?? []).includes(statusKey));
               const isGatedDrop =
                 applicationBoardMode === "workflow" &&
                 draggedApplication != null &&
@@ -6448,11 +6478,11 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                   key={statusKey}
                   className={columnClass}
                   data-status={statusKey}
-                  onDragOver={applicationBoardMode === "workflow" ? (e) => handleColumnDragOver(e, statusKey) : undefined}
+                  onDragOver={(e) => handleColumnDragOver(e, statusKey)}
                   onDragLeave={() => {
                     if (dragOverStatus === statusKey) setDragOverStatus(null);
                   }}
-                  onDrop={applicationBoardMode === "workflow" ? (e) => void handleColumnDrop(e, statusKey) : undefined}
+                  onDrop={(e) => void handleColumnDrop(e, statusKey)}
                 >
                   <div className="kanban-column-head">
                     <span className="kanban-dot" />
@@ -6485,11 +6515,19 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                     )}
 
                     {columnApps.map((application) => {
-                      const nextStatuses = application.allowed_next ?? [];
+                      const nextStatuses = applicationBoardMode === "application"
+                        ? APPLY_BOARD_STATUSES.filter((status) => status !== application.apply_status)
+                        : application.allowed_next ?? [];
                       const linkedJob = jobsById.get(String(application.job_id));
-                      const age = timeInStage(application);
-                      const historyCount = (application.status_history ?? [])
-                        .length;
+                      const age = timeInStage({
+                        status_history: applicationBoardMode === "application"
+                          ? application.apply_status_history
+                          : application.status_history,
+                      });
+                      const historyEntries = applicationBoardMode === "application"
+                        ? application.apply_status_history
+                        : application.status_history;
+                      const historyCount = historyEntries.length;
 
                       return (
                         <article
@@ -6501,11 +6539,9 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                               ? "status-transitioned"
                               : ""
                           }`}
-                          draggable={applicationBoardMode === "workflow" && !updatingApplicationIds.has(application.id)}
-                          onDragStart={applicationBoardMode === "workflow"
-                            ? (e) => handleCardDragStart(e, application.id)
-                            : undefined}
-                          onDragEnd={applicationBoardMode === "workflow" ? handleCardDragEnd : undefined}
+                          draggable={!updatingApplicationIds.has(application.id)}
+                          onDragStart={(e) => handleCardDragStart(e, application.id)}
+                          onDragEnd={handleCardDragEnd}
                         >
                           <div className="kanban-card-top">
                             <div className="kanban-card-title">
@@ -6538,9 +6574,6 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
 
                           {(application.resume_label || age || applicationBoardMode === "application") && (
                             <div className="kanban-meta">
-                              {applicationBoardMode === "application" && (
-                                <span>Approval workflow: {statusLabel(application.status)}</span>
-                              )}
                               {application.resume_label && (
                                 <span title="Resume used">
                                   {application.resume_label}
@@ -6561,26 +6594,22 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                           <div className="kanban-card-controls">
                             <select
                               value=""
-                              disabled={
-                                nextStatuses.length === 0 ||
-                                updatingApplicationIds.has(application.id)
-                              }
+                              disabled={updatingApplicationIds.has(application.id)}
                               aria-label={`Move ${application.job_title} to another status`}
                               onChange={(e) => {
-                                void changeApplicationStatus(
-                                  application,
-                                  e.target.value,
-                                );
+                                if (applicationBoardMode === "application") {
+                                  void changeApplicationApplyStatus(application, e.target.value);
+                                } else {
+                                  void changeApplicationStatus(application, e.target.value);
+                                }
                               }}
                             >
                               <option value="">
-                                {nextStatuses.length
-                                  ? "Move to..."
-                                  : "Final status"}
+                                Move to...
                               </option>
                               {nextStatuses.map((status) => (
                                 <option key={status} value={status}>
-                                  {statusLabel(status)}
+                                  {APPLY_STATUS_LABELS[status] ?? statusLabel(status)}
                                 </option>
                               ))}
                             </select>
@@ -6611,13 +6640,13 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                           <details className="status-history">
                             <summary>History ({historyCount})</summary>
                             <ol>
-                              {(application.status_history ?? []).map(
+                              {historyEntries.map(
                                 (entry, i) => (
                                   <li key={`${entry.at}-${i}`}>
                                     <strong>
                                       {entry.from_status
-                                        ? `${statusLabel(entry.from_status)} → ${statusLabel(entry.to_status)}`
-                                        : `Created as ${statusLabel(entry.to_status)}`}
+                                        ? `${APPLY_STATUS_LABELS[entry.from_status] ?? statusLabel(entry.from_status)} → ${APPLY_STATUS_LABELS[entry.to_status] ?? statusLabel(entry.to_status)}`
+                                        : `Created as ${APPLY_STATUS_LABELS[entry.to_status] ?? statusLabel(entry.to_status)}`}
                                     </strong>
                                     <span>
                                       {new Date(entry.at).toLocaleString()} ·{" "}
@@ -6640,7 +6669,9 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
         ) : (
           <section className="application-list">
             {filteredApplications.map((application) => {
-              const nextStatuses = application.allowed_next ?? [];
+              const nextStatuses = APPLY_BOARD_STATUSES.filter(
+                (status) => status !== application.apply_status,
+              );
 
               return (
                 <article
@@ -6673,36 +6704,22 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                   <span className={`status status-${application.apply_status}`}>
                     {APPLY_STATUS_LABELS[application.apply_status] ?? application.apply_status}
                   </span>
-                  <small className="muted-note">Workflow: {statusLabel(application.status)}</small>
-
                   <select
                     value=""
-                    disabled={
-                      nextStatuses.length === 0 ||
-                      updatingApplicationIds.has(application.id)
-                    }
-                    aria-label={`Move ${application.job_title} to next status`}
+                    disabled={updatingApplicationIds.has(application.id)}
+                    aria-label={`Move ${application.job_title} to another application status`}
                     onChange={(e) => {
-                      void changeApplicationStatus(application, e.target.value);
+                      void changeApplicationApplyStatus(application, e.target.value);
                     }}
                   >
-                    <option value="">
-                      {nextStatuses.length ? "Move to..." : "Final status"}
-                    </option>
+                    <option value="">Move to...</option>
 
                     {nextStatuses.map((status) => (
                       <option key={status} value={status}>
-                        {statusLabel(status)}
+                        {APPLY_STATUS_LABELS[status] ?? statusLabel(status)}
                       </option>
                     ))}
                   </select>
-
-                  {(application.gated_next ?? []).length > 0 && (
-                    <p className="locked-note">
-                      Approval and submission are only available through the
-                      Application Assistant.
-                    </p>
-                  )}
 
                   <button
                     type="button"
@@ -6714,10 +6731,10 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
 
                   <details className="status-history">
                     <summary>
-                      History ({(application.status_history ?? []).length})
+                      History ({application.apply_status_history.length})
                     </summary>
                     <ol>
-                      {(application.status_history ?? []).map((entry, i) => (
+                      {application.apply_status_history.map((entry, i) => (
                         <li key={`${entry.at}-${i}`}>
                           <strong>
                             {entry.from_status
