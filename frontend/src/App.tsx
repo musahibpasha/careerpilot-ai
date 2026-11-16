@@ -2796,9 +2796,13 @@ function App({
 
       setProfileForm(profileToForm(data?.extracted ?? {}));
       setProfileErrors({});
-      setParseMessage(
+      const parserNote = data?.parser === "ai"
+        ? "Read with AI. Please review every field before saving."
+        : typeof data?.parser_note === "string" ? data.parser_note : "";
+      setParseMessage([
         "Resume read. Review every section below, fill anything marked *, then click Save profile.",
-      );
+        parserNote,
+      ].filter(Boolean).join(" "));
     } catch (e) {
       setFormError(
         e instanceof Error

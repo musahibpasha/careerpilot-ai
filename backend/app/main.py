@@ -537,6 +537,9 @@ def _completion_finish_reason(response) -> str | None:
     return reason if isinstance(reason, str) else None
 
 
+_OPENROUTER_JSON_MODE_UNSUPPORTED: set[str] = set()
+
+
 async def _post_with_retry_and_fallback(
     client,
     messages,
@@ -560,9 +563,10 @@ async def _post_with_retry_and_fallback(
             request_body = {
                 "model": model,
                 "temperature": 0,
-                "response_format": {"type": "json_object"},
                 "messages": messages,
             }
+            if model not in _OPENROUTER_JSON_MODE_UNSUPPORTED:
+                request_body["response_format"] = {"type": "json_object"}
             if max_tokens is not None:
                 request_body["max_tokens"] = max_tokens
 
@@ -572,6 +576,25 @@ async def _post_with_retry_and_fallback(
                 json=request_body,
             )
             status = response.status_code
+
+            if (
+                status == 400
+                and model not in _OPENROUTER_JSON_MODE_UNSUPPORTED
+                and re.search(
+                    r"response_format|json",
+                    getattr(response, "text", ""),
+                    re.IGNORECASE,
+                )
+            ):
+                _OPENROUTER_JSON_MODE_UNSUPPORTED.add(model)
+                retry_body = dict(request_body)
+                retry_body.pop("response_format", None)
+                response = await client.post(
+                    url,
+                    headers=headers,
+                    json=retry_body,
+                )
+                status = response.status_code
 
             if not response.is_error:
                 if retry_empty:
@@ -630,6 +653,83 @@ async def _post_with_retry_and_fallback(
             return response  # any other error: stop here
 
     return response
+
+
+@app.get("/api/resume/parser-status")
+async def resume_parser_status(
+    test: bool = Query(default=False),
+    _user_id: str = Depends(get_current_user_id),
+):
+    mode = (settings.resume_parser_mode or "hybrid").strip().lower()
+    if mode not in {"local", "ai", "hybrid"}:
+        mode = "hybrid"
+    models = _model_candidates()
+    result = {
+        "mode": mode,
+        "key_configured": bool(settings.openrouter_api_key),
+        "models": models,
+        "test": None,
+    }
+    if not test:
+        return result
+    if not settings.openrouter_api_key:
+        result["test"] = {
+            "ok": False,
+            "detail": "OPENROUTER_API_KEY is not configured.",
+        }
+        return result
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=settings.resume_ai_timeout_seconds
+        ) as client:
+            response = await _post_with_retry_and_fallback(
+                client,
+                messages=[
+                    {"role": "user", "content": 'Reply with JSON: {"ok":true}'}
+                ],
+                max_tokens=8,
+            )
+    except httpx.TimeoutException:
+        result["test"] = {
+            "ok": False,
+            "detail": "OpenRouter did not respond before the connection timed out.",
+        }
+        return result
+    except httpx.HTTPError:
+        result["test"] = {
+            "ok": False,
+            "detail": "Could not connect to OpenRouter. Check the backend network connection.",
+        }
+        return result
+
+    if not response.is_error:
+        try:
+            payload = response.json()
+        except (ValueError, TypeError):
+            payload = {}
+        accepted_model = payload.get("model") if isinstance(payload, dict) else None
+        result["test"] = {
+            "ok": True,
+            "detail": f"OpenRouter accepted a test request using {accepted_model or models[0]}.",
+        }
+        return result
+
+    details = {
+        401: "OpenRouter rejected the API key. Check that the key is valid.",
+        402: "OpenRouter reports that credits are required or the account has a billing restriction.",
+        403: "OpenRouter denied access. Check the key permissions and spend limits.",
+        404: "The configured OpenRouter model name or endpoint was not found.",
+        429: "OpenRouter rate-limited the test request. Wait and try again.",
+    }
+    result["test"] = {
+        "ok": False,
+        "detail": details.get(
+            response.status_code,
+            f"OpenRouter test failed with HTTP {response.status_code}.",
+        ),
+    }
+    return result
 
 
 async def _extract_resume_with_ai(resume_text: str) -> dict:
@@ -943,7 +1043,7 @@ async def parse_resume(
     parser_mode = (settings.resume_parser_mode or "hybrid").strip().lower()
     if parser_mode not in {"local", "ai", "hybrid"}:
         parser_mode = "hybrid"
-    # hybrid without an API key quietly behaves like local.
+    # Hybrid mode remains usable without an API key and explains the fallback.
     use_local_only = parser_mode == "local" or (
         parser_mode == "hybrid" and not settings.openrouter_api_key
     )
@@ -1044,8 +1144,14 @@ async def parse_resume(
     resume_text = resume_text[:30000]
 
     parser_used = "local"
+    parser_note = ""
     if use_local_only:
         extracted = parse_resume_locally(resume_text)
+        if parser_mode == "hybrid":
+            parser_note = (
+                "AI extraction is off because OPENROUTER_API_KEY is not set in backend/.env. "
+                "The built-in parser was used."
+            )
     elif parser_mode == "ai":
         extracted = await _extract_resume_with_ai(resume_text)
         parser_used = "ai"
@@ -1064,11 +1170,19 @@ async def parse_resume(
                 if not extracted.get(key) and local_fallback.get(key):
                     extracted[key] = local_fallback[key]
         except (HTTPException, asyncio.TimeoutError) as exc:
+            reason = (
+                "request timed out"
+                if isinstance(exc, asyncio.TimeoutError)
+                else str(getattr(exc, "detail", "unknown error"))
+            )
             logger.warning(
                 "AI resume parsing failed (%s); using local parser instead",
-                getattr(exc, "detail", "timeout"),
+                reason,
             )
             extracted = parse_resume_locally(resume_text)
+            parser_note = (
+                f"AI extraction failed ({reason}) so the built-in parser was used."
+            )
 
     # Normalize missing fields. Never save the extracted data here.
     required_fields = {
@@ -1099,6 +1213,7 @@ async def parse_resume(
         ),
         "extracted": extracted,
         "parser": parser_used,
+        "parser_note": parser_note,
         "requires_confirmation": True,
     }
 

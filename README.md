@@ -356,6 +356,10 @@ Create `backend/.env` using the variable names expected by `backend/app/config.p
 
 **Never paste secrets into this README or commit your `.env` file.**
 
+#### AI resume reading (OpenRouter) setup
+
+Copy `backend/.env.example` to `backend/.env`, paste your key from [openrouter.ai/keys](https://openrouter.ai/keys) into `OPENROUTER_API_KEY`, and add credit to your OpenRouter account. Restart the backend, then use **Check AI connection** in the candidate resume form. With hybrid mode, the built-in parser remains available if AI extraction fails; review every extracted field before saving.
+
 The local fake application form is disabled by default. To enable it for local testing only, set `ASSISTANT_ALLOW_LOCAL_TEST_FORM=true` and keep `APP_ENV=development` (or `test`) in `backend/.env`.
 
 Start the API:

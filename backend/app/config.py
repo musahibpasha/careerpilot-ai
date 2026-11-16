@@ -1,3 +1,7 @@
+import re
+from pathlib import Path
+
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -12,8 +16,8 @@ class Settings(BaseSettings):
     openrouter_model: str = "google/gemini-2.5-flash"
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     # Comma-separated models tried in order if the main model keeps failing.
-    openrouter_fallback_models: str = "google/gemini-2.5-flash,openrouter/free"
-    openrouter_max_retries: int = 2
+    openrouter_fallback_models: str = ""
+    openrouter_max_retries: int = 0
     # Resume parsing engine:
     #   "hybrid" (default): OpenRouter AI first, automatic fallback to the local
     #                       parser on rate limits / errors / timeouts. With no
@@ -22,7 +26,7 @@ class Settings(BaseSettings):
     #   "local":  offline parser only (instant, no API key).
     resume_parser_mode: str = "hybrid"
     # Max seconds to wait for the AI before falling back to the local parser.
-    resume_ai_timeout_seconds: float = 25.0
+    resume_ai_timeout_seconds: float = 30.0
 
     # Application Assistant browser support.
     assistant_browser_headless: bool = False
@@ -50,9 +54,22 @@ class Settings(BaseSettings):
     arbeitnow_cache_seconds: int = 600
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=(str(Path(__file__).resolve().parents[1] / ".env"), ".env"),
         extra="ignore",
     )
+
+    @field_validator("openrouter_api_key", mode="before")
+    @classmethod
+    def clean_openrouter_api_key(cls, value) -> str:
+        if not isinstance(value, str):
+            return ""
+        cleaned = value.strip()
+        if len(cleaned) >= 2 and cleaned[0] == cleaned[-1] and cleaned[0] in "\"'":
+            cleaned = cleaned[1:-1].strip()
+        cleaned = re.sub(r"(?i)^bearer\s+", "", cleaned).strip()
+        if len(cleaned) >= 2 and cleaned[0] == cleaned[-1] and cleaned[0] in "\"'":
+            cleaned = cleaned[1:-1].strip()
+        return cleaned
 
     @property
     def allowed_origins(self) -> list[str]:

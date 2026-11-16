@@ -208,6 +208,14 @@ type CandidateForm = {
 type ResumeParseResponse = {
   extracted: ExtractedResume;
   requires_confirmation: boolean;
+  parser?: "ai" | "local";
+  parser_note?: string;
+};
+type ResumeParserStatus = {
+  mode: string;
+  key_configured: boolean;
+  models: string[];
+  test: { ok: boolean; detail: string } | null;
 };
 type StoredResumeExtraction = {
   extracted: ExtractedResume;
@@ -388,6 +396,9 @@ export default function BenchCandidates() {
   const [resumeScanBusy, setResumeScanBusy] = useState(false);
   const [resumeScanError, setResumeScanError] = useState("");
   const [resumeScanMessage, setResumeScanMessage] = useState("");
+  const [parserStatus, setParserStatus] = useState<ResumeParserStatus | null>(null);
+  const [parserStatusBusy, setParserStatusBusy] = useState(false);
+  const [parserStatusError, setParserStatusError] = useState("");
   const [resumeExtracted, setResumeExtracted] = useState<ExtractedResume | null>(null);
   const resumeScanRequestId = useRef(0);
   const [formResumes, setFormResumes] = useState<CandidateResume[]>([]);
@@ -448,6 +459,18 @@ export default function BenchCandidates() {
       setJobs(await request<SavedJob[]>("/api/jobs/saved"));
     } catch (error) {
       setJobsError(error instanceof Error ? error.message : "Could not load saved jobs.");
+    }
+  }
+
+  async function checkAIConnection() {
+    setParserStatusBusy(true);
+    setParserStatusError("");
+    try {
+      setParserStatus(await request<ResumeParserStatus>("/api/resume/parser-status?test=true"));
+    } catch (error) {
+      setParserStatusError(error instanceof Error ? error.message : "Could not check the AI connection.");
+    } finally {
+      setParserStatusBusy(false);
     }
   }
 
@@ -692,6 +715,9 @@ export default function BenchCandidates() {
       });
       if (requestId !== resumeScanRequestId.current) return;
       const extracted = result.extracted ?? {};
+      const parserNote = result.parser === "ai"
+        ? "Read with AI. Please review every field before saving."
+        : result.parser_note ?? "";
       applyResumeToForm(extracted);
       if (editingCandidate) {
         const resumeForm = new FormData();
@@ -714,7 +740,10 @@ export default function BenchCandidates() {
             ...current.filter((resume) => resume.id !== savedResume.id),
           ]);
           setFormResumeId(savedResume.id);
-          setResumeScanMessage("Resume scanned and attached. The candidate's resume status is updated.");
+          setResumeScanMessage([
+            "Resume scanned and attached. The candidate's resume status is updated.",
+            parserNote,
+          ].filter(Boolean).join(" "));
           void loadCandidates(false);
         } catch (error) {
           if (requestId === resumeScanRequestId.current) {
@@ -726,9 +755,10 @@ export default function BenchCandidates() {
           }
         }
       } else {
-        setResumeScanMessage(
+        setResumeScanMessage([
           "Resume scanned. Save the new candidate to attach the resume and show it in the Bench list.",
-        );
+          parserNote,
+        ].filter(Boolean).join(" "));
       }
     } catch (error) {
       if (requestId === resumeScanRequestId.current) {
@@ -1439,6 +1469,23 @@ export default function BenchCandidates() {
                     }}
                   />
                 </label>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={parserStatusBusy}
+                  onClick={() => void checkAIConnection()}
+                >
+                  <RefreshCw size={14} className={parserStatusBusy ? "recommendation-spinning" : ""} />
+                  {parserStatusBusy ? "Checking AI connection..." : "Check AI connection"}
+                </button>
+                {parserStatusError && <p className="bench-inline-error" role="alert">{parserStatusError}</p>}
+                {parserStatus && (
+                  <div className={`bench-parser-status ${parserStatus.test?.ok ? "is-ok" : "is-error"}`} role="status">
+                    <strong>{parserStatus.test?.detail ?? "AI connection was not tested."}</strong>
+                    <small>Mode: {parserStatus.mode} · API key: {parserStatus.key_configured ? "configured" : "missing"}</small>
+                    <small>Models: {parserStatus.models.length ? parserStatus.models.join(", ") : "none configured"}</small>
+                  </div>
+                )}
               </div>
               {editingCandidate && (
                 <div className="bench-existing-resume-fill">
