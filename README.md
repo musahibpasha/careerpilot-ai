@@ -1,485 +1,446 @@
-<div align="center">
+# ThoughtLabs CoPilot
 
-# 🚀 ThoughtLabs CoPilot
+AI-assisted job discovery, candidate management, resume analysis, application preparation, and application tracking — with human review kept in control.
 
-### 🤖 Your AI-Powered Job Hunt Copilot
+> **Project status:** Active development. Features and setup may change as the project evolves.
 
-[![Typing SVG](https://readme-typing-svg.demolab.com?font=Fira+Code&size=21&pause=1000&color=36BCF7&center=true&vCenter=true&width=650&lines=Discover+Better+Opportunities+%F0%9F%8E%AF;Match+Your+Skills+With+AI+%F0%9F%A7%A0;Prepare+Smarter+Applications+%E2%9C%A8;Your+Career%2C+Your+Decisions+%F0%9F%9B%A1%EF%B8%8F)](https://git.io/typing-svg)
+## 1. What This Project Does
 
-**Discover smarter. Match better. Apply with confidence.**
+ThoughtLabs CoPilot is a web application with two main workspaces:
 
-An AI-assisted job-search platform for organizing opportunities, understanding resume-to-job fit, preparing applications, and tracking the job hunt — while keeping important decisions under human control.
+- **Job Seeker Workspace:** Discover jobs, save opportunities, compare job requirements with your profile, prepare application materials, and track application progress.
+- **Recruiter Workspace:** Manage candidate profiles, upload and review resumes, inspect extracted candidate information, and track candidate-linked applications.
 
-![Python](https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white)
-![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)
-![React](https://img.shields.io/badge/React-61DAFB?style=for-the-badge&logo=react&logoColor=black)
-![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white)
-![MongoDB](https://img.shields.io/badge/MongoDB-47A248?style=for-the-badge&logo=mongodb&logoColor=white)
-![Status](https://img.shields.io/badge/Status-In%20Development-orange?style=for-the-badge)
+AI features use OpenRouter when configured. Resume extraction also has a local parser fallback.
 
-[Features](#-features) • [Architecture](#-architecture) • [Roadmap](#-development-roadmap) • [Setup](#-getting-started) • [Safety](#-safety-and-privacy)
+**Important:** The application does not submit job applications automatically. Users review their materials and complete submissions on the employer's website.
 
-</div>
+## 2. Technology Stack
 
----
+| Area | Technology |
+|---|---|
+| Frontend | React, TypeScript, Vite |
+| UI Icons | Lucide React |
+| Backend | Python, FastAPI, Uvicorn |
+| Database | MongoDB, PyMongo |
+| Authentication | Firebase Authentication |
+| AI Integration | OpenRouter |
+| Resume Reading | pypdf, DOCX extraction |
+| PDF Generation | ReportLab |
+| Job Discovery | JobSpy, Jobicy, Arbeitnow |
+| Browser Support | Playwright, Google Chrome |
+| Backend Testing | pytest |
 
-## 📌 About the Project
-
-ThoughtLabs CoPilot includes recruiter-managed candidate onboarding alongside its existing job-search workspace. Recruiters can store candidate profiles and original resumes in their authenticated MongoDB workspace, review extracted information, and track candidate-linked applications.
-
-The long-term goal is to support a human-approved workflow: find relevant opportunities, understand why a role may fit, prepare truthful application materials, and let the user review and approve any application before a submission action.
-
-> **Guiding principle:** AI can assist with research and preparation, but the user stays in control of application decisions.
-
-## ✨ Features
-
-### ✅ Built
-
-- **Recruiter Bench Candidates** — create and edit MongoDB-backed candidate records, search and filter the bench, compare real candidate skills against entered requirements, update status, archive profiles, and inspect resumes, applications, and persistent recruiter notes.
-- **Structured candidate onboarding** — review editable personal, professional, skill-category, experience, education, certification, project, training, and recruiter-managed fields before saving a candidate.
-- **Candidate profile editor** — save contact details, professional summary, skills, work experience and internships, projects, education, certifications, and achievements.
-- **PDF and DOCX resume parsing** — extract readable resume text and structured candidate details with the existing OpenRouter parser; scanned PDFs without a text layer still need OCR support.
-- **Review before saving** — inspect extracted resume fields and correct them before updating the profile.
-- **Required-field validation** — frontend and backend checks for required profile fields.
-- **Skill normalization** — treat common variations such as `React`, `React.js`, and `ReactJS` as the same skill for matching.
-- **Manual job entry** — add a job with a title and company; a supplied link is validated.
-- **Basic duplicate detection** — reject a job when its source ID or link already exists.
-- **Basic skill-overlap match score** — calculate an initial score based on normalized skill overlap.
-- **Job feed filtering and sorting** — filter by status, minimum match score, and source; sort by best match, newest, or company.
-- **Application-status tracking with history** — statuses are Discovered, Saved, Under review, Ready for approval, Approved, Submitted, Interview, Offer, Rejected, and Withdrawn. Every change is recorded with a timestamp and shown in the tracker. The generic status endpoints still refuse direct Approved/Submitted changes; the Application Assistant has the dedicated review and manual-submission-confirmation flow.
-- **Apply workflow** — the job-card **Apply** action opens a three-step job-description, resume-review, and manual-application flow. It reuses the saved job and application record, summarizes the stored description with the configured AI provider, and uses the exact same application-material generation endpoint as Match analysis. Resume and cover-letter drafts are independently editable, the Apply resume and letter downloads are real PDFs, and the original uploaded resume is unchanged. The final step opens the original listing/application URL in a new tab; it never submits the external form. Its Not Applied, Applied, Interview, Assessment, Rejected, Offer Received, and Withdrawn status, notes, application date, and generated materials are saved on the existing application.
-- **Job preferences** — save preferred locations, experience level, work arrangement (remote, hybrid, on-site), and salary expectation (minimum, maximum, currency, per year or month). Everything is optional, and target roles stay in the profile. Preferences feed the match score (see Explainable matching).
-- **Candidate resume records** — PDFs and DOCX files are stored with their candidate record in the recruiter’s UID-scoped workspace. PDFs can be previewed in the browser; original DOCX files can be downloaded. Candidate onboarding and the Resume tab use the existing resume extraction endpoint.
-- **Explainable matching** — each job is scored 0-100 from weighted factors: skills (50, must-have vs nice-to-have), role fit against your target roles (15), location and work style (15), experience level (10) and salary (10). Every factor shows a plain-English reason, missing skills are listed, and a factor that cannot be judged (the job or your preferences do not say enough) is left out instead of counted as a miss. A low/medium/high confidence label shows how much of the picture was judged. Scores update when you save your profile or preferences, or call `POST /api/jobs/rescore`. Salary is only compared when both sides use the same currency. Each job card has a "Why this score?" panel with a bar per factor, the confidence label, missing skills, and the factors that were not counted; the add-job form has an optional "More details" section (nice-to-have skills, work style, level, salary).
-- **Application preparation plan** — Match analysis shows a deterministic fit summary, strengths, gaps, resume focus, positioning guidance, and interview prompts based on the saved job and profile. It is guidance, not AI-generated document text.
-- **AI cover-letter and resume wording drafts** — from a job's Match analysis, choose **Generate cover letter and resume drafts** to request a tailored cover letter, professional-summary rewrite, relevant saved skills to emphasize, and suggestions for rewriting existing experience/project bullets. Drafts use the saved profile and job posting, are editable in the panel, and are not submitted or saved automatically. Contact details are excluded from the AI request. Review all text for accuracy. The reviewed cover letter can be downloaded as a real PDF containing the candidate's saved contact details and the selected job context.
-- **Tailored resume export** — Match analysis retains its printable HTML resume export, built from the saved profile and edited AI summary/bullet suggestions. The Apply workflow additionally provides a genuine server-rendered PDF from the same saved profile and reviewed material. Existing education, work history, projects, and skills are preserved; generated wording is only used where its source still matches the saved profile. The original uploaded PDF and saved profile are not changed.
-- **Application Assistant / Automate** — open from a job card or tracker entry for a persistent, job-specific workflow. It combines grounded answer drafts, AI-tailored cover-letter/resume wording, the active saved PDF resume, and listing navigation for LinkedIn, Naukri, Indeed, and Glassdoor. Clicking Automate for a supported application flow launches installed Google Chrome as a normal process with the dedicated ThoughtLabs CoPilotprofile, then connects Playwright over a loopback-only CDP endpoint. Chrome is not launched with `--enable-automation`; a separate cross-process profile lock prevents concurrent ThoughtLabs CoPilotruns. The default profile is `%LOCALAPPDATA%\ThoughtLabs CoPilot\AutomationChromeProfile`; it is separate from everyday Chrome and Edge profiles. ThoughtLabs CoPilotdoes not terminate the launched Chrome process after disconnecting Playwright, so the user can finish manual login or review the open form. Google/LinkedIn may still reject or challenge an automated session; changing the launch method does not guarantee acceptance. Credentials are never entered or stored, CAPTCHA/MFA/security restrictions are not bypassed, and ThoughtLabs CoPilotnever clicks the final Submit Application button. Login and access challenges stop for manual intervention. Submit on the employer site yourself and separately record that action in CareerPilot.
-
-#### Connect Chrome for listing-only navigation
-
-Start Google Chrome with the dedicated ThoughtLabs CoPilotprofile (the default is
-`%LOCALAPPDATA%\ThoughtLabs CoPilot\AutomationChromeProfile`) and a loopback-only
-debugging port. In Windows PowerShell:
-
-```powershell
-$profile = Join-Path $env:LOCALAPPDATA 'ThoughtLabs CoPilot\AutomationChromeProfile'
-& "$env:ProgramFiles\Google\Chrome\Application\chrome.exe" `
-  --remote-debugging-port=9222 `
-  "--user-data-dir=$profile" `
-  --enable-automation `
-  --no-first-run
-```
-
-Set `ASSISTANT_BROWSER_CDP_ENDPOINT=http://127.0.0.1:9222` in the local
-backend environment and restart the backend. If
-`ASSISTANT_BROWSER_PROFILE_DIR` is configured, use that exact directory in
-Chrome's `--user-data-dir` argument. Sign in manually in this dedicated profile;
-its session persists between runs. Never point either setting at your everyday
-Chrome profile or copy cookies between profiles. The browser endpoint is local only, and ThoughtLabs CoPilotrefuses connections when
-Chrome cannot confirm the dedicated profile. This manual setup is for the
-listing-only action; Automate starts its own normal Chrome process and chooses
-a loopback CDP port automatically. No CDP environment variable is required for
-Automate.
-- **Assistant diagnostics** — Each browser run records field outcomes and safe explanations, a run ID, timestamps, and a categorized error when applicable. Authenticated run endpoints can provide a trace archive and screenshot; downloads are restricted to the Firebase owner. These artifacts may contain sensitive employer-page content. The backend stores them in per-user private directories and deletes them after seven days by default. Configure `ASSISTANT_TRACE_DIR` for a private persistent artifact location and `ASSISTANT_ARTIFACT_RETENTION_DAYS` to change retention; `0` disables automatic expiry. Sign-in pages are not captured. A detected access challenge may be captured once before manual interaction; Glassdoor tracing and screenshots for form runs remain limited to detected application forms.
-- **Not interested, with a reason** — dismiss a job from its card and say why (role, skills, location, pay, level, company, other). Dismissed jobs move to a collapsible list with a Restore button, and after two dismissals for the same reason the app points you to the profile or preference setting that controls it. This is only recorded for now; it does not change scores.
-- **Paste-a-job import** — in Add job, paste a whole posting and press Fill the form. Rules (not AI) read the title, company, location, work style, level, salary (LPA, lakh, $ ranges, monthly or yearly) and known skills, splitting must-have from nice-to-have. You review the filled form and save; nothing is saved automatically, and details it cannot find are listed so you can add them.
-- **Job link import** — in Add job, leave the paste box empty, type a public job posting link in *Job posting URL* and press Fill the form. The backend (`app/job_fetch.py`) opens the page, pulls out the readable text (and the page's structured job data when it has some), then hands it to the same rule-based parser as pasted text, so you get the same kind of draft to review and edit before saving. If you paste text as well, the pasted text is used and the link is only kept as the posting URL. Safety rules: only `http`/`https` on ports 80/443; links to localhost, private, link-local, cloud-metadata and other internal addresses are refused (the name is looked up by the app, every answer is checked, and the connection goes to the checked address, so a name cannot be switched to an internal address afterwards); every redirect is re-checked, at most 5; 8-second total limit, 1 MB size limit, only HTML or plain-text pages; hidden page text and invisible characters are dropped, and text that looks like instructions to an AI is flagged and never followed. It does not log in, solve CAPTCHAs or get around blocking: if a site refuses, needs JavaScript or a login, the message tells you to paste the description instead. The JobSpy dependency is used for board discovery, not posting-link import.
-- **Job-board source cards and search** — Find Jobs has LinkedIn, Indeed, and Glassdoor cards plus **ICT Jobs Europe** (Jobicy and Arbeitnow public feeds) and **All Boards** (the three JobSpy boards plus those two feeds). Board searches use the entered keywords and location; results are scored against the selected candidate's saved profile/resume and preferences, then deduplicated and ranked by match score. Europe-only aggregate searches require a supported European location; unsupported locations return an explanation without querying the feeds. The aggregate requests enabled sources concurrently and reports individual source failures without discarding successful results. Individual JobSpy boards retain their existing filters; aggregate searches apply the compatible employment type, remote/work arrangement, experience, posted-within, and English-language filters. Multiple job titles can be separated with commas, semicolons, newlines, `|`, or `OR`; title alternatives are searched separately and combined with duplicate checks. Results are transient until the user chooses **Save job**. Scheduled/on-demand scanning remains limited to the JobSpy-supported LinkedIn, Indeed, and Glassdoor sources. Previously saved jobs from other sources remain visible and are not migrated or deleted. The Application Assistant validates saved listing links and opens them; it does not add browser auto-fill support for the new feed sources.
-- **Safer loading behavior** — the job tracker can still load if the profile request fails.
-- **Automated tests** — cover areas including matching, normalization, duplicates, profile validation, resume parsing, status transitions, status history, the approval block, the status migration, job preferences, and resume files. Run `cd backend && python -m pytest -q`.
-
-### 🚧 Planned
-
-Features below are planned, not yet implemented unless explicitly listed in the Built section.
-
-- Using the active uploaded resume directly in job matching and importing the exported resume back into the stored resume library.
-- Document checklists and ATS keyword checks.
-- Permitted job-source connectors, scheduled scans, and expired-listing checks.
-- Application activity logs and screenshots where appropriate.
-- Advanced interview preparation tools beyond the basic prompts in the application plan.
-- Dashboard analytics, alerts, and daily digests.
-- Login and private user data storage before wider online deployment.
-- Further security, privacy, deployment, and reliability improvements.
-
-## 🧭 Development Roadmap
-
-Work is being delivered incrementally so each stage can be tested before moving on.
-
-| Stage | Focus | Current state |
-|---|---|---|
-| 1 | Stabilize the existing app, database, tests, and basic approval block | ✅ Built |
-| 2 | Profile and application tracking | ✅ Profile, preferences, multiple resumes, status history, and Kanban board built |
-| 3 | Smart, explainable job matching | ✅ Complete |
-| 4 | Job discovery, import, and permitted source connectors | ✅ Manual entry, posting import, JobSpy searches, and European feed aggregation are available. |
-| 5 | Application preparation and browser-assisted prefill | ✅ Application kits, editable grounded answer drafts, permitted browser-assisted fill, and LinkedIn manual workflow are built alongside existing document prep. |
-| 6 | Explicit approval workflow and server-side safeguards | ✅ Review hashes, guarded approval transitions, and user-confirmed manual submission are enforced by the backend. |
-| 7 | Analytics, alerts, interview preparation, authentication, security, and deployment | 🔄 Firebase auth and per-user isolation implemented; Firebase setup and approved data migration pending |
-
-### Current implementation checkpoint
-
-- **Current feature:** Job-board source cards and transient JobSpy/European feed search results, alongside the persistent Application Assistant workflow for saved jobs and tracker entries.
-- **Status:** Application-kit edits and generated answers persist on the existing application record. AI answer generation uses the existing OpenRouter integration with fact-grounded template fallback. Review approval is tied to a hash of the job and exact answers; Submitted is recorded only after the user confirms they submitted externally. No external application is submitted by CareerPilot.
-- **Job-board searches:** Find Jobs can retrieve transient listings from a selected JobSpy board or from ICT Jobs Europe/All Boards feed aggregation. Results are saved only after the user chooses **Save job**; the original posting remains the source link.
-- **Profile handling:** Suggested keywords come only from saved target roles (or saved skills if no roles exist); location and optional preferences can be seeded from saved profile/preferences. The user can edit every criterion before searching.
-- **LinkedIn access:** The official Job Posting API is partner-restricted and is for posting jobs, not searching listings. JobSpy provides public-board search without using a LinkedIn account or session; availability is subject to board blocking and rate limits. Application automation remains disabled for LinkedIn.
-- **Preserved data:** Existing saved jobs from legacy sources remain intact and visible. New JobSpy searches and scans use LinkedIn, Indeed, and Glassdoor; aggregate searches additionally use Jobicy and Arbeitnow. The existing public job URL importer is unchanged. ictjob.be was not integrated because its live page was unavailable and did not expose listings; no block or access control was bypassed.
-- **Automated checks:** Run the backend suite and frontend build after implementation; persistent Application Assistant runs require installed Google Chrome Stable, while local form integration tests use Playwright's browser installation.
-- **Search verification:** Backend tests cover source validation, filter forwarding, URL safety, and result normalization. Live board searches were not run as part of the automated tests; each source may have its own access limits.
-- **Manual confirmation:** Not yet confirmed by the user.
-- **Next after user verification:** Manually test the Application Assistant flow below before starting another feature.
-
-### Suggested implementation order
-
-1. ~~Stage 2: Kanban board, status history, job preferences, multiple resumes.~~ Done.
-2. ~~Stage 3: explainable matching and skill-gap insights.~~ Done.
-3. Complete search filters and result normalization, including the limits of each source's available data.
-4. Verify Stage 5 and Stage 6 in the Application Assistant, then continue with active-resume-aware matching.
-5. Continue Stage 7: analytics, notifications, and production hardening.
-
-## 🏗️ Architecture
-
-```mermaid
-flowchart TD
-    U[User] --> FE[React + TypeScript frontend]
-    FE --> API[FastAPI backend]
-    API --> DB[(MongoDB)]
-    API --> RES[PDF resume extraction]
-    RES --> AI[OpenRouter model]
-    AI --> RES
-    API --> MATCH[Skill normalization and basic matching]
-    API --> JOBSPY[JobSpy job-board search]
-    JOBSPY --> BOARDS[LinkedIn, Indeed, Glassdoor]
-    BOARDS --> JOBSPY
-    JOBSPY --> API
-    API --> FEEDS[Jobicy and Arbeitnow European feeds]
-    FEEDS --> API
-    MATCH --> API
-    API --> FE
-    FE --> U
-```
-
-### Technology Stack
-
-| Layer | Technology | Purpose |
-|---|---|---|
-| Frontend | React, TypeScript, Vite | User interface and job-tracking workspace |
-| Backend | Python, FastAPI, Uvicorn | API, validation, and application logic |
-| Database | MongoDB, PyMongo | Store profile and job-tracking data |
-| Resume extraction | pypdf + DOCX XML reader | Extract text from PDF and DOCX resumes |
-| PDF generation | ReportLab | Render reviewed cover letters as downloadable PDFs |
-| AI extraction | OpenRouter | Assist with extracting structured profile fields |
-| Testing | Python test suite | Validate backend behaviors across profiles, jobs, matching, imports, and application tracking |
-
-## 📂 Project Structure
+## 3. Project Structure
 
 ```text
 careerpilot-ai/
 ├── frontend/
-│   └── src/
-│       ├── App.tsx
-│       └── styles.css
+│   ├── src/
+│   │   ├── App.tsx
+│   │   ├── ApplicationAssistant.tsx
+│   │   ├── ApplyWorkflow.tsx
+│   │   ├── AuthBoundary.tsx
+│   │   ├── BenchCandidates.tsx
+│   │   ├── RecruiterAdmin.tsx
+│   │   ├── api.ts
+│   │   ├── firebase.ts
+│   │   ├── main.tsx
+│   │   └── styles.css
+│   ├── package.json
+│   └── vite.config.ts
+│
 ├── backend/
 │   ├── app/
 │   │   ├── main.py
-│   │   ├── jobicy.py
 │   │   ├── config.py
 │   │   ├── database.py
+│   │   ├── auth.py
 │   │   ├── schemas.py
+│   │   ├── workflow.py
+│   │   ├── matching.py
 │   │   ├── preferences.py
 │   │   ├── resumes.py
-│   │   ├── matching.py
-│   │   └── workflow.py
+│   │   ├── job_fetch.py
+│   │   ├── job_import.py
+│   │   ├── job_dedup.py
+│   │   ├── jobspy_search.py
+│   │   ├── europe_jobs.py
+│   │   ├── jobicy.py
+│   │   └── assistant_*.py
 │   ├── tests/
-│   │   └── test_jobicy.py
-│   ├── .env                 # Local secrets; do not commit
-│   └── .venv/               # Local virtual environment; do not commit
-├── .github/
-│   └── workflows/
-│       └── snake.yml        # Optional contribution animation workflow
+│   ├── scripts/
+│   ├── .env.example
+│   ├── requirements.txt
+│   └── requirements-local.txt
+│
 ├── .gitignore
 └── README.md
 ```
 
-The exact structure may grow as new features are implemented.
+### Important Files Explained
 
-## ⚙️ Getting Started
+| File | Responsibility |
+|---|---|
+| `frontend/src/App.tsx` | Main application UI, navigation, job cards and application board |
+| `frontend/src/BenchCandidates.tsx` | Recruiter candidate management |
+| `frontend/src/RecruiterAdmin.tsx` | Recruiter administration |
+| `frontend/src/ApplyWorkflow.tsx` | Job application preparation workflow |
+| `frontend/src/ApplicationAssistant.tsx` | Application Assistant interface |
+| `frontend/src/api.ts` | Frontend API communication |
+| `frontend/src/firebase.ts` | Firebase frontend configuration |
+| `backend/app/main.py` | FastAPI routes and backend orchestration |
+| `backend/app/database.py` | MongoDB connection and data access |
+| `backend/app/auth.py` | Firebase authentication verification |
+| `backend/app/workflow.py` | Application status workflow |
+| `backend/app/matching.py` | Job matching logic |
+| `backend/app/resumes.py` | Resume processing |
+| `backend/app/config.py` | Backend environment configuration |
+| `backend/tests/` | Automated backend tests |
 
-### Deploying on Vercel
+## 4. Prerequisites
 
-The frontend and API are deployed as separate Vercel projects from this
-repository. Create the frontend project with `frontend` as its root directory
-and the backend project with `backend` as its root directory. The backend's
-`api/[...path].py` exports the FastAPI application for Vercel's Python runtime;
-the existing `backend/requirements.txt` is used for its dependencies. This
-serverless dependency set excludes Playwright and Uvicorn's optional standard
-extras; browser-assisted filling is not supported on Vercel.
+Install the following:
 
-Set these backend environment variables in the Vercel project:
+- Python 3.10 or newer
+- Node.js and npm
+- MongoDB local installation or MongoDB Atlas
+- Firebase project
+- OpenRouter API key (optional, for AI features)
+- Google Chrome Stable (for local browser-assisted features)
 
-- `MONGODB_URL` — MongoDB Atlas connection string.
-- `MONGODB_DB` — database name, for example `careerpilot`.
-- `CORS_ORIGINS` — exact deployed frontend origin, such as `https://your-site.vercel.app`.
-- `APP_ENV=production`.
-- `OPENROUTER_API_KEY` — optional; required for AI-generated drafts.
-- `FIREBASE_PROJECT_ID` — Firebase project ID used by the Admin SDK.
-- `FIREBASE_SERVICE_ACCOUNT_JSON` — private service-account JSON, stored as a backend-only secret.
-- `SUPER_ADMIN_EMAILS` — comma-separated allowlist of verified Firebase email addresses allowed to administer recruiter accounts.
-
-The configured super-admin account must first be created in Firebase Authentication.
-After signing in with that email, the **Recruiters** workspace becomes available.
-Super admins can create recruiter accounts, view the recruiter list and workspace
-record counts, see confirmed application summaries with the recruiter and
-candidate identified, and send or resend a Firebase password-setup email.
-Recruiters set their own passwords; passwords are never entered or displayed by
-the admin UI. Recruiter candidate, resume, job, and application workspaces remain
-isolated by Firebase UID; the admin application view exposes only the recruiter,
-candidate, job, status, and applied-date summary. There are intentionally no
-recruiter delete, disable, suspend, or deactivation actions.
-
-Set `VITE_API_URL` in the frontend project to the backend's deployed origin
-(for example `https://your-api.vercel.app`) and redeploy the frontend. Never
-put database credentials or the OpenRouter key in a `VITE_` variable. The
-frontend falls back to localhost only in development; a production build with
-no API URL uses same-origin `/api` requests.
-
-Set these frontend values in `frontend/.env.local` for local development and
-in the frontend Vercel project for production:
-
-- `VITE_FIREBASE_API_KEY`
-- `VITE_FIREBASE_AUTH_DOMAIN`
-- `VITE_FIREBASE_PROJECT_ID`
-- `VITE_FIREBASE_APP_ID`
-
-These are Firebase Web App configuration values, not server credentials.
-Enable Email/Password and Google under **Firebase Console → Authentication →
-Sign-in method**, and add `localhost` and the deployed frontend host under
-**Authentication → Settings → Authorized domains**. The app requires verified
-email addresses before accessing workspace APIs.
-
-Public account creation is not exposed in the recruiter UI. Provision recruiter
-accounts through Firebase administration. This repository does not yet include
-an approved-recruiter allowlist: any verified Firebase account that can sign in
-can create and manage only its own UID-scoped workspace. Authentication verifies
-identity and ownership, but is not an approval process for recruiter access.
-
-The backend verifies Firebase ID tokens with the Firebase Admin SDK. It does
-not trust an email, UID, or owner field from request data. Each request is
-scoped to the UID from its verified token; profiles, candidates, preferences,
-jobs, applications, resumes, and assistant operations all use that scope. Public
-health, transient job-board search, and non-persisting job-import preview
-remain unauthenticated.
-
-#### Existing workspace data reconciliation
-
-Legacy records remain hidden from the authenticated API until their ownership
-is reconciled. The earlier ownership-only utility is not the import tool for
-reconciling local backups with Atlas. Use the separate
-`scripts/reconcile_legacy_workspace.py` tool only after preparing all five
-Extended JSON collection exports (`jobs.json`, `applications.json`,
-`profiles.json`, `preferences.json`, and `resumes.json`).
-
-The script defaults to read-only dry-run mode. It requires the explicit
-`CAREERPILOT_MIGRATION_ATLAS_URL` variable and `--atlas-db careerpilot`; it
-never falls back to the backend's `MONGODB_URL`. It also prompts for a current
-Firebase ID token with hidden input, verifies the token through Firebase
-Admin, and derives the UID from verified claims. Do not pass an email or UID
-as identity proof. Example:
-
-```powershell
-cd backend
-$env:CAREERPILOT_MIGRATION_ATLAS_URL = "<Atlas URI supplied through your secret manager>"
-python scripts/reconcile_legacy_workspace.py --dry-run --backup-dir ".\migration-backups" --atlas-db ThoughtLabs CoPilot--expected-email "your-verified-account@example.com"
-```
-
-The tool does not overwrite existing documents or alter indexes. It plans
-ownership-only updates for matching records, preserves Atlas-only records,
-and handles profile conflicts and UID-tagged local-only records separately.
-An apply run is additionally gated by a reviewed manifest hash, exact target
-confirmation, independently verified backups of both databases, successful
-isolated restore and staging reconciliation attestations, and a final typed
-target confirmation. The readiness file must identify hashed local and Atlas
-database backup archives, the hash of the five JSON source exports, and who
-verified successful restore and staging checks. JSON parse counts alone are
-not evidence that a database backup can be restored. Do not use the older
-`assign_legacy_workspace.py` utility for this reconciliation. Never put the
-service-account JSON in the frontend, README, or Git.
-
-Vercel serverless functions cannot keep an interactive browser open. The
-browser-assisted **Fill** endpoint returns `503` on Vercel; use the Application
-Kit to review and copy answers. Firebase authentication does not make an
-interactive browser available inside Vercel.
-Resume uploads may also exceed serverless request-size limits; if that occurs,
-use direct object-storage uploads rather than raising the function limit.
-
-### Prerequisites
-
-Install the following before running the project:
-
-- Python 3.10 or a compatible newer version.
-- Node.js and npm.
-- A running MongoDB instance or MongoDB connection string.
-- An OpenRouter API key if you want to use AI-assisted resume extraction and application-draft generation.
-
-### 1. Clone the Repository
-
-Replace `musahibpasha` with your GitHub username.
+## 5. Clone the Repository
 
 ```bash
 git clone https://github.com/musahibpasha/careerpilot-ai.git
 cd careerpilot-ai
 ```
 
-### 2. Start the Backend
+If using a ZIP file, extract it and open the project folder in your code editor.
 
-Open a terminal:
+## 6. Backend Setup
+
+### Step 1: Navigate to Backend
 
 ```bash
 cd backend
-python -m venv .venv
 ```
 
-On Windows PowerShell, activate the environment:
+### Step 2: Create Virtual Environment
+
+**Windows PowerShell:**
 
 ```powershell
+py -3 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 ```
 
-Install dependencies:
+**macOS/Linux:**
 
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+### Step 3: Install Dependencies
+
+```bash
+python -m pip install --upgrade pip
 pip install -r requirements-local.txt
 python -m playwright install chromium
 ```
 
-Create `backend/.env` using the variable names expected by `backend/app/config.py`. Add your own MongoDB connection settings and OpenRouter API key locally.
+### Step 4: Configure Environment Variables
 
-**Never paste secrets into this README or commit your `.env` file.**
+Copy the example environment file.
 
-#### AI resume reading (OpenRouter) setup
+**Windows:**
 
-Copy `backend/.env.example` to `backend/.env`, paste your key from [openrouter.ai/keys](https://openrouter.ai/keys) into `OPENROUTER_API_KEY`, and add credit to your OpenRouter account. Restart the backend, then use **Check AI connection** in the candidate resume form. With hybrid mode, the built-in parser remains available if AI extraction fails; review every extracted field before saving.
+```powershell
+Copy-Item .env.example .env
+```
 
-The local fake application form is disabled by default. To enable it for local testing only, set `ASSISTANT_ALLOW_LOCAL_TEST_FORM=true` and keep `APP_ENV=development` (or `test`) in `backend/.env`.
+**macOS/Linux:**
 
-Start the API:
+```bash
+cp .env.example .env
+```
+
+Edit `backend/.env`:
+
+```env
+APP_ENV=development
+
+MONGODB_URL=mongodb://localhost:27017
+MONGODB_DB=careerpilot
+
+CORS_ORIGINS=http://localhost:5173
+
+FIREBASE_PROJECT_ID=your-firebase-project-id
+FIREBASE_SERVICE_ACCOUNT_JSON=
+
+OPENROUTER_API_KEY=
+OPENROUTER_MODEL=google/gemini-2.5-flash
+
+OPENROUTER_FALLBACK_MODELS=
+OPENROUTER_MAX_RETRIES=0
+
+RESUME_PARSER_MODE=hybrid
+RESUME_AI_TIMEOUT_SECONDS=30
+```
+
+**Configuration notes:**
+
+- `MONGODB_URL`: Your MongoDB connection string.
+- `MONGODB_DB`: Database name.
+- `FIREBASE_PROJECT_ID`: Firebase project ID.
+- `FIREBASE_SERVICE_ACCOUNT_JSON`: Backend Firebase Admin credentials, when using this configuration method.
+- `OPENROUTER_API_KEY`: Your OpenRouter API key.
+- `RESUME_PARSER_MODE`: Use `hybrid`, `ai`, or `local`.
+
+Never commit `.env` files, credentials, or API keys.
+
+### Step 5: Start Backend Server
 
 ```bash
 python -m uvicorn app.main:app --reload
 ```
 
-If `requirements.txt` does not exist in your current repository yet, add a maintained dependency file based on the project's actual backend dependencies before relying on the install command above.
+Backend:
 
-### 3. Start the Frontend
+```text
+http://127.0.0.1:8000
+```
 
-Open a second terminal:
+API documentation:
+
+```text
+http://127.0.0.1:8000/docs
+```
+
+Keep this terminal running.
+
+## 7. Frontend Setup
+
+Open a second terminal from the project root.
+
+### Step 1: Navigate to Frontend
 
 ```bash
 cd frontend
+```
+
+### Step 2: Install Dependencies
+
+```bash
 npm install
+```
+
+### Step 3: Configure Firebase
+
+Create `frontend/.env.local`:
+
+```env
+VITE_FIREBASE_API_KEY=your-firebase-web-api-key
+VITE_FIREBASE_AUTH_DOMAIN=your-project.firebaseapp.com
+VITE_FIREBASE_PROJECT_ID=your-firebase-project-id
+VITE_FIREBASE_APP_ID=your-firebase-app-id
+```
+
+Get these values from:
+
+Firebase Console → Project Settings → General → Your Apps → Web App.
+
+Enable the required sign-in providers under Firebase Authentication.
+
+Add `localhost` under Firebase Authentication → Settings → Authorized Domains.
+
+### Step 4: Start Frontend
+
+```bash
 npm run dev
 ```
 
-Open the local URL printed by Vite in the terminal.
+Open the URL displayed by Vite, normally:
 
-### 4. Run Tests
-
-From the backend directory, activate the virtual environment and run the project's test command. For a standard pytest setup:
-
-```bash
-python -m pytest
+```text
+http://localhost:5173
 ```
 
-Use the test command configured in the repository if it differs.
+## 8. Running the Complete Project
 
-## 🔐 Safety and Privacy
+You need two terminals running simultaneously.
 
-ThoughtLabs CoPilot is designed around human oversight.
+**Terminal 1 — Backend**
 
-- **No invented qualifications:** generated material should be based on the user's actual profile and resume.
-- **Review before saving:** AI-extracted resume fields should be reviewed by the user before being saved.
-- **No automatic applications:** ThoughtLabs CoPilotnever clicks Submit. The listing-only automation opens LinkedIn, Naukri, Indeed, or Glassdoor in a dedicated local Chrome profile and does not fill or submit application forms. Any separate form-assistance flow remains subject to its review and write safeguards.
-- **Server-side approval:** `approved` requires confirmation of the exact reviewed job and answers. `submitted` can only be recorded after the user explicitly confirms manual submission. Generic status endpoints continue to reject both statuses.
-- **Respect website controls:** use permitted APIs, feeds, and automation methods. Do not bypass CAPTCHA, login requirements, or anti-bot protections.
-- **Pause when uncertain:** automation should stop and ask the user when a page or form is unclear.
-- **Protect secrets:** keep API keys, credentials, private resumes, and personal data out of source control and logs.
-- **Secure deployment:** workspace data APIs require a verified Firebase account and enforce per-user ownership.
+```bash
+cd backend
+.venv\Scripts\activate
+python -m uvicorn app.main:app --reload
+```
 
-The current match score is a basic skill-overlap indicator, not a guarantee of job suitability or hiring outcomes.
+**Terminal 2 — Frontend**
 
-## 🧪 Testing
+```bash
+cd frontend
+npm run dev
+```
 
-The test suite (run with `cd backend && python -m pytest -q`) covers key areas such as:
+Make sure MongoDB is running and Firebase is configured.
 
-- Skill normalization.
-- Basic matching.
-- Duplicate-job checks.
-- Profile required-field validation.
-- Resume parsing behavior.
-- Application status transitions, timestamped status history, and the migration from the old statuses.
-- The application-approval block: `approved` and `submitted` are refused by the backend.
-- Application Assistant (`tests/test_assistant.py`): fact and draft persistence, tailored-material persistence and review hashing, saved-resume selection and consented upload, grounded AI/template answers, four-platform saved-listing URL validation and persistent Chrome launch, Google OAuth navigation restrictions, source/platform mismatch rejection, Greenhouse/Lever/Glassdoor form URL policy, safe navigation and redirect checks, Glassdoor login-write scoping and application-form detection, sensitive-field handling, browser write blocking and post-review manual authorization, isolated browser-form tests, explicit manual-submission recording, and regressions for the generic status gates. Persistent browser integration uses installed Google Chrome Stable.
-- Authentication and data scoping (`tests/test_auth.py`): bearer-token rejection, verified-email enforcement, owner assignment on inserts, cross-user ID read/update/delete isolation, and protection against attempts to spoof an owner UID.
-- Cover-letter PDF export: checks the PDF response and verifies the reviewed letter and selected job/profile context in extracted PDF text.
-- Job link import (`tests/test_job_fetch.py`, `tests/test_job_import_url.py`): valid public HTML, structured job data, malformed/empty pages, login and CAPTCHA pages, unsupported content types, timeouts, oversized responses, redirect limit, localhost/private/metadata/IPv6 targets, redirects to private addresses, names that resolve to internal addresses, and the pasted-text regression. No test opens a real website.
+## 9. Testing
 
-As features are added, tests should be added for both successful and failure cases. The count may change as the project evolves.
+### Backend Tests
 
-### Manually test the Application Assistant
+From the backend directory:
 
-1. Start MongoDB, the backend, and the frontend. Add a profile with contact details, skills, experience, and projects, then save a job.
-2. Click **Automate** on a job card (or open the assistant from Applications). Confirm that the assistant reuses that job's application record.
-3. In **Job**, choose the saved resume for this application. In **Kit**, check profile facts and source labels; generate and edit answer drafts and tailored materials; save changes and reopen the assistant to confirm persistence.
-4. Open **Fill** and click **Open [platform] in ThoughtLabs CoPilotbrowser**. The saved LinkedIn, Naukri, Indeed, or Glassdoor listing opens in the same dedicated persistent Chrome profile. Sign in manually if needed; the profile stores sessions on this machine, outside the repository. ThoughtLabs CoPilotdoes not copy or use your regular Chrome profile. If a CAPTCHA, Cloudflare challenge, or account restriction appears, ThoughtLabs CoPilotstops and does not bypass it.
-5. In this stage, ThoughtLabs CoPilotdoes not fill application forms. Review the listing yourself, use the Application Kit as needed, and continue through **Review** to check your materials.
-6. Submit the application yourself on the employer's site only after reviewing it. ThoughtLabs CoPilotnever clicks Submit.
-7. After you have actually submitted, check the confirmation in **Done** to record it in CareerPilot. Verify the status history records the review and manual confirmation.
-8. Confirm that trying to set `approved` or `submitted` through the generic application status API still returns a forbidden response.
+```bash
+python -m pytest -q
+```
 
-If a persistent assistant run fails to launch, install Google Chrome Stable and restart the local backend. ThoughtLabs CoPilotuses the branded Chrome channel and does not fall back to bundled Chromium.
+### Frontend Build
 
-### Manually test the Apply workflow
+From the frontend directory:
 
-1. Sign in, save a job with its description and application URL, and add profile details including work history, projects, and education.
-2. Click **Apply** on that job card. Verify the three steps show the selected job, its saved details, the AI description summary, and the same match score and profile details.
-3. Generate and edit the tailored resume and cover letter separately. Verify each download is a PDF and that the original uploaded resume is unchanged.
-4. Continue without generating documents as well. In the final step, click **Apply on Company Website**; verify the employer page opens in a new tab and ThoughtLabs CoPilotremains open.
-5. Choose a status, add notes, and save. Refresh and reopen Apply; verify status, notes, application date, and saved drafts persist. Click Apply again for the same job and verify it reuses the same application.
-6. Open **Automate** and verify the ThoughtLabs logo remains visible; click it and confirm the dashboard opens. Existing Match analysis generation and HTML export should remain unchanged.
+```bash
+npm run build
+```
 
-## 🐍 Optional GitHub Contribution Snake
+### Frontend Preview
 
-A contribution-snake animation is optional decoration and is separate from the application's functionality.
+```bash
+npm run preview
+```
 
-If the workflow at `.github/workflows/snake.yml` is configured and has successfully published the SVG to the `output` branch, you can display it here. Replace `musahibpasha` with your username:
+## 10. Application Architecture
 
-![GitHub contribution snake](https://raw.githubusercontent.com/musahibpasha/careerpilot-ai/output/github-contribution-grid-snake.svg)
+```mermaid
+flowchart TD
+    User[User] --> Frontend[React + TypeScript Frontend]
+    Frontend --> Firebase[Firebase Authentication]
+    Frontend --> Backend[FastAPI Backend]
+    Backend --> MongoDB[(MongoDB)]
+    Backend --> Jobs[Job Board Integrations]
+    Backend --> Resume[Resume Processing]
+    Resume --> AI[OpenRouter]
+    Backend --> Frontend
+```
 
-If the image does not appear, check that the workflow ran successfully, that the `output` branch exists, and that the image path matches the generated filename. You can remove this section if you do not want the animation.
+### How It Works
 
-## 🛣️ Project Status
+1. The user interacts with the React frontend.
+2. Firebase Authentication manages user identity.
+3. The frontend sends authenticated API requests.
+4. FastAPI validates requests and Firebase tokens.
+5. MongoDB stores user profiles, jobs, applications, and recruiter records.
+6. AI services assist with resume extraction and application-material drafts.
+7. Results are returned to the frontend.
 
-ThoughtLabs CoPilot is an active work in progress. The profile editor, PDF resume parsing and review, explainable matching, job discovery/import, application tracking, editable AI cover-letter and resume-wording drafts, printable tailored-resume export, Firebase authentication, and per-user workspace isolation are implemented. Browser-assisted workflows, analytics, and further production hardening remain in progress.
+## 11. Main Features
 
-## 🤝 Contributing
+### Job Seeker Workspace
 
-This is currently a personal project. Suggestions, bug reports, and improvements are welcome as the project becomes more mature.
+- Job discovery from supported job boards.
+- LinkedIn, Indeed and Glassdoor search.
+- European job-feed aggregation.
+- Job saving and duplicate detection.
+- Explainable job matching.
+- Resume analysis and extraction.
+- Tailored resume and cover-letter drafts.
+- Application tracking and status history.
+- Application preparation workflow.
+- Job preferences and filtering.
 
-When contributing:
+### Recruiter Workspace
 
-1. Keep changes focused on one feature at a time.
-2. Add or update tests for changed behavior.
-3. Never commit API keys, `.env` files, private resumes, or personal application data.
-4. Preserve the human-approval requirement for any application submission workflow.
+- Candidate onboarding.
+- Candidate profile management.
+- Resume uploads and parsing.
+- Candidate search and filtering.
+- Skill matching.
+- Candidate application tracking.
+- Recruiter-managed notes.
+- Recruiter administration.
 
-## 📄 License
+### AI Capabilities
 
-No license has been selected yet. Until a license is added to this repository, do not assume that the code is available for unrestricted reuse.
+- Resume information extraction.
+- Job/profile matching assistance.
+- Cover-letter generation.
+- Resume wording suggestions.
+- Application answer drafts.
+
+AI-generated content should always be reviewed before use.
+
+## 12. Environment Variables Reference
+
+| Variable | Description |
+|---|---|
+| `APP_ENV` | Backend environment |
+| `MONGODB_URL` | MongoDB connection string |
+| `MONGODB_DB` | Database name |
+| `CORS_ORIGINS` | Allowed frontend origins |
+| `FIREBASE_PROJECT_ID` | Firebase project |
+| `FIREBASE_SERVICE_ACCOUNT_JSON` | Firebase Admin credentials |
+| `SUPER_ADMIN_EMAILS` | Super-admin email allowlist |
+| `OPENROUTER_API_KEY` | AI provider API key |
+| `OPENROUTER_MODEL` | Primary AI model |
+| `RESUME_PARSER_MODE` | Resume parsing mode |
+| `VITE_FIREBASE_API_KEY` | Firebase frontend API key |
+| `VITE_FIREBASE_AUTH_DOMAIN` | Firebase authentication domain |
+| `VITE_FIREBASE_PROJECT_ID` | Firebase frontend project |
+| `VITE_FIREBASE_APP_ID` | Firebase web application ID |
+| `VITE_API_URL` | Optional deployed backend URL |
+
+Additional settings are defined in `backend/app/config.py`.
+
+## 13. Security and Privacy
+
+- Never commit API keys or `.env` files.
+- Keep Firebase service-account credentials on the backend.
+- Do not expose MongoDB credentials in frontend code.
+- Private workspace records must remain scoped to the authenticated Firebase UID.
+- Review extracted resume information before saving.
+- Review AI-generated content before using it.
+- The application does not automatically submit applications.
+- Do not bypass CAPTCHA, MFA, login restrictions, or website security controls.
+
+## 14. Common Problems
+
+| Problem | Possible Solution |
+|---|---|
+| MongoDB connection error | Check MongoDB service and connection URL. |
+| Frontend API errors | Ensure backend is running and CORS is configured. |
+| Firebase authentication error | Verify Firebase configuration and authorized domains. |
+| OpenRouter error | Check API key, model availability and account credits. |
+| Resume extraction failure | Try hybrid parsing or check the resume file. |
+| Browser automation failure | Check Chrome installation and Playwright setup. |
+| Frontend build failure | Run `npm install` and inspect TypeScript errors. |
+
+## 15. Development Guidelines
+
+Developers contributing to this project should:
+
+1. Understand existing components and backend routes before modifying them.
+2. Keep authentication and authorization checks on the backend.
+3. Preserve Firebase UID-based data isolation.
+4. Add tests for new backend functionality.
+5. Run backend tests and frontend builds before submitting changes.
+6. Never commit secrets or private user information.
+7. Preserve human review and approval requirements.
+
+## 16. Current Limitations
+
+- Job-board availability depends on external services and their access restrictions.
+- Scanned PDFs may require OCR support.
+- AI-generated content can contain errors.
+- Browser-assisted functionality depends on local browser configuration.
+- The project is actively being developed, and features may change.
+
+## License
+
+No license has been selected yet. Until a license is added, do not assume the code is available for unrestricted reuse.
 
 ---
 
-<div align="center">
-
 **Built to make job hunting more organized — with AI assistance and human control.** 🚀
-
-</div>
