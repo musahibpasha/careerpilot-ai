@@ -2194,48 +2194,120 @@ function App({
   }
 
   async function applyToJobCard(job: Job | DiscoveredJob) {
-    const candidateId = selectedCandidateId || ("id" in job ? job.candidate_id : null);
-    if (!candidateId) {
-      setNotice("Select a candidate before opening the application workflow.");
-      return;
-    }
+    const candidateId =
+      selectedCandidateId || ("id" in job ? job.candidate_id : null);
 
-    if ("already_applied" in job && job.already_applied) {
-      setNotice("This candidate already has an application for this vacancy.");
-      goTo("applications");
+    if (!candidateId) {
+      setNotice("Select a candidate before marking this job as applied.");
       return;
     }
 
     if (busy) return;
+
     const openingId = jobCardIdentity(job);
     setOpeningApplicationId(openingId);
     setBusy(true);
     setNotice("");
+
     try {
-      let persisted: Job | null;
+      // A discovery result must first exist in the user's workspace so an
+      // application can be linked to its saved job record.
+      let persistedJob: Job | null;
       if ("id" in job) {
-        persisted = job;
+        persistedJob = job;
       } else {
-        const existing = jobs.find(
-          (item) => item.source === job.source && item.source_job_id === job.source_job_id,
+        const existingJob = jobs.find(
+          (item) =>
+            item.source === job.source &&
+            item.source_job_id === job.source_job_id,
         );
-        const alreadySaved = existing && (
-          existing.saved_candidate_ids
-            ? existing.saved_candidate_ids.includes(candidateId)
-            : existing.candidate_id === candidateId && existing.is_saved !== false
+        const alreadySaved = existingJob && (
+          existingJob.saved_candidate_ids
+            ? existingJob.saved_candidate_ids.includes(candidateId)
+            : existingJob.candidate_id === candidateId &&
+              existingJob.is_saved !== false
         );
-        persisted = alreadySaved
-          ? existing
+
+        persistedJob = alreadySaved
+          ? existingJob
           : await saveDiscoveredJob(job);
       }
-      if (!persisted) return;
-      await openApplyWorkflow(persisted, candidateId);
+
+      if (!persistedJob) {
+        throw new Error("Could not save this job to your workspace.");
+      }
+
+      // Reuse the candidate's existing application when one is already
+      // present; otherwise create it before setting its application status.
+      let application = applications.find(
+        (item) =>
+          String(item.job_id) === String(persistedJob!.id) &&
+          item.candidate_id === candidateId,
+      );
+
+      if (application && hasConfirmedApplication(application)) {
+        await load();
+        goTo("applications");
+        return;
+      }
+
+      if (!application) {
+        const createResponse = await fetch(`${API}/api/applications`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            job_id: persistedJob.id,
+            status: "saved",
+            candidate_id: candidateId,
+          }),
+        });
+        const createData = await createResponse.json().catch(() => null);
+        if (!createResponse.ok) {
+          throw new Error(
+            errorText(createData, "Could not create the application record."),
+          );
+        }
+        application = createData as Application;
+      }
+
+      // The Apply button is a one-click confirmation: mark the application
+      // as Applied directly instead of opening the multi-step apply workflow.
+      const updateResponse = await fetch(
+        `${API}/api/applications/${application.id}/apply`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            status: "applied",
+            notes: application.notes ?? "",
+          }),
+        },
+      );
+      const updateData = await updateResponse.json().catch(() => null);
+      if (!updateResponse.ok) {
+        throw new Error(
+          errorText(updateData, "Could not mark this application as applied."),
+        );
+      }
+
+      const updatedApplication = updateData as Application;
+      setApplications((current) => [
+        updatedApplication,
+        ...current.filter((item) => item.id !== updatedApplication.id),
+      ]);
+
+      await load();
+      goTo("applications");
     } catch (reason) {
       setNotice(
-        reason instanceof Error ? reason.message : "Could not open the application workflow.",
+        reason instanceof Error
+          ? reason.message
+          : "Could not mark this job as applied.",
       );
     } finally {
-      setOpeningApplicationId((current) => current === openingId ? null : current);
+      setOpeningApplicationId((current) =>
+        current === openingId ? null : current,
+      );
       setBusy(false);
     }
   }
