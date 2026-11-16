@@ -170,6 +170,7 @@ type ChatMessage = {
 export type Job = {
   id: string;
   candidate_id?: string | null;
+  saved_candidate_ids?: string[];
   title: string;
   company: string;
   is_saved?: boolean;
@@ -1462,6 +1463,7 @@ function App({
   const [jobSearchView, setJobSearchView] = useState<JobSearchView>("recommended");
   const discoveryRequestId = useRef(0);
   const [savingDiscoveryId, setSavingDiscoveryId] = useState<string | null>(null);
+  const [openingApplicationId, setOpeningApplicationId] = useState<string | null>(null);
   const [dismissedDiscoveryIds, setDismissedDiscoveryIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -2144,8 +2146,14 @@ function App({
       "id" in job && !job.id.startsWith("discovery:")
         ? job.id
         : savedJob?.id ?? groupedJob?.id;
+    const candidateId = selectedCandidateId || ("candidate_id" in job ? job.candidate_id : null);
     return persistedId
-      ? applications.find((application) => application.job_id === persistedId)
+      ? applications.find((application) =>
+          application.job_id === persistedId &&
+          (candidateId
+            ? application.candidate_id === candidateId
+            : !application.candidate_id),
+        )
       : undefined;
   }
 
@@ -2186,18 +2194,21 @@ function App({
   }
 
   async function applyToJobCard(job: Job | DiscoveredJob) {
-    const candidateId = ("id" in job ? job.candidate_id : null) || selectedCandidateId;
+    const candidateId = selectedCandidateId || ("id" in job ? job.candidate_id : null);
     if (!candidateId) {
-      setNotice("Select a candidate before recording an application.");
+      setNotice("Select a candidate before opening the application workflow.");
       return;
     }
 
     if ("already_applied" in job && job.already_applied) {
-      setNotice("This candidate has already applied to this vacancy.");
+      setNotice("This candidate already has an application for this vacancy.");
       goTo("applications");
       return;
     }
 
+    if (busy) return;
+    const openingId = jobCardIdentity(job);
+    setOpeningApplicationId(openingId);
     setBusy(true);
     setNotice("");
     try {
@@ -2208,74 +2219,23 @@ function App({
         const existing = jobs.find(
           (item) => item.source === job.source && item.source_job_id === job.source_job_id,
         );
-        persisted = existing && existing.is_saved !== false
+        const alreadySaved = existing && (
+          existing.saved_candidate_ids
+            ? existing.saved_candidate_ids.includes(candidateId)
+            : existing.candidate_id === candidateId && existing.is_saved !== false
+        );
+        persisted = alreadySaved
           ? existing
           : await saveDiscoveredJob(job);
       }
       if (!persisted) return;
-
-      const currentApplication = applicationForListing(persisted);
-      if (currentApplication?.candidate_id && currentApplication.candidate_id !== candidateId) {
-        throw new Error("This job is already linked to another candidate.");
-      }
-      if (
-        currentApplication &&
-        (!currentApplication.candidate_id || currentApplication.candidate_id === candidateId) &&
-        hasConfirmedApplication(currentApplication)
-      ) {
-        goTo("applications");
-        return;
-      }
-
-      let application = applications.find((item) => item.job_id === persisted.id);
-      if (application?.candidate_id && application.candidate_id !== candidateId) {
-        throw new Error("This job is already linked to another candidate.");
-      }
-
-      if (!application || application.candidate_id !== candidateId) {
-        const createResponse = await fetch(`${API}/api/applications`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            job_id: persisted.id,
-            status: "saved",
-            candidate_id: candidateId,
-          }),
-        });
-        const createData = await createResponse.json().catch(() => null);
-        if (!createResponse.ok) {
-          throw new Error(errorText(createData, "Could not create the candidate application."));
-        }
-        application = createData as Application;
-      }
-
-      if (!hasConfirmedApplication(application)) {
-        const updateResponse = await fetch(
-          `${API}/api/applications/${application.id}/apply`,
-          {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ status: "applied" }),
-          },
-        );
-        const updateData = await updateResponse.json().catch(() => null);
-        if (!updateResponse.ok) {
-          throw new Error(errorText(updateData, "Could not mark this candidate as applied."));
-        }
-        application = updateData as Application;
-      }
-
-      setApplications((current) => [
-        application as Application,
-        ...current.filter((item) => item.id !== application?.id),
-      ]);
-      setNotice(`${persisted.title} marked as applied for the selected candidate.`);
-      goTo("applications");
+      await openApplyWorkflow(persisted, candidateId);
     } catch (reason) {
       setNotice(
-        reason instanceof Error ? reason.message : "Could not record this application.",
+        reason instanceof Error ? reason.message : "Could not open the application workflow.",
       );
     } finally {
+      setOpeningApplicationId((current) => current === openingId ? null : current);
       setBusy(false);
     }
   }
@@ -3215,22 +3175,16 @@ function App({
     }
   }
 
-  async function openApplyWorkflow(job: Job) {
-    const candidateId = job.candidate_id || selectedCandidateId;
+  async function openApplyWorkflow(job: Job, candidateOverride?: string) {
+    const candidateId = candidateOverride || selectedCandidateId || job.candidate_id;
     if (!candidateId) {
       setNotice("Select a candidate before opening the application workflow.");
       return;
     }
     const knownApplication = applications.find(
-      (candidate) => candidate.job_id === job.id,
+      (application) =>
+        application.job_id === job.id && application.candidate_id === candidateId,
     );
-    if (
-      knownApplication?.candidate_id &&
-      knownApplication.candidate_id !== candidateId
-    ) {
-      setNotice("This application is already linked to another candidate.");
-      return;
-    }
     if (knownApplication && hasConfirmedApplication(knownApplication)) {
       setNotice("You have already confirmed this application.");
       goTo("applications");
@@ -3241,9 +3195,11 @@ function App({
     setNotice("");
     try {
       let application = applications.find(
-        (candidate) => String(candidate.job_id) === String(job.id),
+        (candidate) =>
+          String(candidate.job_id) === String(job.id) &&
+          candidate.candidate_id === candidateId,
       );
-      if (!application || !application.candidate_id) {
+      if (!application) {
         const response = await fetch(`${API}/api/applications`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -3983,10 +3939,10 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
               <button
                 type="button"
                 className="primary-button"
-                disabled={busy}
+                disabled={busy || openingApplicationId === jobCardIdentity(job)}
                 onClick={() => void applyToJobCard(job)}
               >
-                Apply
+                {openingApplicationId === jobCardIdentity(job) ? "Opening..." : "Apply"}
               </button>
             </>
           )}
@@ -4729,9 +4685,9 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
               <button
                 className="primary-button"
                 onClick={() => void applyToJobCard(job)}
-                disabled={busy}
+                disabled={busy || openingApplicationId === jobCardIdentity(job)}
               >
-                {busy ? "Recording..." : "Apply"}
+                {openingApplicationId === jobCardIdentity(job) ? "Opening..." : "Apply"}
               </button>
             )}
           </div>
@@ -5667,10 +5623,10 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                               <button
                                 type="button"
                                 className="secondary-button"
-                                disabled={busy || savingDiscoveryId === job.source_job_id}
+                                disabled={busy || savingDiscoveryId === job.source_job_id || openingApplicationId === jobCardIdentity(job)}
                                 onClick={() => void applyToJobCard(job)}
                               >
-                                {busy ? "Recording..." : "Apply"}
+                                {openingApplicationId === jobCardIdentity(job) ? "Opening..." : "Apply"}
                               </button>
                             )}
                             <a
