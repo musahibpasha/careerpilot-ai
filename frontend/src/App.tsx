@@ -2537,6 +2537,51 @@ function App({
       ),
     [discoveryResults, dismissedDiscoveryIds],
   );
+
+  // Include confirmed applications even when their jobs are not part of the
+  // current search response. This keeps the Applied filter in sync with the
+  // Applications board instead of showing only applied jobs in this search.
+  const appliedApplicationListings = useMemo(
+    () =>
+      applications
+        .filter(
+          (application) =>
+            hasConfirmedApplication(application) &&
+            (selectedCandidateId
+              ? application.candidate_id === selectedCandidateId
+              : !application.candidate_id),
+        )
+        .flatMap((application) => {
+          const persistedJob = jobsById.get(String(application.job_id));
+          if (!persistedJob) return [];
+          const listing = discoveryListingFromJob(persistedJob);
+          return listing
+            ? [{
+                ...listing,
+                already_applied: true,
+                applied_application_id: application.id,
+                applied_at: application.applied_at,
+              }]
+            : [];
+        }),
+    [applications, jobsById, selectedCandidateId],
+  );
+
+  // Merge by source listing identity so jobs already present in search results
+  // are not duplicated when their saved/application record is added.
+  const discoveryResultsWithApplications = useMemo(() => {
+    const merged = new Map<string, DiscoveredJob>();
+    for (const job of visibleDiscoveryResults) {
+      merged.set(`${job.source}:${job.source_job_id}`, job);
+    }
+    for (const job of appliedApplicationListings) {
+      const key = `${job.source}:${job.source_job_id}`;
+      const existing = merged.get(key);
+      merged.set(key, existing ? { ...existing, already_applied: true } : job);
+    }
+    return Array.from(merged.values());
+  }, [visibleDiscoveryResults, appliedApplicationListings]);
+
   const discoveryApplicationStatus = (job: DiscoveredJob): "applied" | "not_applied" => {
     const application = applicationForListing(job);
     return (Boolean(
@@ -2547,21 +2592,21 @@ function App({
       : "not_applied";
   };
   const discoveryStatusCounts = useMemo(() => {
-    const applied = visibleDiscoveryResults.filter(
+    const applied = discoveryResultsWithApplications.filter(
       (job) => discoveryApplicationStatus(job) === "applied",
     ).length;
     return {
-      all: visibleDiscoveryResults.length,
+      all: discoveryResultsWithApplications.length,
       applied,
-      not_applied: visibleDiscoveryResults.length - applied,
+      not_applied: discoveryResultsWithApplications.length - applied,
     };
-  }, [visibleDiscoveryResults, applications, jobs, selectedCandidateId]);
+  }, [discoveryResultsWithApplications, applications, jobs, selectedCandidateId]);
   const filteredDiscoveryResults = useMemo(
-    () => visibleDiscoveryResults.filter((job) =>
+    () => discoveryResultsWithApplications.filter((job) =>
       discoveryStatusFilter === "all" ||
       discoveryApplicationStatus(job) === discoveryStatusFilter
     ),
-    [visibleDiscoveryResults, discoveryStatusFilter, applications, jobs, selectedCandidateId],
+    [discoveryResultsWithApplications, discoveryStatusFilter, applications, jobs, selectedCandidateId],
   );
 
   const draggedApplication = useMemo(
@@ -5552,7 +5597,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                   <div className="source-results-heading">
                     <h3>All job boards results</h3>
                     <span>
-                      {visibleDiscoveryResults.length} listing{visibleDiscoveryResults.length === 1 ? "" : "s"}
+                      {discoveryStatusCounts.all} listing{discoveryStatusCounts.all === 1 ? "" : "s"}
                     </span>
                   </div>
                   <div
