@@ -1460,6 +1460,7 @@ function App({
   const [discoveryMessage, setDiscoveryMessage] = useState("");
   const [discoveryError, setDiscoveryError] = useState(false);
   const [jobSearchView, setJobSearchView] = useState<JobSearchView>("recommended");
+  const [discoveryStatusFilter, setDiscoveryStatusFilter] = useState<"all" | "applied" | "not_applied">("all");
   const discoveryRequestId = useRef(0);
   const [savingDiscoveryId, setSavingDiscoveryId] = useState<string | null>(null);
   const [openingApplicationId, setOpeningApplicationId] = useState<string | null>(null);
@@ -2535,6 +2536,32 @@ function App({
         (job) => !dismissedDiscoveryIds.has(`${job.source}:${job.source_job_id}`),
       ),
     [discoveryResults, dismissedDiscoveryIds],
+  );
+  const discoveryApplicationStatus = (job: DiscoveredJob): "applied" | "not_applied" => {
+    const application = applicationForListing(job);
+    return (Boolean(
+      (application && hasConfirmedApplication(application)) ||
+      job.already_applied,
+    ))
+      ? "applied"
+      : "not_applied";
+  };
+  const discoveryStatusCounts = useMemo(() => {
+    const applied = visibleDiscoveryResults.filter(
+      (job) => discoveryApplicationStatus(job) === "applied",
+    ).length;
+    return {
+      all: visibleDiscoveryResults.length,
+      applied,
+      not_applied: visibleDiscoveryResults.length - applied,
+    };
+  }, [visibleDiscoveryResults, applications, jobs, selectedCandidateId]);
+  const filteredDiscoveryResults = useMemo(
+    () => visibleDiscoveryResults.filter((job) =>
+      discoveryStatusFilter === "all" ||
+      discoveryApplicationStatus(job) === discoveryStatusFilter
+    ),
+    [visibleDiscoveryResults, discoveryStatusFilter, applications, jobs, selectedCandidateId],
   );
 
   const draggedApplication = useMemo(
@@ -5473,10 +5500,67 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                       {visibleDiscoveryResults.length} listing{visibleDiscoveryResults.length === 1 ? "" : "s"}
                     </span>
                   </div>
-                  {visibleDiscoveryResults.length === 0 ? (
+                  <div
+                    className="source-status-filters"
+                    role="group"
+                    aria-label="Filter job listings by application status"
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+                      gap: 10,
+                      margin: "12px 0 16px",
+                    }}
+                  >
+                    {([
+                      { id: "all", label: "All Jobs", count: discoveryStatusCounts.all, Icon: BriefcaseBusiness },
+                      { id: "applied", label: "Applied", count: discoveryStatusCounts.applied, Icon: CheckCircle2 },
+                      { id: "not_applied", label: "Not Applied", count: discoveryStatusCounts.not_applied, Icon: Circle },
+                    ] as const).map(({ id, label, count, Icon }) => {
+                      const active = discoveryStatusFilter === id;
+                      return (
+                        <button
+                          key={id}
+                          type="button"
+                          aria-pressed={active}
+                          onClick={() => setDiscoveryStatusFilter(id)}
+                          className={active ? "source-status-filter active" : "source-status-filter"}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "space-between",
+                            gap: 8,
+                            minHeight: 54,
+                            padding: "10px 14px",
+                            borderRadius: 12,
+                            border: active ? "1px solid #8050c8" : "1px solid var(--border-color, #e5e0eb)",
+                            background: active ? "rgba(128, 80, 200, 0.10)" : "var(--surface, #fff)",
+                            color: "inherit",
+                            cursor: "pointer",
+                            textAlign: "left",
+                            font: "inherit",
+                          }}
+                        >
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                            <Icon size={17} />
+                            <strong>{label}</strong>
+                          </span>
+                          <span style={{
+                            minWidth: 26,
+                            padding: "3px 7px",
+                            borderRadius: 999,
+                            background: active ? "rgba(128, 80, 200, 0.15)" : "var(--muted-surface, #f3f1f6)",
+                            fontSize: 12,
+                            fontWeight: 700,
+                            textAlign: "center",
+                          }}>{count}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {filteredDiscoveryResults.length === 0 ? (
                     <section className="panel search-empty-state" role="status">
-                      <h2>No Results Found</h2>
-                      <p>All listings from this search have been hidden.</p>
+                      <h2>No {discoveryStatusFilter === "applied" ? "Applied" : discoveryStatusFilter === "not_applied" ? "Not Applied" : ""} Jobs Found</h2>
+                      <p>{discoveryStatusFilter === "all" ? "All listings from this search have been hidden." : "There are no listings in this application-status category yet."}</p>
                       <button
                         className="secondary-button"
                         type="button"
@@ -5487,7 +5571,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
                     </section>
                   ) : (
                   <section className="jobs-list source-search-results">
-                    {visibleDiscoveryResults.map((job) => {
+                    {filteredDiscoveryResults.map((job) => {
                       const saved = jobs.some(
                         (existing) =>
                           existing.source === job.source &&
