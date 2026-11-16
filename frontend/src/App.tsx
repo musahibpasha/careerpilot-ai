@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import ApplicationAssistant, { type AssistantMaterials } from "./ApplicationAssistant";
-import ApplyWorkflow from "./ApplyWorkflow";
 import BenchCandidates from "./BenchCandidates";
 import { apiFetch as fetch } from "./api";
 import RecruiterAdmin from "./RecruiterAdmin";
@@ -1510,10 +1509,6 @@ function App({
 
   const [analysisJob, setAnalysisJob] = useState<Job | null>(null);
   const [assistantJobId, setAssistantJobId] = useState<string | null>(null);
-  const [applySelection, setApplySelection] = useState<{
-    job: Job;
-    application: Application;
-  } | null>(null);
   const [analysisPlan, setAnalysisPlan] = useState<Record<string, ApplicationPlan>>({});
   const [analysisPlanLoading, setAnalysisPlanLoading] = useState(false);
   const [analysisMaterials, setAnalysisMaterials] = useState<
@@ -3247,61 +3242,6 @@ function App({
     }
   }
 
-  async function openApplyWorkflow(job: Job, candidateOverride?: string) {
-    const candidateId = candidateOverride || selectedCandidateId || job.candidate_id;
-    if (!candidateId) {
-      setNotice("Select a candidate before opening the application workflow.");
-      return;
-    }
-    const knownApplication = applications.find(
-      (application) =>
-        application.job_id === job.id && application.candidate_id === candidateId,
-    );
-    if (knownApplication && hasConfirmedApplication(knownApplication)) {
-      setNotice("You have already confirmed this application.");
-      goTo("applications");
-      return;
-    }
-
-    setBusy(true);
-    setNotice("");
-    try {
-      let application = applications.find(
-        (candidate) =>
-          String(candidate.job_id) === String(job.id) &&
-          candidate.candidate_id === candidateId,
-      );
-      if (!application) {
-        const response = await fetch(`${API}/api/applications`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            job_id: job.id,
-            status: "saved",
-            candidate_id: candidateId,
-          }),
-        });
-        const data = await response.json().catch(() => null);
-        if (!response.ok) {
-          throw new Error(errorText(data, "Could not open the application workflow."));
-        }
-          application = data as Application;
-          setApplications((current) => [
-            application as Application,
-            ...current.filter((item) => item.id !== application?.id),
-          ]);
-      }
-      setApplySelection({ job, application });
-    } catch (reason) {
-      setNotice(
-        reason instanceof Error
-          ? reason.message
-          : "Could not open the application workflow.",
-      );
-    } finally {
-      setBusy(false);
-    }
-  }
 
   async function changeApplicationStatus(
     application: Application,
@@ -6753,48 +6693,6 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
         />
       )}
 
-      {false && applySelection && (
-        <ApplyWorkflow
-          key={applySelection.job.id}
-          job={applySelection.job}
-          application={applySelection.application}
-          initialMaterials={analysisMaterials[applySelection.job.id] ?? null}
-          materialsLoading={materialsLoadingId === applySelection.job.id}
-          onGenerateMaterials={generateApplicationMaterials}
-          onMaterialsChange={(materials) =>
-            setAnalysisMaterials((current) => ({
-              ...current,
-              [applySelection.job.id]: materials,
-            }))
-          }
-          onClose={() => setApplySelection(null)}
-          onReturnDashboard={() => {
-            setApplySelection(null);
-            goTo("dashboard");
-          }}
-          onApplicationUpdated={(updated) => {
-            setApplySelection((current) =>
-              current ? { ...current, application: updated } : current,
-            );
-            setApplications((current) =>
-              current.map((item) => item.id === updated.id ? updated : item),
-            );
-          }}
-          onSaved={(updated) => {
-            setApplications((current) => [
-              updated,
-              ...current.filter((item) => item.id !== updated.id),
-            ]);
-            if (hasConfirmedApplication(updated)) {
-              setSavedJobs((current) => current.filter((job) => job.id !== updated.job_id));
-            }
-            setApplySelection(null);
-            setNotice("Application status and notes saved.");
-            goTo("applications");
-            void load();
-          }}
-        />
-      )}
 
       {analysisJob && (
         <MatchAnalysis
