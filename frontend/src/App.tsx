@@ -6753,7 +6753,7 @@ ${section("Achievements", profile.achievements.length ? `<ul>${lines(profile.ach
         />
       )}
 
-      {applySelection && (
+      {false && applySelection && (
         <ApplyWorkflow
           key={applySelection.job.id}
           job={applySelection.job}
